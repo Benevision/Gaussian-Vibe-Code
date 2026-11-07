@@ -90,6 +90,11 @@ class TrainingConfig:
     bilateralGrid: bool = False
     bilateralGridLR: float = 2e-3
     bilateralGridTV: float = 10.0
+    # Coarse-to-fine: ¼ → ½ → ¾ → full image resolution over the first half of the densification window.
+    progressiveResolution: bool = False
+    # SSIM contrast/structure on the uncorrected render (luminance on the corrected one) when per-photo colour
+    # correction is on, so the correction can't hide missing detail.
+    decoupledSSIM: bool = False
     # PROTOCOL.md §7 (block-parallel training)
     region: Optional[Region] = None
     cameraIds: Optional[List[int]] = None

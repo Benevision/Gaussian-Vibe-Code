@@ -158,6 +158,60 @@ class TransientMasker:
             return torch.where(keep[..., None], gt, pred.detach())
 
 
+def ssim_split(torch, corr, raw, gt, size: int = 11, sigma: float = 1.5):
+    """SSIM whose luminance term compares the colour-corrected render with the photo, while contrast and
+    structure compare the *uncorrected* render (all [1,3,H,W]). Per-photo colour correction can then fix
+    brightness and tint, but not paper over missing or wrong detail (decoupled appearance)."""
+    import torch.nn.functional as F
+
+    coords = torch.arange(size, dtype=raw.dtype, device=raw.device) - size // 2
+    g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+    g = g / g.sum()
+    w = (g[:, None] @ g[None, :]).expand(3, 1, size, size).contiguous()
+    conv = lambda x: F.conv2d(x, w, groups=3)  # noqa: E731
+    c1, c2 = 0.01 ** 2, 0.03 ** 2
+    mu_c, mu_r, mu_g = conv(corr), conv(raw), conv(gt)
+    lum = (2 * mu_c * mu_g + c1) / (mu_c * mu_c + mu_g * mu_g + c1)
+    s_r = conv(raw * raw) - mu_r * mu_r
+    s_g = conv(gt * gt) - mu_g * mu_g
+    s_rg = conv(raw * gt) - mu_r * mu_g
+    cs = (2 * s_rg + c2) / (s_r + s_g + c2)
+    return (lum * cs).mean()
+
+
+def progressive_scale(step: int, densify_stop: int) -> float:
+    """Image scale for coarse-to-fine training: ¼ → ½ → ¾ → full resolution over the first half of the
+    densification window (DashGaussian / FastGS style: early steps only need coarse structure, and run several
+    times faster at low resolution)."""
+    half = max(densify_stop, 1) / 2
+    if step < half / 3:
+        return 0.25
+    if step < 2 * half / 3:
+        return 0.5
+    if step < half:
+        return 0.75
+    return 1.0
+
+
+def downscale_view(torch, img, alpha, depth, K, scale: float):
+    """Image (H,W,3), alpha (H,W,1)|None, depth (H,W)|None and intrinsics K scaled by ``scale``."""
+    import torch.nn.functional as F
+
+    h, w = img.shape[0], img.shape[1]
+    nh, nw = max(8, int(round(h * scale))), max(8, int(round(w * scale)))
+    sy, sx = nh / h, nw / w
+    img = F.interpolate(img.permute(2, 0, 1)[None], size=(nh, nw), mode="area")[0].permute(1, 2, 0).contiguous()
+    if alpha is not None:
+        alpha = F.interpolate(alpha.permute(2, 0, 1)[None], size=(nh, nw), mode="area")[0].permute(1, 2, 0).contiguous()
+    if depth is not None:
+        depth = F.interpolate(depth[None, None], size=(nh, nw), mode="nearest")[0, 0]
+    K = K.clone()
+    K[0, 0] *= sx; K[1, 1] *= sy
+    K[0, 2] = (K[0, 2] + 0.5) * sx - 0.5
+    K[1, 2] = (K[1, 2] + 0.5) * sy - 0.5
+    return img, alpha, depth, K, nw, nh
+
+
 def _ssim_fn(torch):
     """Return ssim(a, b) for [B,3,H,W] tensors in 0..1 (valid padding)."""
     try:
@@ -787,14 +841,20 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         sh_degree = min(step // cfg.shDegreeInterval, cfg.shDegree)
         use_depth = depth_weight > 0 and depth_gt is not None
 
+        width, height = v.width, v.height
+        if cfg.progressiveResolution:
+            sc = progressive_scale(step, densify_stop)
+            if sc < 1.0:
+                img, alpha, depth_gt, K, width, height = downscale_view(torch, img, alpha, depth_gt, K, sc)
         if pose_refiner is not None and step >= cfg.poseRefinementStart:
             w2c = pose_refiner.apply(view_idx, w2c)
-        renders, alphas, info = render(w2c, K, v.width, v.height, sh_degree, use_depth)
+        renders, alphas, info = render(w2c, K, width, height, sh_degree, use_depth)
         if fixed_bg is None:
             bg = torch.rand(3, device=dev)
         else:
             bg = fixed_bg
         pred = renders[0, ..., :3] + (1.0 - alphas[0]) * bg
+        pred_raw = pred
         if appearance is not None:
             pred = appearance.apply(view_idx, pred)
         if bilagrid is not None:
@@ -807,7 +867,11 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if transient_on:
             gt = transient.apply(pred, gt, alphas[0], step)
         l1 = torch.abs(pred - gt).mean()
-        ssim_val = ssim(pred.permute(2, 0, 1)[None].contiguous(), gt.permute(2, 0, 1)[None].contiguous())
+        if cfg.decoupledSSIM and pred is not pred_raw:
+            ssim_val = ssim_split(torch, pred.permute(2, 0, 1)[None], pred_raw.permute(2, 0, 1)[None],
+                                  gt.permute(2, 0, 1)[None])
+        else:
+            ssim_val = ssim(pred.permute(2, 0, 1)[None].contiguous(), gt.permute(2, 0, 1)[None].contiguous())
         loss = (1.0 - cfg.ssimWeight) * l1 + cfg.ssimWeight * (1.0 - ssim_val)
         if use_depth:
             ed = renders[0, ..., 3]

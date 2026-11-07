@@ -154,6 +154,8 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `anisotropyMaxRatio` | float | 10 | axis ratio above which the needle penalty applies |
 | `appearanceCorrection` | bool | true | per-photo colour correction: rendered RGB → M·rgb + b (3×3 + 3 per training image), seeded from camera `exposure`, used only in the loss |
 | `bilateralGrid` | bool | false | per-photo *local* colour correction (16×16 image cells × 8 brightness levels of 3×4 colour transforms per training image), used only in the loss; mean over photos pinned to identity; replaces `appearanceCorrection` when on. `bilateralGridLR` (2e-3), `bilateralGridTV` (10) |
+| `progressiveResolution` | bool | false | coarse-to-fine: ¼ → ½ → ¾ → full image resolution over the first half of the densification window (worker ≥ 1.3.9) |
+| `decoupledSSIM` | bool | false | with per-photo colour correction, SSIM contrast/structure use the uncorrected render (luminance the corrected one) (worker ≥ 1.3.9) |
 | `appearanceLR` | float | 0.02 | Adam LR of the per-photo corrections (each photo updates only when drawn) |
 | `appearanceReg` | float | 0.001 | L2 pull of each correction towards its exposure-seeded start |
 
