@@ -139,7 +139,7 @@ enum CLI {
                 if let dsPath = value("--dataset"), let v = value("--view").flatMap(Int.init) {
                     let ds = try PreparedDataset.load(URL(fileURLWithPath: dsPath))
                     let c = ds.manifest.cameras[min(max(0, v), ds.manifest.cameras.count - 1)]
-                    cam.adopt(cameraToWorld: c.c2w, focusDistance: 1, fovY: 2 * atan(Float(c.height) / (2 * c.fy)), worldUp: cam.up)
+                    cam.adopt(cameraToWorld: c.c2w, focusDistance: 1, fovY: 2 * atan(Float(c.height) / (2 * c.fy)), worldUp: ds.upVectorSIMD)
                     size = (c.width, c.height)
                 }
                 var st = ViewerSettings()

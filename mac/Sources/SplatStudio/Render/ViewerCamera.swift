@@ -154,6 +154,16 @@ struct ViewerCamera: Equatable {
         let d = -fwd
         pitch = asin(min(max(simd_dot(d, b.up), -1), 1))
         yaw = atan2(simd_dot(d, b.right), simd_dot(d, b.fwd))
+        if abs(sin(pitch)) > 0.98 {
+            // Looking (nearly) straight down or up — e.g. a drone survey photo. The view direction has almost no
+            // horizontal part, so the heading comes from the photo's own "up" in the image instead (otherwise the
+            // view keeps a fixed heading and appears rotated against the photo). Near-vertical, the image's up
+            // points along the horizontal view direction when looking down and against it when looking up.
+            let imgUp = -simd_normalize(down)
+            let s: Float = pitch > 0 ? -1 : 1
+            yaw = atan2(s * simd_dot(imgUp, b.right), s * simd_dot(imgUp, b.fwd))
+            pitch = min(max(pitch, -1.55), 1.55)
+        }
         if let newFov { fovY = newFov }
     }
 }
