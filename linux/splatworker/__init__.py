@@ -6,5 +6,5 @@ Pillow, FastAPI and zeroconf. PyTorch and gsplat are imported lazily by
 without CUDA.
 """
 
-__version__ = "1.1.8"
+__version__ = "1.1.9"
 PROTOCOL_VERSION = 1

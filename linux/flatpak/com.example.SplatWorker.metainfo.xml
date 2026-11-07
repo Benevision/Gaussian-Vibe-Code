@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.9" date="2026-11-07">
+      <description>
+        <p>Experimental long-axis splitting for MCMC training (off by default).</p>
+      </description>
+    </release>
     <release version="1.1.8" date="2026-11-07">
       <description>
         <p>Fix: the needle-splat penalty also squashed flat, disc-shaped splats (the normal shape on surfaces), giving faint, painterly results. It now only targets genuine needles.</p>

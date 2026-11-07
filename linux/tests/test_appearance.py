@@ -102,3 +102,20 @@ def test_pose_refiner_identity_and_gradient():
     pr.step()
     w = pr.embed.weight.detach()
     assert w[1].abs().sum() > 0 and w[0].abs().sum() == 0 and w[2].abs().sum() == 0
+
+
+def test_spread_clone_groups_along_long_axis():
+    import math
+    from splatworker.trainer import spread_clone_groups
+
+    means = torch.tensor([[0.0, 0, 0], [0.0, 0, 0], [5.0, 5, 5]])                 # a clone pair + a loner
+    scales = torch.log(torch.tensor([[0.4, 0.1, 0.1], [0.4, 0.1, 0.1], [0.2, 0.2, 0.2]]))
+    quats = torch.tensor([[1.0, 0, 0, 0]] * 3)                                     # identity: long axis = x
+    params = {"means": torch.nn.Parameter(means.clone()), "scales": torch.nn.Parameter(scales.clone()),
+              "quats": torch.nn.Parameter(quats)}
+    assert spread_clone_groups(torch, params) == 2
+    m = params["means"].data
+    assert torch.allclose(m[0], torch.tensor([-0.2, 0, 0]), atol=1e-6) and torch.allclose(m[1], torch.tensor([0.2, 0, 0]), atol=1e-6)
+    assert torch.allclose(m[2], torch.tensor([5.0, 5, 5]))                         # loner untouched
+    s = torch.exp(params["scales"].data)
+    assert abs(s[0, 0].item() - 0.4 / math.sqrt(2)) < 1e-6 and abs(s[0, 1].item() - 0.1) < 1e-6

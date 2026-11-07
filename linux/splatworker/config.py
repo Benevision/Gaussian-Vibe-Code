@@ -71,6 +71,7 @@ class TrainingConfig:
     depthEdgeAware: bool = True
     anisotropyReg: float = 0.1
     anisotropyMaxRatio: float = 10.0
+    longAxisSplit: bool = False   # spread MCMC clones along the long axis (ImprovedGS / IGS+), as on the Mac
     # Per-photo camera pose refinement (experimental until measured)
     poseRefinement: bool = False
     poseRefinementLR: float = 1e-4

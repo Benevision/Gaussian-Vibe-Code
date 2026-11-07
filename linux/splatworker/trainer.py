@@ -220,6 +220,49 @@ def _in_box(xyz, lo, hi):
 
 
 
+def spread_clone_groups(torch, params) -> int:
+    """Long-axis splitting (ImprovedGS / IGS+) on top of gsplat's MCMC strategy, without touching its code.
+
+    MCMC relocation / growth clones a splat by writing copies with *exactly* the same position (and the
+    shrunken scale / reduced opacity) into other slots. Right after a refinement step those clone groups are
+    therefore just sets of identical means. Each group of m members is spread evenly along the source's
+    longest axis (spacing 2σ/m, centred on the source) and only that axis is shortened by √m, as on the Mac.
+    Returns the number of splats moved.
+    """
+    with torch.no_grad():
+        means = params["means"].data
+        _, inv, counts = torch.unique(means, dim=0, return_inverse=True, return_counts=True)
+        m = counts[inv]
+        members = (m > 1).nonzero(as_tuple=True)[0]
+        if members.numel() == 0:
+            return 0
+        # rank of each member within its group
+        order = members[torch.argsort(inv[members], stable=True)]
+        g = inv[order]
+        first = torch.ones_like(g, dtype=torch.bool)
+        first[1:] = g[1:] != g[:-1]
+        start = torch.cummax(torch.where(first, torch.arange(len(g), device=g.device), torch.zeros_like(g)), 0).values
+        rank = (torch.arange(len(g), device=g.device) - start).float()
+        mm = m[order].float()
+        ls = params["scales"].data[order]
+        ax = torch.argmax(ls, dim=1)
+        sigma = torch.exp(ls.gather(1, ax[:, None]))[:, 0]
+        q = torch.nn.functional.normalize(params["quats"].data[order], dim=1)   # w, x, y, z
+        w, x, y, z = q.unbind(1)
+        cols = torch.stack([
+            torch.stack([1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)], 1),
+            torch.stack([2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)], 1),
+            torch.stack([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)], 1),
+        ], 1)                                                                     # [n, axis, xyz]
+        u = cols[torch.arange(len(order), device=q.device), ax]
+        t = (rank - (mm - 1) / 2) * 2 * sigma / mm
+        means[order] = means[order] + u * t[:, None]
+        new_ls = ls.clone()
+        new_ls.scatter_(1, ax[:, None], (ls.gather(1, ax[:, None])[:, 0] - 0.5 * torch.log(mm))[:, None])
+        params["scales"].data[order] = new_ls
+        return int(len(order))
+
+
 def median_nearest_view_gap(cams, scene_extent: float) -> float:
     """Median over photos of the gap to the most similar other photo: view-direction angle plus the camera
     offset as an angle at scene scale (degrees). ~5 = dense capture, >15 = sparse (same as the Mac)."""
@@ -724,6 +767,9 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         else:
             strategy.step_post_backward(params, optimizers, strategy_state, step, info,
                                         lr=pos_sched.get_last_lr()[0])
+            if (cfg.longAxisSplit and cfg.densifyStart < step < densify_stop
+                    and step % cfg.densifyInterval == 0):
+                spread_clone_groups(torch, params)
 
         # --------------------------------------------------- bookkeeping
         cur = step + 1
