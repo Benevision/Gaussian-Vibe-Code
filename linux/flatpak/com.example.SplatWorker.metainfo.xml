@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.1" date="2026-11-07">
+      <description>
+        <p>Optional processing models (COLMAP mapper, OWLv2, SAM 2) so Splat Studio can run camera solving and moving-object masking on this GPU.</p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-11-07">
       <description>
         <p>Per-photo colour correction, live previews for Splat Studio, update notifications, and a fix for block-parallel training.</p>
