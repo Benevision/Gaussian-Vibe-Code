@@ -300,6 +300,7 @@ struct NewProjectSheet: View {
                 }
             }
             if maskKind != .none { SettingRow(id: "mask.invert") { Toggle("", isOn: $options.masking.invert).labelsHidden() } }
+            SettingRow(id: "mask.staticRegions") { Toggle("", isOn: $options.maskStaticRegions).labelsHidden() }
         }
     }
 

@@ -44,6 +44,20 @@ enum CLI {
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }
+        if let dir = value("--static-regions") {
+            // SplatStudio --static-regions <folder with frames.json> [--apply]: report (or mask) fixed parts of the frame
+            let sem = DispatchSemaphore(value: 0); var code: Int32 = 0
+            let apply = a.contains("--apply")
+            Task.detached {
+                do {
+                    var fs = try FrameSet.load(URL(fileURLWithPath: dir))
+                    let reps = try await StaticRegions.apply(to: &fs, dryRun: !apply)
+                    for r in reps { print(String(format: "%@  %d frames  static %.2f %%  %@", r.camera, r.frames, r.staticFraction * 100, r.applied ? "MASKED" : "")) }
+                } catch { fputs("error: \(error.localizedDescription)\n", stderr); code = 1 }
+                sem.signal()
+            }
+            sem.wait(); exit(code)
+        }
         if a.contains("--benchmark") {
             // SplatStudio --benchmark [--worker http://host:port [--token T]] [--no-local]: the Compute → Benchmark test.
             let sem = DispatchSemaphore(value: 0); var code: Int32 = 0

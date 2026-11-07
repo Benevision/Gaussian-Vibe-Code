@@ -97,6 +97,8 @@ struct PrepOptions: Codable, Hashable, Sendable {
     var maxImageSize: Int? = 1600
     /// Where processing runs.
     var compute: ComputePlacement = .thisMac
+    /// Mask parts of the frame that never change while the camera moves (lens rim, timestamp, propellers, rig).
+    var maskStaticRegions = false
     /// Worker used for remote / both placement (WorkerBrowser id).
     var remoteWorkerId: String? = nil
     /// With a worker in use, split videos (incl. 360°) on it: the video is uploaded once and the views come back.
@@ -279,6 +281,14 @@ enum DatasetBuilder {
         }
 
         // 3. Masks.
+        if o.maskStaticRegions {
+            try await FrameMasker.waitForFrames(frames.root, progress: maskP)
+            let reps = try await StaticRegions.apply(to: &frames, progress: maskP)
+            for r in reps where r.staticFraction > 0 {
+                maskP(PipelineProgress(stage: "Finding fixed parts of the frame", fraction: -1, message: String(format: "%@: %.1f %% of the frame %@",
+                    r.camera, r.staticFraction * 100, r.applied ? "masked" : "looks fixed — not masked (the camera barely moves)")))
+            }
+        }
         if o.masking.model != .none {
             try await FrameMasker.apply(o.masking, to: &frames, runner: SplatPrepRunner(),
                                         worker: o.compute != .thisMac ? worker : nil, progress: maskP)
