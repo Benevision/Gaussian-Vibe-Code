@@ -105,6 +105,12 @@ class AppPaths:
         return self.venv_dir / "bin" / "python"
 
     @property
+    def venv_staging_dir(self) -> Path:
+        """New runtimes are built here and swapped into ``venv_dir`` only once verified, so a failed or
+        cancelled setup never breaks a working runtime."""
+        return self.data_root / "venv.new"
+
+    @property
     def runtime_state_file(self) -> Path:
         return self.data_root / "runtime.json"
 

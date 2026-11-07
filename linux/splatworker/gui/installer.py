@@ -214,6 +214,8 @@ class Installer:
         try:
             self._log(f"=== Splat Worker runtime setup ({self.plan.profile_id}) "
                       f"{datetime.now().isoformat(timespec='seconds')}")
+            if start_at == 0:
+                self._preflight()
             for i in range(start_at, len(self.plan.steps)):
                 step = self.plan.steps[i]
                 if self._cancel.is_set():
@@ -241,6 +243,7 @@ class Installer:
                     raise
                 done_w += step.weight
                 progress(1.0, "Done")
+            self._swap_in()
             state = RuntimeState(profile_id=self.plan.profile_id, can_train=self.plan.can_train,
                                  with_splatprep=self.plan.with_splatprep,
                                  with_lightglue=self.plan.with_lightglue,
@@ -256,6 +259,8 @@ class Installer:
             self._emit("cancelled")
             return InstallResult(ok=False, cancelled=True)
         except InstallError as e:
+            if self.paths.venv_python.exists() and "has not been changed" not in (e.hint or ""):
+                e.hint = ((e.hint or "") + " Your current runtime has not been changed and still works.").strip()
             self._log(f"=== FAILED: {e}\n{e.hint}")
             self._emit("failed", error=e)
             return InstallResult(ok=False, error=e, failed_step=e.step_index)
@@ -269,6 +274,38 @@ class Installer:
             if self._log_fh is not None:
                 self._log_fh.close()
                 self._log_fh = None
+
+    # ------------------------------------------------------ preflight / swap
+    def _preflight(self) -> None:
+        """Fail before downloading gigabytes when the chosen runtime's gsplat build isn't published."""
+        from .runtime_plan import gsplat_wheel_published, profile_by_id
+
+        prof = profile_by_id(self.plan.profile_id)
+        if prof is not None and gsplat_wheel_published(prof, self.opener) is False:
+            raise InstallError(f"gsplat {prof.gsplat} for {prof.label} is not published yet",
+                               f"{prof.gsplat_find_links} has no gsplat-{prof.gsplat}+{prof.gsplat_index} wheel.",
+                               "Choose \"PyTorch 2.4 + CUDA 12.4\" in the advanced options, or wait for the next "
+                               "Splat Worker update. Your current runtime has not been changed.")
+
+    def _swap_in(self) -> None:
+        """Replace the live runtime with the verified staging one (old one removed only after the swap)."""
+        new = self.plan.venv_dir
+        live = self.paths.venv_dir
+        if new is None or Path(new) == Path(live):
+            return
+        new, live = Path(new), Path(live)
+        old = live.with_name(live.name + ".old")
+        shutil.rmtree(old, ignore_errors=True)
+        if live.exists():
+            os.replace(live, old)
+        try:
+            os.replace(new, live)
+        except OSError:
+            if old.exists() and not live.exists():
+                os.replace(old, live)   # put the working runtime back
+            raise
+        shutil.rmtree(old, ignore_errors=True)
+        self._log(f"new runtime moved into place: {live}")
 
     # -------------------------------------------------------------- helpers
     def _emit(self, kind: str, **data: Any) -> None:

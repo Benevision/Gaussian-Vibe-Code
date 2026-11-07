@@ -11,7 +11,7 @@ from ..installer import InstallError, Installer
 from ..nvidia import DriverInfo, detect
 from ..paths import splatprep_dir
 from ..pip_progress import human_bytes
-from ..runtime_plan import CPU_PROFILE_ID, GPU_PROFILES, Plan, build_plan, choose_profile
+from ..runtime_plan import CPU_PROFILE_ID, GPU_PROFILES, Plan, build_plan, choose_profile, unpublished_profiles
 from .common import action_row, alert, append_text, esc, label, scrolled_page, text_view
 
 PROFILE_CHOICES = [(None, "Automatic (recommended)")] + [(p.id, p.label) for p in GPU_PROFILES] + \
@@ -61,6 +61,8 @@ class SetupAssistant(Adw.Window):
 
         def work():
             info = detect()
+            # which runtimes can actually be downloaded right now (our own gsplat builds may lag behind)
+            self.unavailable = unpublished_profiles()
             GLib.idle_add(self._show_plan, info)
 
         threading.Thread(target=work, daemon=True).start()
@@ -77,7 +79,7 @@ class SetupAssistant(Adw.Window):
 
     def _build_plan_page(self) -> Gtk.Widget:
         driver = self.driver
-        choice = choose_profile(driver, self.override)
+        choice = choose_profile(driver, self.override, getattr(self, "unavailable", ()))
         self.choice = choice
         self.plan = build_plan(choice, self.state.paths, with_splatprep=self.with_splatprep,
                                with_lightglue=self.with_lightglue, splatprep_dir=self.splatprep_src)

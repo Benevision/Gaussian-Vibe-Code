@@ -255,3 +255,40 @@ def test_real_plan_commands_are_well_formed(paths):
         if s.kind == "command":
             assert s.argv[0].startswith(str(paths.data_root)) and s.argv[1] == "-m"
     json.dumps([s.__dict__ for s in plan.steps])  # serialisable for logging
+
+
+def test_installer_swaps_in_only_after_verify(tmp_path, paths):
+    tarball = make_python_tarball(tmp_path)
+    live, staging = paths.venv_dir, paths.venv_staging_dir
+    (live / "bin").mkdir(parents=True)
+    (live / "bin" / "python").write_text("old")
+    write_new = f"import pathlib; p = pathlib.Path({str(staging)!r}) / 'bin'; p.mkdir(parents=True, exist_ok=True); (p / 'python').write_text('new')"
+    plan = make_plan(tarball, [py_step("torch", write_new, None), py_step("verify", VERIFY_OK, None, "verify")])
+    plan.venv_dir = staging
+    # a failing verify leaves the working runtime alone
+    bad = make_plan(tarball, [py_step("torch", write_new, None), py_step("verify", "print('nothing')", None, "verify")])
+    bad.venv_dir = staging
+    r = Installer(bad, paths).run()
+    assert not r.ok and (live / "bin" / "python").read_text() == "old"
+    assert "has not been changed" in r.error.hint
+    r = Installer(plan, paths).run()
+    assert r.ok, r.error
+    assert (live / "bin" / "python").read_text() == "new"
+    assert not staging.exists() and not live.with_name("venv.old").exists()
+
+
+def test_installer_preflight_unpublished_gsplat(tmp_path, paths):
+    import urllib.request
+
+    tarball = make_python_tarball(tmp_path)
+    plan = make_plan(tarball, [py_step("verify", VERIFY_OK, None, "verify")])
+    plan.profile_id = "cu128"
+
+    def opener(url, timeout=None):
+        if url.startswith("https://"):
+            return io.BytesIO(b"<html>no wheels yet</html>")
+        return urllib.request.urlopen(url, timeout=timeout)
+    events = []
+    r = Installer(plan, paths, opener=opener, on_event=lambda k, d: events.append(k)).run()
+    assert not r.ok and "not published yet" in r.error.title
+    assert "step" not in events and not paths.python_dir.exists()   # nothing downloaded

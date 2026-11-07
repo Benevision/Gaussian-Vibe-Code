@@ -28,7 +28,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from .nvidia import CudaVersion, DriverInfo
 from .paths import AppPaths
@@ -143,6 +143,28 @@ CPU_TORCH_DOWNLOAD_MB = 200    # torch CPU build for LightGlue in the processing
 CPU_TORCH_DISK_MB = 750
 
 
+def gsplat_wheel_published(prof: GpuProfile, opener: Callable[..., Any] = None, timeout: float = 10) -> Optional[bool]:
+    """For profiles whose gsplat comes from our own wheel page: is the wheel there? None = couldn't tell
+    (offline); True for profiles that use the public gsplat index."""
+    if not prof.gsplat_find_links:
+        return True
+    import urllib.request
+
+    opener = opener or urllib.request.urlopen
+    try:
+        with opener(prof.gsplat_find_links, timeout=timeout) as resp:
+            page = resp.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    want = f"gsplat-{prof.gsplat}+{prof.gsplat_index}"
+    return want in page or want.replace("+", "%2B") in page
+
+
+def unpublished_profiles(opener: Callable[..., Any] = None) -> List[str]:
+    """Ids of profiles whose gsplat wheel is not (yet) downloadable — skipped by ``choose_profile``."""
+    return [p.id for p in GPU_PROFILES if gsplat_wheel_published(p, opener) is not True]
+
+
 def profile_by_id(pid: str) -> Optional[GpuProfile]:
     return next((p for p in GPU_PROFILES if p.id == pid), None)
 
@@ -158,7 +180,10 @@ class ProfileChoice:
     blocking: Optional[str] = None   # GPU present but unsupported: why (still offers "cpu")
 
 
-def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> ProfileChoice:
+def choose_profile(driver: DriverInfo, override: Optional[str] = None,
+                   unavailable: Sequence[str] = ()) -> ProfileChoice:
+    """``unavailable``: profile ids whose packages can't be downloaded right now (``unpublished_profiles``);
+    automatic choice skips them, a manual choice gets a warning."""
     if override is not None and override not in PROFILE_IDS:
         raise ValueError(f"unknown runtime profile {override!r} (choose from {PROFILE_IDS})")
     if not driver.has_gpu:
@@ -197,6 +222,9 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> Profil
 
     if override is not None:
         prof = profile_by_id(override)
+        if prof.id in unavailable:
+            warnings.append(f"{prof.label}: its gsplat build is not published yet, so this setup will fail. "
+                            "Choose another runtime, or wait for the next Splat Worker update.")
         if driver.cuda_version and driver.cuda_version < prof.min_driver_cuda:
             warnings.append(f"{prof.label} needs a driver supporting CUDA {prof.min_driver_cuda[0]}."
                             f"{prof.min_driver_cuda[1]}; yours supports "
@@ -212,7 +240,11 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> Profil
         return ProfileChoice(prof.id, True, f"{prof.label} for {names}.", warnings)
     lowest_cc = min(caps) if caps else None
     highest_cc = max(caps) if caps else None
+    skipped = []
     for prof in GPU_PROFILES:
+        if prof.id in unavailable:
+            skipped.append(prof)
+            continue
         # the profile's kernels must cover every GPU (e.g. the CUDA 12.8 build has no Pascal kernels,
         # and only it has Blackwell / RTX 50 kernels)
         if lowest_cc is not None and lowest_cc < prof.min_compute_capability:
@@ -220,6 +252,10 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> Profil
         if highest_cc is not None and highest_cc > prof.max_compute_capability:
             continue
         if driver.cuda_version >= prof.min_driver_cuda:
+            for sk in skipped:
+                if driver.cuda_version >= sk.min_driver_cuda:
+                    warnings.append(f"{sk.label} would suit this GPU, but its gsplat build isn't published yet; "
+                                    f"using {prof.label}. Run Set Up again later to switch.")
             return ProfileChoice(prof.id, True, f"{prof.label} for {names} (driver "
                                  f"{driver.driver_version or '?'}, CUDA {driver.cuda_version[0]}."
                                  f"{driver.cuda_version[1]}).", warnings)
@@ -269,6 +305,7 @@ class Plan:
     with_splatprep: bool
     with_lightglue: bool
     splatprep_dir: Optional[Path]
+    venv_dir: Optional[Path] = None   # where the steps build the runtime (the staging dir)
 
     def free_space_problem(self, path: Path, margin_mb: int = 1024) -> Optional[str]:
         """Message if the filesystem holding ``path`` lacks room, else None."""
@@ -308,7 +345,8 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
         with_splatprep = False
     with_lightglue = with_lightglue and with_splatprep
     gpu = profile_by_id(profile_id)
-    py = paths.venv_python
+    target = paths.venv_staging_dir   # swapped into paths.venv_dir by the installer after "verify" passes
+    py = target / "bin" / "python"
     rt = PYTHON_RUNTIME
 
     steps: List[Step] = [
@@ -318,8 +356,9 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
              "download", url=rt.url, sha256=rt.sha256, size_bytes=rt.size_bytes,
              download_mb=rt.size_bytes // 1_000_000, weight=3),
         Step("venv", "Creating the runtime environment",
-             f"A virtual environment in {paths.venv_dir}.", "command",
-             argv=[str(paths.python_exe), "-m", "venv", "--clear", str(paths.venv_dir)], weight=1),
+             f"A virtual environment, built next to the current one ({target}) and swapped in only once "
+             "everything checks out.", "command",
+             argv=[str(paths.python_exe), "-m", "venv", "--clear", str(target)], weight=1),
         Step("pip", "Updating the package installer", "The latest pip.", "command",
              argv=[str(py), "-m", "pip", "install", "--upgrade", "--cache-dir", str(paths.pip_cache),
                    "pip>=24.1", "wheel"], download_mb=2, weight=1, parser="pip"),
@@ -395,7 +434,7 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
                       argv=[str(py), "-c", VERIFY_SCRIPT], weight=2))
     return Plan(profile_id=profile_id, can_train=gpu is not None, steps=steps, download_mb=download,
                 disk_mb=disk, with_splatprep=with_splatprep, with_lightglue=with_lightglue,
-                splatprep_dir=splatprep_dir if with_splatprep else None)
+                splatprep_dir=splatprep_dir if with_splatprep else None, venv_dir=target)
 
 
 # Printed as one JSON line prefixed with "SPLATWORKER-VERIFY " (parsed by the installer).

@@ -70,7 +70,9 @@ def _install_runtime(args: List[str]) -> int:
     paths = AppPaths.from_env()
     paths.ensure()
     driver = detect()
-    choice = choose_profile(driver, a.profile)
+    from .runtime_plan import unpublished_profiles
+
+    choice = choose_profile(driver, a.profile, unpublished_profiles())
     print(choice.summary)
     for w in choice.warnings:
         print("warning:", w)

@@ -292,7 +292,9 @@ def test_build_plan_gpu(paths, tmp_path):
     assert by["python"].url == PYTHON_RUNTIME.url and len(by["python"].sha256) == 64
     assert by["venv"].argv[:3] == [str(paths.python_exe), "-m", "venv"]
     torch = by["torch"].argv
-    assert torch[0] == str(paths.venv_python) and "torch==2.4.1" in torch
+    # built in the staging dir and swapped in after verification
+    assert torch[0] == str(paths.venv_staging_dir / "bin" / "python") and "torch==2.4.1" in torch
+    assert plan.venv_dir == paths.venv_staging_dir and by["venv"].argv[-1] == str(paths.venv_staging_dir)
     assert torch[torch.index("--index-url") + 1] == "https://download.pytorch.org/whl/cu124"
     assert "--progress-bar" in torch and torch[torch.index("--progress-bar") + 1] == "raw"
     g = by["gsplat"].argv
@@ -475,3 +477,33 @@ def test_build_plan_gsplat16_uses_own_wheels(paths, tmp_path):
     assert "gsplat==1.6.0+pt27cu128" in g and "--find-links" in g and "torch==2.7.1" in g
     t = [s for s in plan.steps if s.id == "torch"][0].argv
     assert "torch==2.7.1" in t and t[t.index("--index-url") + 1].endswith("/cu128")
+
+
+def test_choose_profile_skips_unpublished_runtime():
+
+    d = driver((12, 8), cc=(8, 9), name="NVIDIA GeForce RTX 4080")
+    assert choose_profile(d).profile_id == "cu128"
+    c = choose_profile(d, unavailable=["cu128"])
+    assert c.profile_id == "cu124" and any("isn't published yet" in w for w in c.warnings)
+    forced = choose_profile(d, override="cu128", unavailable=["cu128"])
+    assert forced.profile_id == "cu128" and any("not published yet" in w for w in forced.warnings)
+
+
+def test_gsplat_wheel_published():
+    import io
+    from splatworker.gui.runtime_plan import gsplat_wheel_published, profile_by_id, unpublished_profiles
+
+    def opener_with(page):
+        def op(url, timeout=None):
+            return io.BytesIO(page.encode())
+        return op
+
+    p = profile_by_id("cu128")
+    assert gsplat_wheel_published(p, opener_with("<a href='gsplat-1.6.0%2Bpt27cu128-cp310-cp310-linux_x86_64.whl'>")) is True
+    assert gsplat_wheel_published(p, opener_with("<html>nothing</html>")) is False
+
+    def offline(url, timeout=None):
+        raise OSError("offline")
+    assert gsplat_wheel_published(p, offline) is None
+    assert gsplat_wheel_published(profile_by_id("cu124"), offline) is True   # public index, not checked
+    assert unpublished_profiles(offline) == ["cu128"]
