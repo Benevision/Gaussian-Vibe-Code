@@ -33,7 +33,7 @@ from ..mapper import any_mapper_available, run_mapper
 from ..pairs import Pair, select_pairs, write_pairs_txt
 from ..priors import PriorFrame
 from ..progress import StagedProgress
-from ..verification import verify_pair
+from ..verification import verify_pair, verify_pairs  # noqa: F401
 
 
 @dataclass
@@ -237,16 +237,10 @@ class FeatureMatchBackend(Backend):
         sizes = [image_size(p) for p in ctx.paths]
 
         # geometric verification
-        inliers: Dict[Pair, np.ndarray] = {}
-        Fs: Dict[Pair, np.ndarray] = {}
         scale = max(max(s) for s in sizes) / 1000.0 if sizes else 1.0
-        for k, (pair, m) in enumerate(raw.items()):
-            F, inl = verify_pair(kps[pair[0]], kps[pair[1]], m, threshold_px=max(1.0, 2.0 * scale))
-            inliers[pair] = inl
-            if F is not None:
-                Fs[pair] = F
-            if k % 20 == 0:
-                ctx.progress.update("verification", (k + 1) / max(1, len(raw)), f"verified {k + 1}/{len(raw)} pairs")
+        inliers, Fs = verify_pairs(
+            kps, raw, threshold_px=max(1.0, 2.0 * scale),
+            progress=lambda k, n: ctx.progress.update("verification", k / max(1, n), f"verified {k}/{n} pairs"))
         n_verified = len(Fs)
         info.update(
             {
