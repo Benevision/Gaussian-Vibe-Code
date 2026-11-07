@@ -390,6 +390,7 @@ struct AdvancedTrainingSettings: View {
                 SettingRow(id: "train.transientSensitivity", showSummary: false) { NumberSlider(value: c.transientSensitivity.double, range: 2...8, width: 90) }
                 SettingRow(id: "train.transientMaxViewGap", showSummary: false) { NumberSlider(value: c.transientMaxViewGap.double, range: 5...45, width: 90) }
             }
+            SettingRow(id: "train.longAxisSplit", showSummary: false) { Toggle("", isOn: c.longAxisSplit).labelsHidden() }
             SettingRow(id: "train.appearanceCorrection", showSummary: false) { Toggle("", isOn: c.appearanceCorrection).labelsHidden() }
             if session.config.appearanceCorrection {
                 SettingRow(id: "train.appearanceLR", showSummary: false) { NumberSlider(value: c.appearanceLR.double, range: 0.001...0.1, log: true, width: 90) }

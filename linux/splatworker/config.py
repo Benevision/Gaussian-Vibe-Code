@@ -63,7 +63,7 @@ class TrainingConfig:
     previewInterval: int = 500
     evalInterval: int = 2000
     # Robust training against moving objects (same algorithm as the Mac Metal trainer)
-    transientMasking: bool = True
+    transientMasking: bool = False   # opt-in: on real captures it ignored hard detail as 'moving'
     transientSensitivity: float = 3.0
     transientStart: int = 1000
     transientMaxViewGap: float = 15.0   # off for sparse captures (median nearest-view gap, degrees)

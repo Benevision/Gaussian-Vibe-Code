@@ -39,8 +39,10 @@ struct TrainingConfig: Codable, Equatable {
     var seed = 42
     var previewInterval = 500
     var evalInterval = 2000
-    /// Ignore moving / transient objects with robust (RobustNeRF-style) loss masking.
-    var transientMasking = true
+    /// Ignore moving / transient objects with robust (RobustNeRF-style) loss masking. Off by default: on real
+    /// captures it kept mistaking hard-to-learn detail for movement (held-out PSNR +1–2 dB with it off on two
+    /// bedroom captures); turn on for scenes with people or pets moving through.
+    var transientMasking = false
     /// A pixel is a transient candidate when its error exceeds this multiple of the image's median error.
     var transientSensitivity: Float = 3
     /// Step at which transient masking starts (residuals are meaningless before the scene forms).
@@ -63,8 +65,9 @@ struct TrainingConfig: Codable, Equatable {
     var anisotropyReg: Float = 0.1
     var anisotropyMaxRatio: Float = 10
     /// MCMC growth/relocation places copies along the parent's longest axis (ImprovedGS / IGS+) instead of
-    /// on top of it. Experimental until measured on real captures.
-    var longAxisSplit = false
+    /// stacking them on top of it. +2.2 dB held-out on a 649-photo bedroom capture (+3.4 dB together with
+    /// moving-object masking off).
+    var longAxisSplit = true
     var region: Region? = nil
     var cameraIds: [Int]? = nil
 

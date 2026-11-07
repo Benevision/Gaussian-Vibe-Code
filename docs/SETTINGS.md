@@ -1,6 +1,6 @@
 # Splat Studio — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
@@ -10,7 +10,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
 - [Masking](#masking) — 2 settings
 - [Training — basics](#training--basics) — 9 settings
-- [Training — densification](#training--densification) — 11 settings
+- [Training — densification](#training--densification) — 12 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
 - [Training — losses & regularisation](#training--losses--regularisation) — 15 settings
 - [Compute & networking](#compute--networking) — 7 settings
@@ -1018,6 +1018,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 | [Dead opacity](#dead-opacity) | 0.005 | – | Advanced |
 | [Initial opacity](#initial-opacity) | 0.1 | – | Advanced |
 | [Random init count](#random-init-count) | 100 000 | – | Advanced |
+| [Long-axis splitting](#long-axis-splitting) | On (Mac) · opt-in on the Linux worker until validated there | – | Advanced |
 
 ### Densification strategy
 
@@ -1169,6 +1170,22 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 
 **How it works.** Random initialisation works surprisingly well with MCMC; for adaptive training a real point cloud is strongly recommended.
 
+### Long-axis splitting
+
+> New splats are placed along the parent's longest axis instead of stacked on top of it.
+
+| | |
+|---|---|
+| **Default** | On (Mac) · opt-in on the Linux worker until validated there |
+| **Mode** | Advanced |
+| **ID** | `train.longAxisSplit` |
+
+**How it works.** MCMC densification grows and recycles splats by cloning existing ones.
+
+- Standard MCMC stacks the clones on exactly the same spot and shrinks them all; with dense captures and large splat budgets those stacks piled up faster than training could separate them, and long PC runs collapsed.
+- Long-axis splitting (ImprovedGS / IGS+) spreads each group evenly along the parent's longest axis and shortens only that axis, so new splats start where detail actually is.
+- On a 649-photo bedroom capture it improved held-out PSNR by 2.2 dB.
+
 ## Training — learning rates
 
 | Setting | Default | Range | Mode |
@@ -1247,7 +1264,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 |---|---|---|---|
 | [Structural similarity weight](#structural-similarity-weight) | 0.2 | 0–1 | Advanced |
 | [Depth supervision](#depth-supervision) | 0.1 (when depth present) | 0–1 | Advanced |
-| [Ignore moving objects](#ignore-moving-objects) | On | – | Easy |
+| [Ignore moving objects](#ignore-moving-objects) | Off | – | Easy |
 | [Moving-object sensitivity](#moving-object-sensitivity) | 3× | 2–8 | Advanced |
 | [Edge-aware depth](#edge-aware-depth) | On | – | Advanced |
 | [Needle-splat penalty](#needle-splat-penalty) | 0.1 | 0–1 | Advanced |
@@ -1301,7 +1318,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 
 | | |
 |---|---|
-| **Default** | On |
+| **Default** | Off |
 | **Mode** | Easy |
 | **ID** | `train.transientMasking` |
 
@@ -1309,6 +1326,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 
 - With this on, after textures have had time to converge (30 % of training) each image's solid, strongly-wrong regions in front of already-reconstructed scenery are excluded from training.
 - It needs no masks or models and complements them: masks remove known objects up front, this catches whatever slips through.
+- Off by default: on real captures it often mistook hard-to-learn detail (textured ceilings, foliage, clutter) for movement, costing 1–2 dB on held-out photos; turn it on when people, pets or cars actually moved through the scene.
 - The dashboard shows the share of pixels currently ignored — typically 0–5 %; much more suggests a very busy scene.
 
 ### Moving-object sensitivity
@@ -1380,7 +1398,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 
 ### Coverage needed to ignore moving objects
 
-> Moving-object masking switches itself off when photos are further apart than this.
+> When moving-object masking is on, it switches itself off if photos are further apart than this.
 
 | | |
 |---|---|
