@@ -636,6 +636,8 @@ final class MetalTrainer: @unchecked Sendable {
         for k in 0..<5 { enc.setBuffer(grads[k], offset: 0, index: 9 + k) }
         enc.setBuffer(gradStats, offset: 0, index: 14)
         enc.setBytes(&reg, length: 16, index: 15)
+        var big = SIMD2<Float>(config.bigSplatReg / Float(max(n, 1)), max(config.bigSplatMaxAngle, 0.01))
+        enc.setBytes(&big, length: 8, index: 16)
         enc.dispatch1D(ctx.pipeline("preprocess_backward"), count: n)
         enc.memoryBarrier(scope: .buffers)
         split("5 preprocess backward")

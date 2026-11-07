@@ -595,6 +595,7 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
                                 device float* gSH [[buffer(13)]],
                                 device float* gradStats [[buffer(14)]],  // per gaussian: accum, count, maxRadius
                                 constant float4& reg [[buffer(15)]],     // x: opacityReg/N, y: scaleReg/(3N), z: anisotropyReg/N, w: max axis ratio
+                                constant float2& big [[buffer(16)]],     // x: bigSplatReg/N, y: largest allowed tan(half-angle)
                                 uint i [[thread_position_in_grid]]) {
     if (i >= cam.count) return;
     float o = 1.0f / (1.0f + exp(-opLogit[i]));
@@ -713,6 +714,24 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
         for (int r = 0; r < 2; r++) for (int cc = 0; cc < 3; cc++) {
             float v = 0; for (int k = 0; k < 3; k++) v += dT[r][k] * Wm[cc][k];
             dJ[r][cc] = v;
+        }
+        // Big-splat penalty (only for splats this view draws). The splat's visible radius is where its
+        // alpha falls to 1/255: rho = sigma_max * sqrt(2 ln(255 o)). Seen from distance d, it spans a cone of
+        // half-angle asin(rho/d); tan(half-angle/2)-style ratio rho / (d + sqrt(d^2 - rho^2)) stays finite when
+        // the camera is inside the splat (d <= rho gives 1). Above the limit, log-scale gradients push the
+        // splat smaller in proportion to how far over it is (log2), the longest axis fully, the others half.
+        if (big.x > 0.0f) {
+            float smax = max(s.x, max(s.y, s.z));
+            float lnA = log(max(255.0f * o, 1.0f));
+            if (lnA > 0.0f) {
+                float rho = smax * sqrt(2.0f * lnA);
+                float d = length(t);
+                float rr = rho / (max(d, rho) + sqrt(max(d * d - rho * rho, 0.0f)));
+                if (rr > big.y) {
+                    float g = big.x * log2(rr / big.y);
+                    for (int k = 0; k < 3; k++) gls[k] += g * (s[k] >= smax ? 1.0f : 0.5f);
+                }
+            }
         }
         float3 dt = float3(0);
         dt.x += -fx * iz2 * dJ[0][2] * mulx;

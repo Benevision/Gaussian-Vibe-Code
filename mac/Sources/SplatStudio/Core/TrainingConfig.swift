@@ -64,6 +64,12 @@ struct TrainingConfig: Codable, Equatable {
     /// that streak along view rays in sparsely covered areas). 0 = off.
     var anisotropyReg: Float = 0.1
     var anisotropyMaxRatio: Float = 10
+    /// Penalty on splats that cover a large part of the view they are drawn in (blobs hanging just in front of
+    /// a camera, which explain one photo and fog every other). Measured as the half-angle the splat spans from
+    /// the camera; above `bigSplatMaxAngle` (as tan of the half-angle) the splat is shrunk, longest axis first.
+    /// 0 = off.
+    var bigSplatReg: Float = 0
+    var bigSplatMaxAngle: Float = 0.3
     /// MCMC growth/relocation places copies along the parent's longest axis (ImprovedGS / IGS+) instead of
     /// stacking them on top of it. +2.2 dB held-out on a 649-photo bedroom capture (+3.4 dB together with
     /// moving-object masking off).
@@ -91,6 +97,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.transientMasking, &transientMasking); d(.transientSensitivity, &transientSensitivity); d(.transientStart, &transientStart)
         d(.transientMaxViewGap, &transientMaxViewGap)
         d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio); d(.longAxisSplit, &longAxisSplit)
+        d(.bigSplatReg, &bigSplatReg); d(.bigSplatMaxAngle, &bigSplatMaxAngle)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
@@ -124,9 +131,9 @@ struct TrainingConfig: Codable, Equatable {
             case .balanced:
                 c.iterations = 15_000; c.maxImageSize = 1400; c.maxGaussians = 800_000; c.densifyStop = 12_000
             case .high:
-                c.iterations = 30_000; c.maxImageSize = 1600; c.maxGaussians = 1_500_000; c.densifyStop = 25_000
+                c.iterations = 30_000; c.maxImageSize = 1600; c.maxGaussians = 1_500_000; c.densifyStop = 14_000   // 14k beat 25k on the bedroom (23.14 vs 22.82 dB held-out)
             case .ultra:
-                c.iterations = 40_000; c.maxImageSize = 2400; c.maxGaussians = 3_000_000; c.densifyStop = 30_000
+                c.iterations = 40_000; c.maxImageSize = 2400; c.maxGaussians = 3_000_000; c.densifyStop = 19_000   // same ~0.47× of iterations as High
             }
             return c
         }
