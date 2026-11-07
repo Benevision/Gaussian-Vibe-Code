@@ -503,7 +503,7 @@ struct ExportPanel: View {
         } else {
             PanelSection(title: "Splat file", systemImage: "square.and.arrow.up") {
                 SettingRow(id: "export.format") {
-                    Picker("", selection: $format) { ForEach(SplatFileFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                    Picker("", selection: $format) { ForEach(SplatFileFormat.allCases) { Text($0.shortName).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 220)
                 }
                 if format != .splat {
                     SettingRow(id: "export.shDegree") { Picker("", selection: $shDegree) { ForEach(0...3, id: \.self) { Text("\($0)").tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 140) }
@@ -543,13 +543,15 @@ struct ExportPanel: View {
         case .ply: return n * (17 + rest) * 4
         case .splat: return n * 32
         case .spz: return n * (19 + rest) / 3
+        // Compressed PLY: 16 packed bytes + 1 byte per SH value, plus 72 bytes of bounds per 256 splats.
+        case .compressedPly: return n * (16 + rest) + (n + 255) / 256 * 72
         }
     }
 
     private func exportFile() {
         let p = NSSavePanel()
-        p.allowedContentTypes = [UTType(filenameExtension: format.rawValue) ?? .data]
-        p.nameFieldStringValue = "\(model.documentName).\(format.rawValue)"
+        p.allowedContentTypes = [UTType(filenameExtension: format.baseExtension) ?? .data]
+        p.nameFieldStringValue = "\(model.documentName).\(format.fileExtension)"
         guard p.runModal() == .OK, let u = p.url else { return }
         busy = true
         Task {

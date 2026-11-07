@@ -271,18 +271,43 @@ enum CRC32 {
 
 enum SplatFileFormat: String, CaseIterable, Identifiable {
     case ply, splat, spz
+    /// PlayCanvas compressed PLY (`.compressed.ply`); see CompressedPLY.swift.
+    case compressedPly = "compressed.ply"
     var id: String { rawValue }
     var title: String {
         switch self {
         case .ply: return "PLY (3DGS standard, lossless)"
         case .splat: return ".splat (web viewers, no SH, ~32 B/splat)"
         case .spz: return "SPZ (compressed, ~10× smaller)"
+        case .compressedPly: return "Compressed PLY (PlayCanvas/SuperSplat, ~16 B/splat + SH)"
         }
+    }
+    /// Short label for segmented pickers.
+    var shortName: String {
+        switch self {
+        case .ply: return "PLY"
+        case .splat: return "SPLAT"
+        case .spz: return "SPZ"
+        case .compressedPly: return "C-PLY"
+        }
+    }
+    /// Full file extension without the leading dot (may be compound, e.g. "compressed.ply").
+    var fileExtension: String { rawValue }
+    /// Last path extension, for UTType / save panels ("ply" for compressed PLY).
+    var baseExtension: String { self == .compressedPly ? "ply" : rawValue }
+
+    /// Format implied by a file name, honouring the compound `.compressed.ply` extension.
+    static func forURL(_ url: URL) -> SplatFileFormat? {
+        if CompressedPLYCodec.hasCompressedName(url) { return .compressedPly }
+        return SplatFileFormat(rawValue: url.pathExtension.lowercased())
     }
 
     static func load(url: URL) throws -> GaussianCloud {
         switch url.pathExtension.lowercased() {
-        case "ply": return try PLYCodec.readGaussians(url: url)
+        case "ply":
+            // Compressed PLY is detected from its header, whatever the file is called.
+            if CompressedPLYCodec.isCompressedPLY(url: url) { return try CompressedPLYCodec.read(url: url) }
+            return try PLYCodec.readGaussians(url: url)
         case "splat": return try DotSplatCodec.read(url: url)
         case "spz": return try SPZCodec.read(url: url)
         default: throw FormatError.unsupported(url.pathExtension)
@@ -291,9 +316,13 @@ enum SplatFileFormat: String, CaseIterable, Identifiable {
 
     func save(_ g: GaussianCloud, to url: URL, shDegree: Int?) throws {
         switch self {
-        case .ply: try PLYCodec.writeGaussians(g, to: url, shDegree: shDegree)
+        case .ply:
+            // Callers that map `url.pathExtension` to a format (e.g. the CLI) get `.ply` for "x.compressed.ply".
+            if CompressedPLYCodec.hasCompressedName(url) { try CompressedPLYCodec.write(g, to: url, shDegree: shDegree) }
+            else { try PLYCodec.writeGaussians(g, to: url, shDegree: shDegree) }
         case .splat: try DotSplatCodec.write(g, to: url)
         case .spz: try SPZCodec.write(g, to: url, shDegree: shDegree)
+        case .compressedPly: try CompressedPLYCodec.write(g, to: url, shDegree: shDegree)
         }
     }
 }

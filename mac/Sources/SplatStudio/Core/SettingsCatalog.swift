@@ -260,6 +260,10 @@ enum SettingsCatalog {
               summary: "Automatically ignore moving things (people, pets, vehicles), the sky, or everything except the subject.",
               detail: "Masked pixels are excluded from the training loss, so moving people, pets, cars, the operator's shadow or a featureless sky don't create floaters. Options: 'Remove people & pets — quick' (Apple Vision, on-device, no download; finds people well, cats/dogs only when clearly visible). 'Remove moving things — best' (Models pack: open-vocabulary detection of people, animals, vehicles, bags… plus SAM 2 tracking through the sequence, so objects stay masked even in frames where detection misses them). 'Keep main subject' for object captures. Sky removal for outdoor scenes. You can review and correct any masks afterwards with Edit masks… (click an object once and SAM 2 tracks it through every frame). Masks combine with 'Ignore moving objects' during training.",
               defaultValue: "None", advanced: false),
+        .init(id: "mask.staticRegions", group: .masking, title: "Mask fixed parts of the frame",
+              summary: "Masks things that move with the camera: a lens rim, a burned-in timestamp or logo, propellers, a car bonnet or selfie stick.",
+              detail: "For each camera (each 360° view direction separately) up to 48 frames are compared. Pixels that stay the same while the camera moves, and are either near-black or have edges in the average image, are masked out of training, so they don't get painted into the scene as a smear that follows the camera. Plain sky also stays the same but has no edges, so it is kept, and the boundary of a fixed band (a horizon that stays put in forward flight) is not treated as an overlay. If more than a quarter of the frame looks fixed (the camera barely moves), nothing is masked for that camera.",
+              defaultValue: "Off", advanced: true),
         .init(id: "mask.invert", group: .masking, title: "Invert mask",
               summary: "Swap what is kept and what is ignored.",
               detail: "For example SAM 2 on a person + invert = remove that person.",
@@ -488,8 +492,8 @@ enum SettingsCatalog {
     // MARK: Export
     static let export: [SettingDoc] = [
         .init(id: "export.format", group: .export, title: "File format",
-              summary: "PLY (lossless standard), SPZ (≈10× smaller) or .splat (web).",
-              detail: "PLY is the reference 3DGS format every tool reads (≈248 bytes/splat at SH 3). SPZ (Niantic, open) quantises and compresses to ≈25 bytes/splat with very little visible loss and is supported by most modern viewers. .splat is the compact format used by many web viewers but has no view-dependent colour.",
+              summary: "PLY (lossless standard), SPZ (≈10× smaller), .splat (web) or compressed PLY (PlayCanvas).",
+              detail: "PLY is the reference 3DGS format every tool reads (≈248 bytes/splat at SH 3). SPZ (Niantic, open) quantises and compresses to ≈25 bytes/splat with very little visible loss and is supported by most modern viewers. .splat is the compact format used by many web viewers but has no view-dependent colour. C-PLY writes PlayCanvas compressed PLY (.compressed.ply): 256-splat chunks with quantised position, rotation, scale and colour (16 bytes/splat) plus 1 byte per SH value — read by SuperSplat, the PlayCanvas engine, splat-transform and other web viewers.",
               defaultValue: "PLY", advanced: false),
         .init(id: "export.shDegree", group: .export, title: "Export SH degree",
               summary: "Drop view-dependent colour bands to shrink the file.",

@@ -172,7 +172,7 @@ enum PLYCodec {
         guard let h = try? FileHandle(forReadingFrom: url), let d = try? h.read(upToCount: 64 * 1024) else { return false }
         try? h.close()
         guard let s = String(data: d, encoding: .ascii) ?? String(data: d.prefix(8000), encoding: .isoLatin1) else { return false }
-        return s.contains("f_dc_0") && s.contains("scale_0")
+        return (s.contains("f_dc_0") && s.contains("scale_0")) || (s.contains("element chunk") && s.contains("packed_position"))
     }
 
     static func readGaussians(url: URL) throws -> GaussianCloud {
