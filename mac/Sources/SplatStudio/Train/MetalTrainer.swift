@@ -766,6 +766,10 @@ final class MetalTrainer: @unchecked Sendable {
     /// Renders a training view with the current parameters; returns RGBA8 pixels.
     func render(view v: TrainView, background: SIMD3<Float> = .zero) throws -> (pixels: [UInt8], mse: Float)? {
         paramLock.lock(); defer { paramLock.unlock() }
+        return try renderUnlocked(view: v, background: background)
+    }
+
+    private func renderUnlocked(view v: TrainView, background: SIMD3<Float> = .zero) throws -> (pixels: [UInt8], mse: Float)? {
         var u = uniforms(for: v, shDegree: activeSHDegree)
         var rp = rasterParams(for: v, bg: background)
         guard try encodeForward(view: v, u: &u, rp: &rp) else { return nil }
@@ -1075,12 +1079,69 @@ final class MetalTrainer: @unchecked Sendable {
         }
     }
 
+    /// Error-driven densification (FastGS-style, config.errorDrivenDensify): per splat, how many of the
+    /// worst-fitting pixels (top 10 % error in each of 10 sampled training views) it visibly contributes to,
+    /// normalised to 0…1. MCMC then places new / relocated splats preferentially where the image is still wrong,
+    /// not only where splats are opaque. Refreshed every 500 steps.
+    private var errScore: [Float] = []
+    private var errScoreStep = -1_000_000
+
+    private func refreshErrorScores() throws {
+        guard config.errorDrivenDensify, step - errScoreStep >= 500, !trainViews.isEmpty else { return }
+        errScoreStep = step
+        let counts = ctx.buffer(max(n, 1) * 4, label: "errCount")
+        memset(counts.contents(), 0, max(n, 1) * 4)
+        for _ in 0..<min(10, trainViews.count) {
+            let v = trainViews[Int(rng.next() % UInt64(trainViews.count))]
+            guard let r = try renderUnlocked(view: v) else { continue }
+            let hw = v.width * v.height
+            let tgt = v.target.contents().bindMemory(to: UInt8.self, capacity: hw * 4)
+            var err = [UInt8](repeating: 0, count: hw), hist = [Int](repeating: 0, count: 256)
+            r.pixels.withUnsafeBufferPointer { px in
+                for p in 0..<hw where tgt[p * 4 + 3] >= 128 {            // masked-out pixels never count
+                    let o = p * 4
+                    let e = (abs(Int(px[o]) - Int(tgt[o])) + abs(Int(px[o + 1]) - Int(tgt[o + 1])) + abs(Int(px[o + 2]) - Int(tgt[o + 2]))) / 3
+                    err[p] = UInt8(min(e, 255)); hist[min(e, 255)] += 1
+                }
+            }
+            // threshold at the 90th percentile of this view's error (at least 4/255, so a near-perfect view adds nothing)
+            let total = hist.reduce(0, +)
+            var acc = 0, thr = 255
+            for b in stride(from: 255, through: 0, by: -1) { acc += hist[b]; if acc >= total / 10 { thr = b; break } }
+            thr = max(thr, 4)
+            let hot = ctx.buffer(hw, label: "hot")
+            let hp = hot.contents().bindMemory(to: UInt8.self, capacity: hw)
+            for p in 0..<hw { hp[p] = err[p] >= thr ? 1 : 0 }
+            // The tile lists of renderUnlocked are still in place: count contributions over the hot pixels.
+            var rp = rasterParams(for: v, bg: .zero)
+            let cb = ctx.queue.makeCommandBuffer()!, enc = cb.makeComputeCommandEncoder()!
+            enc.setComputePipelineState(ctx.pipeline("rasterize_errcount"))
+            enc.setBuffer(ranges, offset: 0, index: 0); enc.setBuffer(tileVals!, offset: 0, index: 1)
+            enc.setBuffer(p2d, offset: 0, index: 2); enc.setBuffer(conicO, offset: 0, index: 3)
+            enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 5)
+            enc.setBuffer(counts, offset: 0, index: 9); enc.setBuffer(hot, offset: 0, index: 10)
+            enc.dispatchThreadgroups(MTLSize(width: Int(rp.tilesX), height: Int(rp.tilesY), depth: 1), threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+            enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+        }
+        let c = counts.contents().bindMemory(to: UInt32.self, capacity: n)
+        var mx: UInt32 = 1
+        for i in 0..<n { mx = max(mx, c[i]) }
+        // sqrt: a few splats cover huge error regions; keep the rest distinguishable
+        errScore = (0..<n).map { sqrt(Float(c[$0]) / Float(mx)) }
+    }
+
+    private func densityWeight(_ i: Int, opacity o: Float) -> Float {
+        guard config.errorDrivenDensify, i < errScore.count else { return o }
+        return o * (0.25 + errScore[i])
+    }
+
     private func mcmcDensify() {
+        try? refreshErrorScores()
         let op = ptr(params[3])
         var dead: [Int] = [], weights = [Float](repeating: 0, count: n)
         for i in 0..<n {
             let o = 1 / (1 + exp(-op[i]))
-            if o <= config.pruneOpacity { dead.append(i) } else { weights[i] = o }
+            if o <= config.pruneOpacity { dead.append(i) } else { weights[i] = densityWeight(i, opacity: o) }
         }
         // relocate dead → sampled alive
         if !dead.isEmpty {
@@ -1100,7 +1161,7 @@ final class MetalTrainer: @unchecked Sendable {
         let add = target - n
         guard add > 0 else { return }
         var w2 = [Float](repeating: 0, count: n)
-        for i in 0..<n { w2[i] = 1 / (1 + exp(-op[i])) }
+        for i in 0..<n { w2[i] = densityWeight(i, opacity: 1 / (1 + exp(-op[i]))) }
         let src = sampleWeighted(w2, count: add)
         guard !src.isEmpty else { return }
         applyRelocation(sources: src)

@@ -76,6 +76,8 @@ struct TrainingConfig: Codable, Equatable {
     var bigSplatMaxAngle: Float = 0.3
     /// Coarse-to-fine image resolution: ¼, then ½, then full, over the first half of the densification window.
     var progressiveResolution = false
+    /// FastGS-style error-driven densification: MCMC places new splats where the worst-fitting pixels are.
+    var errorDrivenDensify = false
     /// MCMC growth/relocation places copies along the parent's longest axis (ImprovedGS / IGS+) instead of
     /// stacking them on top of it. +2.2 dB held-out on a 649-photo bedroom capture (+3.4 dB together with
     /// moving-object masking off).
@@ -103,7 +105,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.transientMasking, &transientMasking); d(.transientSensitivity, &transientSensitivity); d(.transientStart, &transientStart)
         d(.transientMaxViewGap, &transientMaxViewGap)
         d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio); d(.longAxisSplit, &longAxisSplit)
-        d(.bigSplatReg, &bigSplatReg); d(.bigSplatMaxAngle, &bigSplatMaxAngle); d(.progressiveResolution, &progressiveResolution)
+        d(.bigSplatReg, &bigSplatReg); d(.bigSplatMaxAngle, &bigSplatMaxAngle); d(.progressiveResolution, &progressiveResolution); d(.errorDrivenDensify, &errorDrivenDensify)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
