@@ -16,7 +16,7 @@ import time
 from typing import Dict, List, Optional
 
 from .gui.pip_progress import PipProgressParser
-from .gui.runtime_plan import GPU_PROFILES, LIGHTGLUE_DEPS, PROCESSING_DEPS
+from .gui.runtime_plan import GPU_PROFILES, LIGHTGLUE_DEPS, PROCESSING_DEPS, SAM2_REQ
 
 COMPONENTS = ("processing",)
 
@@ -35,19 +35,19 @@ def installed_components() -> Dict[str, bool]:
             "processing": all(_has(m) for m in ("lightglue", "pycolmap", "sam2", "transformers", "torchvision"))}
 
 
-def _torchvision_spec() -> List[str]:
-    """torchvision matching the installed torch build (same index as the setup assistant used)."""
+def _profile():
+    """The GPU profile matching the installed torch build (None if torch is missing or unknown)."""
     try:
         import torch  # noqa: F401
 
         base = torch.__version__.split("+")[0]
         cuda = (torch.version.cuda or "").replace(".", "")
     except Exception:
-        return ["torchvision"]
+        return None
     for p in GPU_PROFILES:
         if p.torch == base and p.id == f"cu{cuda}":
-            return [f"torchvision=={p.torchvision}", f"torch=={p.torch}", "--index-url", p.torch_index]
-    return ["torchvision"]
+            return p
+    return None
 
 
 class RuntimeInstaller:
@@ -79,10 +79,16 @@ class RuntimeInstaller:
     def _steps(self) -> List[tuple]:
         py = sys.executable
         base = [py, "-m", "pip", "install", "--progress-bar", "raw", "--prefer-binary"]
-        return [("torchvision", "Installing torchvision", base + _torchvision_spec(), 0.35),
-                ("lightglue", "Installing LightGlue", base + list(LIGHTGLUE_DEPS), 0.15),
-                ("processing", "Installing COLMAP mapper, OWLv2 and SAM 2",
-                 base + ["--no-build-isolation"] + list(PROCESSING_DEPS), 0.5)]
+        p = _profile()
+        # Every step pins torch / torchvision to the runtime's build (gsplat's CUDA kernels are built for it).
+        pins = ([f"torch=={p.torch}", f"torchvision=={p.torchvision}", "--extra-index-url", p.torch_index]
+                if p is not None else [])
+        tv = ([f"torchvision=={p.torchvision}", f"torch=={p.torch}", "--index-url", p.torch_index]
+              if p is not None else ["torchvision"])
+        return [("torchvision", "Installing torchvision", base + tv, 0.3),
+                ("lightglue", "Installing LightGlue", base + list(LIGHTGLUE_DEPS) + pins, 0.15),
+                ("processing", "Installing COLMAP mapper and OWLv2", base + list(PROCESSING_DEPS) + pins, 0.45),
+                ("sam2", "Installing SAM 2", base + ["--no-deps", "--no-build-isolation", SAM2_REQ], 0.1)]
 
     def _log(self, line: str) -> None:
         with self._lock:

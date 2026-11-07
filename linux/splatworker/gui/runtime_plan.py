@@ -65,7 +65,19 @@ LIGHTGLUE_DEPS = ["kornia>=0.7",
 # a Python package, OWLv2 + SegFormer (transformers), SAM 2 (pure-Python install: its optional CUDA
 # extension is skipped when no toolkit is present). Model weights download on first use.
 PROCESSING_DEPS = ["pycolmap>=3.10", "transformers>=4.38", "huggingface_hub>=0.20", "safetensors",
-                   "SAM-2 @ https://github.com/facebookresearch/sam2/archive/refs/heads/main.zip"]
+                   # SAM 2's own runtime deps (SAM 2 itself is installed with --no-deps, see below)
+                   "hydra-core>=1.3.2", "iopath>=0.1.10", "tqdm"]
+# Installed with --no-deps: SAM 2 declares torch>=2.5.1, and letting pip resolve that silently replaced the
+# runtime's torch 2.4.1 (+cu124) with the newest PyPI build, which gsplat's prebuilt CUDA kernels can't load
+# ("'NoneType' object has no attribute 'CameraModelType'"). SAM 2 runs fine on torch 2.4.
+SAM2_REQ = "SAM-2 @ https://github.com/facebookresearch/sam2/archive/refs/heads/main.zip"
+
+
+def torch_pins(gpu: "GpuProfile | None") -> List[str]:
+    """Requirements that keep torch / torchvision at the profile's build in every later pip call."""
+    return [f"torch=={gpu.torch}", f"torchvision=={gpu.torchvision}"] if gpu is not None else []
+
+
 PROCESSING_DOWNLOAD_MB = 160
 PROCESSING_DISK_MB = 600
 
@@ -323,15 +335,22 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
         steps.append(Step("torchvision", "Installing torchvision",
                           "torchvision, needed by the learned feature matchers.", "command",
                           argv=tv, download_mb=extra_dl - 20, weight=6, parser="pip"))
+        pins = torch_pins(gpu)
+        xidx = gpu.torch_index if gpu is not None else None
         steps.append(Step("lightglue", "Installing LightGlue",
                           "SuperPoint / DISK / ALIKED + LightGlue learned feature matching.", "command",
-                          argv=pip_argv(py, paths, *LIGHTGLUE_DEPS), download_mb=20, weight=3,
-                          parser="pip"))
+                          argv=pip_argv(py, paths, *LIGHTGLUE_DEPS, *pins, extra_index_url=xidx),
+                          download_mb=20, weight=3, parser="pip"))
         steps.append(Step("processing", "Installing camera solving and masking models",
-                          "COLMAP mapper, OWLv2 object detection and SAM 2 tracking, so the Mac can send "
-                          "camera solving and moving-object masking here.", "command",
-                          argv=pip_argv(py, paths, *PROCESSING_DEPS, extra=("--no-build-isolation",)),
-                          download_mb=PROCESSING_DOWNLOAD_MB, weight=6, parser="pip"))
+                          "COLMAP mapper and OWLv2 object detection, so the Mac can send camera solving "
+                          "and moving-object masking here.", "command",
+                          argv=pip_argv(py, paths, *PROCESSING_DEPS, *pins, extra_index_url=xidx),
+                          download_mb=PROCESSING_DOWNLOAD_MB, weight=5, parser="pip"))
+        steps.append(Step("sam2", "Installing SAM 2",
+                          "SAM 2 video segmentation (installed without its dependencies so it can't replace "
+                          "the GPU runtime's PyTorch).", "command",
+                          argv=pip_argv(py, paths, SAM2_REQ, extra=("--no-deps", "--no-build-isolation")),
+                          download_mb=5, weight=1, parser="pip"))
         download += extra_dl + PROCESSING_DOWNLOAD_MB
         disk += extra_disk + PROCESSING_DISK_MB
     steps.append(Step("verify", "Checking the installation",
@@ -372,6 +391,11 @@ r["gsplatPrebuilt"] = has("gsplat.csrc")
 r["splatworker"] = has("splatworker") and has("fastapi") and has("uvicorn")
 r["splatprep"] = has("splatprep") and has("cv2")
 r["lightglue"] = has("lightglue")
+try:
+    import torch as _t
+    r["torchVersion"] = _t.__version__
+except Exception:
+    r["torchVersion"] = None
 r["pycolmap"] = has("pycolmap")
 r["sam2"] = has("sam2")
 r["transformers"] = has("transformers")
@@ -385,6 +409,11 @@ def verify_problems(result: dict, plan: Plan) -> List[str]:
     if not result.get("splatworker"):
         problems.append("The worker's libraries (FastAPI / uvicorn) could not be imported.")
     if plan.can_train:
+        prof = next((g for g in GPU_PROFILES if g.id == plan.profile_id), None)
+        tv = str(result.get("torchVersion") or "")
+        if prof is not None and tv and tv.split("+")[0] != prof.torch:
+            problems.append(f"PyTorch {tv} is installed but this runtime needs {prof.torch} "
+                            f"(gsplat's GPU kernels are built for it). Run the setup again to repair it.")
         if not result.get("torch"):
             problems.append("PyTorch could not be imported.")
         elif result.get("torchError"):

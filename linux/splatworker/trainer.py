@@ -39,6 +39,22 @@ class TrainingCancelled(Exception):
     pass
 
 
+def _check_gsplat_kernels(torch, gsplat) -> None:
+    """gsplat's prebuilt CUDA kernels only load with the torch build they were compiled for; if something
+    replaced torch (e.g. a package that pulled a newer PyTorch), fail with a fix instead of a cryptic
+    "'NoneType' object has no attribute 'CameraModelType'" on the first render."""
+    try:
+        from gsplat.cuda import _backend  # type: ignore
+        ok = getattr(_backend, "_C", None) is not None
+    except Exception:
+        ok = False
+    if not ok:
+        raise TrainingError(
+            f"gsplat {getattr(gsplat, '__version__', '?')}'s GPU kernels can't load with PyTorch {torch.__version__} — "
+            "the GPU runtime's PyTorch was replaced. Open Splat Worker → menu → Set Up… and run it again to repair "
+            "(downloads and settings are kept).")
+
+
 class TrainingError(RuntimeError):
     pass
 
@@ -395,6 +411,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 
     log(f"gsplat {getattr(gsplat, '__version__', '?')}, torch {torch.__version__}, device {dev}"
         f" ({torch.cuda.get_device_name(dev)})")
+    _check_gsplat_kernels(torch, gsplat)
 
     ds = parse_dataset(dataset_dir)
     region_box = cfg.region.expanded() if cfg.region is not None else None

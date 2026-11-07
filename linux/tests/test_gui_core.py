@@ -276,10 +276,14 @@ def test_build_plan_gpu(paths, tmp_path):
                       splatprep_dir=tmp_path)
     ids = [s.id for s in plan.steps]
     assert ids == ["python", "venv", "pip", "torch", "gsplat", "worker", "splatprep", "torchvision",
-                   "lightglue", "processing", "verify"]
+                   "lightglue", "processing", "sam2", "verify"]
     proc = [s for s in plan.steps if s.id == "processing"][0].argv
-    assert "--no-build-isolation" in proc and any(a.startswith("pycolmap") for a in proc) \
-        and any(a.startswith("SAM-2 @ https://") for a in proc)
+    # torch / torchvision stay pinned to the profile in every later step (gsplat's kernels need that build)
+    assert "torch==2.4.1" in proc and "torchvision==0.19.1" in proc and any(a.startswith("pycolmap") for a in proc)
+    sam = [s for s in plan.steps if s.id == "sam2"][0].argv
+    assert "--no-deps" in sam and any(a.startswith("SAM-2 @ https://") for a in sam)
+    lg = [s for s in plan.steps if s.id == "lightglue"][0].argv
+    assert "torch==2.4.1" in lg
     by = {s.id: s for s in plan.steps}
     assert by["python"].url == PYTHON_RUNTIME.url and len(by["python"].sha256) == 64
     assert by["venv"].argv[:3] == [str(paths.python_exe), "-m", "venv"]
