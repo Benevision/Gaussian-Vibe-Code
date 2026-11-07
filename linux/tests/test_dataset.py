@@ -241,3 +241,15 @@ def test_upload_root_accepts_partial_layers(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(DatasetError):
         find_upload_root(tmp_path / "empty")
+
+
+def test_background_shell(dataset_dir):
+    import numpy as np
+    from splatworker.dataset import parse_dataset
+    from splatworker.trainer import background_shell
+    ds = parse_dataset(dataset_dir)
+    pts = background_shell(ds, 500)
+    centre = np.mean([c.camera_to_world[:3, 3] for c in ds.cameras], 0)
+    r = np.linalg.norm(pts - centre, axis=1)
+    assert pts.shape == (500, 3) and np.allclose(r, 3 * ds.scene_extent, rtol=1e-4)
+    assert pts[:, 1].min() < -0.9 * r[0] + centre[1] and pts[:, 1].max() > 0.9 * r[0] + centre[1]   # whole sphere

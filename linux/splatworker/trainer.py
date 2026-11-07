@@ -553,7 +553,25 @@ def init_points(ds: DatasetInfo, cfg: TrainingConfig, region_box, log) -> tuple:
         idx = rng.choice(len(xyz), cfg.maxGaussians, replace=False)
         xyz, rgb = xyz[idx], rgb[idx]
         log(f"subsampled initial points to maxGaussians={cfg.maxGaussians}")
+    if cfg.backgroundShell > 0 and region_box is None:
+        shell = background_shell(ds, cfg.backgroundShell)
+        xyz = np.concatenate([xyz, shell])
+        rgb = np.concatenate([rgb, np.tile(rgb.mean(0, keepdims=True), (len(shell), 1))])
+        log(f"background shell: {len(shell)} splats at 3× the scene size")
     return xyz.astype(np.float32), rgb.astype(np.float32)
+
+
+def background_shell(ds: DatasetInfo, n: int) -> np.ndarray:
+    """``n`` points evenly over a sphere 3 scene sizes out around the cameras' centre (Fibonacci lattice) —
+    a place for distant land / sky beyond the capture instead of hazy edge splats or floaters (as on the Mac)."""
+    cams = np.array([np.asarray(c.camera_to_world)[:3, 3] for c in ds.cameras], dtype=np.float64) if ds.cameras else None
+    centre = cams.mean(0) if cams is not None and len(cams) else np.asarray(ds.scene_center, dtype=np.float64)
+    r = 3.0 * float(ds.scene_extent)
+    k = np.arange(n, dtype=np.float64)
+    y = 1 - 2 * (k + 0.5) / n
+    rad = np.sqrt(np.maximum(0, 1 - y * y))
+    th = np.pi * (3 - np.sqrt(5)) * k
+    return (centre + r * np.stack([rad * np.cos(th), y, rad * np.sin(th)], 1)).astype(np.float32)
 
 
 def export_ply(splats, path: Path, region_box=None, up=None) -> int:

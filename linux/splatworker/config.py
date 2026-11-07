@@ -95,6 +95,8 @@ class TrainingConfig:
     # SSIM contrast/structure on the uncorrected render (luminance on the corrected one) when per-photo colour
     # correction is on, so the correction can't hide missing detail.
     decoupledSSIM: bool = False
+    # Far-field shell of this many splats (0 = off) for distant land / sky beyond the capture.
+    backgroundShell: int = 0
     # PROTOCOL.md §7 (block-parallel training)
     region: Optional[Region] = None
     cameraIds: Optional[List[int]] = None
@@ -157,7 +159,7 @@ class TrainingConfig:
         for name in ("lrPosition", "lrPositionFinal", "lrColor", "lrSHRest", "lrOpacity",
                      "lrScale", "lrRotation", "bilateralGridLR"):
             need(getattr(self, name) > 0, f"{name} must be > 0")
-        for name in ("opacityReg", "scaleReg", "noiseLR", "depthWeight", "densifyGradThreshold", "bilateralGridTV"):
+        for name in ("opacityReg", "scaleReg", "noiseLR", "depthWeight", "densifyGradThreshold", "bilateralGridTV", "backgroundShell"):
             need(getattr(self, name) >= 0, f"{name} must be >= 0")
 
     # ------------------------------------------------------- resolved defaults
