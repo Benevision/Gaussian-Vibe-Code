@@ -3,7 +3,7 @@
 // Tools alone (no offline `metal` compiler needed) and lets us specialise via #defines.
 
 enum ShaderSource {
-    static var all: String { [common, sort, render, train].joined(separator: "\n") }
+    static var all: String { [common, sort, render, train, coverage].joined(separator: "\n") }
 
     static let common = #"""
 #include <metal_stdlib>

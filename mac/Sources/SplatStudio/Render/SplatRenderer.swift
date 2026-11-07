@@ -38,7 +38,7 @@ struct LineVertex { var pos: SIMD3<Float>; var color: SIMD4<Float> }
 /// User-facing viewer options. Every field is documented in SettingsCatalog.
 struct ViewerSettings: Equatable, Codable {
     enum DisplayMode: Int, CaseIterable, Identifiable, Codable {
-        case color = 0, depth = 1, centers = 2, rings = 3, opacity = 4
+        case color = 0, depth = 1, centers = 2, rings = 3, opacity = 4, coverage = 5
         var id: Int { rawValue }
         var title: String {
             switch self {
@@ -47,6 +47,7 @@ struct ViewerSettings: Equatable, Codable {
             case .centers: return "Centres"
             case .rings: return "Ellipses"
             case .opacity: return "Opacity"
+            case .coverage: return "Coverage"
             }
         }
     }
@@ -226,6 +227,9 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
                 enc.setBuffer(keys!, offset: 0, index: 6)
                 enc.setBuffer(vals!, offset: 0, index: 7)
                 enc.setBuffer(args, offset: 0, index: 8)
+                var hasCov: UInt32 = scene.coverage == nil ? 0 : 1
+                enc.setBuffer(scene.coverage ?? scene.gflags, offset: 0, index: 10)
+                enc.setBytes(&hasCov, length: 4, index: 11)
                 enc.set(UInt32(st.sixteenBitSort ? 1 : 0), 9)
                 enc.dispatch1D(ctx.pipeline("project_splats"), count: scene.count)
                 enc.memoryBarrier(scope: .buffers)
@@ -315,6 +319,9 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         enc.setBytes(&u, length: MemoryLayout<CameraUniforms>.stride, index: 4)
         enc.setBuffer(localVerts, offset: 0, index: 5); enc.setBuffer(localKeys, offset: 0, index: 6)
         enc.setBuffer(localVals, offset: 0, index: 7); enc.setBuffer(localArgs, offset: 0, index: 8)
+        var hasCov: UInt32 = scene.coverage == nil ? 0 : 1
+        enc.setBuffer(scene.coverage ?? scene.gflags, offset: 0, index: 10)
+        enc.setBytes(&hasCov, length: 4, index: 11)
         enc.set(UInt32(0), 9)
         enc.dispatch1D(ctx.pipeline("project_splats"), count: scene.count)
         enc.memoryBarrier(scope: .buffers)

@@ -146,6 +146,13 @@ enum CLI {
                 if a.contains("--aa") { st.antialiasOverride = true }
                 if a.contains("--no-aa") { st.antialiasOverride = false }
                 if let m = value("--mode").flatMap(Int.init), let dm = ViewerSettings.DisplayMode(rawValue: m) { st.displayMode = dm }
+                if st.displayMode == .coverage, let dsPath = value("--dataset") {
+                    let t0 = Date()
+                    let c = try Coverage.compute(scene: sc, dataset: try PreparedDataset.load(URL(fileURLWithPath: dsPath)))
+                    sc.coverage = c.score
+                    print(String(format: "coverage: %.1f %% poor, %.1f %% unseen, median %d views, depth %@, %.2f s", c.poorFraction * 100, c.unseenFraction * 100, c.medianViews,
+                                 c.usedDepth ? "yes" : "no", Date().timeIntervalSince(t0)))
+                }
                 guard let tex = r.renderOffscreen(width: size.0, height: size.1, camera: cam, settings: st) else { throw FormatError.invalid("render failed") }
                 try ImageWriter.writePNG(texture: tex, to: URL(fileURLWithPath: a[i + 2]))
                 print("Rendered \(g.count) splats → \(a[i + 2])")

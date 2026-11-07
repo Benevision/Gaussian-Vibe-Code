@@ -47,6 +47,21 @@ struct ViewPanel: View {
                     ForEach(ViewerSettings.DisplayMode.allCases) { Text($0.title).tag($0) }
                 }.labelsHidden().fixedSize()
             }
+            if model.viewer.displayMode == .coverage {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 0) {
+                        LinearGradient(colors: [Color(red: 0.86, green: 0.16, blue: 0.12), Color(red: 0.96, green: 0.78, blue: 0.12),
+                                                Color(red: 0.20, green: 0.72, blue: 0.32)], startPoint: .leading, endPoint: .trailing)
+                            .frame(height: 8).clipShape(Capsule())
+                    }
+                    HStack { Text("Seen by 1–2 photos, or only from far away"); Spacer(); Text("Seen closely by many") }
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if model.coverageBusy { ProgressView().controlSize(.small) }
+                    if let info = model.coverageInfo { Text(info).font(.caption).fixedSize(horizontal: false, vertical: true) }
+                    Text("Red areas will stay blurry however long you train: capture them again from closer, from a few more angles.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             SettingRow(id: "viewer.maxSHDegree") {
                 Picker("", selection: $model.viewer.maxSHDegree) { ForEach(0...3, id: \.self) { Text("\($0)").tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().frame(width: 140)

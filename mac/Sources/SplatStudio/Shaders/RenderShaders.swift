@@ -64,6 +64,8 @@ kernel void project_splats(device const float4* gpos [[buffer(0)]],
                            device uint* vals [[buffer(7)]],
                            device DrawArgs* args [[buffer(8)]],
                            constant uint& sixteenBit [[buffer(9)]],
+                           device const float* coverage [[buffer(10)]],
+                           constant uint& hasCoverage [[buffer(11)]],
                            uint i [[thread_position_in_grid]]) {
     if (i >= cam.count) return;
     vals[i] = i;
@@ -108,6 +110,13 @@ kernel void project_splats(device const float4* gpos [[buffer(0)]],
         rgb = turbo(1.0f - d);
     } else if (mode == 4) {
         rgb = turbo(po.w);
+    } else if (mode == 5) {
+        // coverage: red (poorly seen) → yellow → green (well seen); grey until computed
+        if (hasCoverage) {
+            float c = coverage[i];
+            rgb = c < 0.5f ? mix(float3(0.86, 0.16, 0.12), float3(0.96, 0.78, 0.12), c * 2.0f)
+                           : mix(float3(0.96, 0.78, 0.12), float3(0.20, 0.72, 0.32), (c - 0.5f) * 2.0f);
+        } else rgb = float3(0.55);
     } else {
         float b[16];
         int deg = int(cam.shDegree);

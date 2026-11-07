@@ -16,6 +16,8 @@ final class SplatScene: @unchecked Sendable {
     let boundsMax: SIMD3<Float>
     let center: SIMD3<Float>
     let radius: Float
+    /// Per-splat coverage score (Coverage display mode), computed on demand from the dataset's cameras.
+    var coverage: MTLBuffer?
 
     /// Builds the render buffers from trainer-layout parameter buffers (no CPU copy).
     init(ctx: MetalContext = .shared, count: Int, shDegree: Int, antialiased: Bool,

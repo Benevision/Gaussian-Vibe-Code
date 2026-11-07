@@ -26,7 +26,10 @@ final class AppModel {
 
     // MARK: rendering
     let renderer: SplatRenderer
-    var viewer = ViewerSettings() { didSet { renderer.settings = viewer } }
+    var viewer = ViewerSettings() { didSet { renderer.settings = viewer; ensureCoverage() } }
+    /// Coverage display mode: status / summary line for the View tab, and whether it is being computed.
+    var coverageInfo: String? = nil
+    var coverageBusy = false
     var cameraMode: ViewerCamera.Mode = .orbit {
         didSet {
             var c = renderer.camera
@@ -154,10 +157,43 @@ final class AppModel {
         }
     }
 
+    /// Computes per-splat coverage (which photos saw each part, and how closely) when the Coverage mode is on.
+    func ensureCoverage() {
+        guard viewer.displayMode == .coverage, let sc = scene, sc.coverage == nil, !coverageBusy else { return }
+        guard let ds = dataset else {
+            coverageInfo = "Coverage needs the project's camera positions: open the project (not just the splat file)."
+            return
+        }
+        if training.isActive {
+            coverageInfo = "Coverage is shown once training finishes (the live preview changes every few seconds)."
+            return
+        }
+        coverageBusy = true
+        coverageInfo = "Working out which photos saw each part of the scene…"
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let r = Result { try Coverage.compute(scene: sc, dataset: ds) }
+            await MainActor.run {
+                guard let self else { return }
+                self.coverageBusy = false
+                switch r {
+                case .success(let c):
+                    sc.coverage = c.score
+                    if self.scene === sc { self.renderer.scene = sc }
+                    self.coverageInfo = String(format: "%.0f %% of the scene was seen only poorly (red/orange areas the photos did see). %.0f %% was seen by no photo at all — usually floaters beyond the walls, safe to delete in Edit. A typical part was seen by %d photos%@.",
+                                               c.poorFraction * 100, c.unseenFraction * 100, c.medianViews,
+                                               c.usedDepth ? "" : " (no depth maps, so walls don't block the view in this estimate)")
+                case .failure(let e):
+                    self.coverageInfo = "Couldn't compute coverage: \(e.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func setScene(cloud g: GaussianCloud?, scene sc: SplatScene, frame: Bool) {
         cloud = g
         scene = sc
         renderer.scene = sc
+        if viewer.displayMode == .coverage { coverageInfo = nil; DispatchQueue.main.async { self.ensureCoverage() } }
         undoStack.removeAll(); redoStack.removeAll()
         refreshCounts()
         if frame { frameScene() }

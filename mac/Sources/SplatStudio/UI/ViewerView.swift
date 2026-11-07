@@ -218,6 +218,7 @@ final class SplatMTKView: MTKView {
         case "3": model?.viewer.displayMode = .centers
         case "4": model?.viewer.displayMode = .rings
         case "5": model?.viewer.displayMode = .opacity
+        case "6": model?.viewer.displayMode = .coverage
         case "?", "/": model?.showShortcuts.toggle()
         case "\t": model?.cameraMode = (model?.cameraMode == .orbit) ? .fly : .orbit
         default:
