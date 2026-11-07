@@ -34,6 +34,9 @@ MIN_PRIOR_COVERAGE = 0.9
 #: Corrections larger than this (median) mean the priors and the images disagree badly: keep the priors.
 MAX_MEDIAN_ROT_DEG = 3.0
 MAX_MEDIAN_POS_FRACTION = 0.05   # of the camera extent
+#: A frame keeps its prior pose unless it sees at least this many triangulated points (and 10 % of the median):
+#: with too little evidence the adjustment can swing it freely (a bedroom frame with 8 points rotated 13.7°).
+MIN_FRAME_OBSERVATIONS = 60
 
 Pair = Tuple[int, int]
 
@@ -240,10 +243,27 @@ def refine_poses(colmap: Optional[str], db: Path, image_dir: Path, priors: dict,
     ok = (np.median(rot) <= MAX_MEDIAN_ROT_DEG and np.median(pos) <= MAX_MEDIAN_POS_FRACTION * extent
           and (st_after.get("meanReprojError") or 99) <= (st_before.get("meanReprojError") or 99) + 1e-6)
     info["accepted"] = bool(ok)
+    if ok:
+        # Weakly supported frames: keep the prior pose (mapped into the refined frame with the inverse Sim3).
+        obs = {nm: int((by[nm].point3D_ids >= 0).sum()) for nm in common}
+        need = max(MIN_FRAME_OBSERVATIONS, 0.1 * float(np.median(list(obs.values()))))
+        kept = []
+        Rinv = T.R.T
+        for nm in common:
+            if obs[nm] < need:
+                pc = priors[nm].c2w
+                c2w = np.eye(4)
+                c2w[:3, :3] = Rinv @ pc[:3, :3]
+                c2w[:3, 3] = Rinv @ (pc[:3, 3] - T.t) / T.s
+                by[nm].set_c2w(c2w)
+                kept.append(nm)
+        info["keptPriorFrames"] = len(kept)
+        info["minFrameObservations"] = int(need)
     if not ok:
         info["note"] = "refinement looked implausible — kept the prior poses"
         rec = first   # triangulated with the prior poses, which stay as they were
-    progress(1.0, (f"refined {len(rec.images)} poses: median {info['medianRotationChangeDeg']}°, "
+    progress(1.0, (f"refined {len(rec.images) - info.get('keptPriorFrames', 0)} poses (kept the capture pose for "
+                   f"{info.get('keptPriorFrames', 0)} with too few matches): median {info['medianRotationChangeDeg']}°, "
                    f"{info['medianPositionChangeM'] * 100:.1f} cm; reprojection "
                    f"{(st_before.get('meanReprojError') or 0):.2f} → {(st_after.get('meanReprojError') or 0):.2f} px")
              if ok else info["note"])

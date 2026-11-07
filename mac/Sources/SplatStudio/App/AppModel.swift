@@ -131,6 +131,7 @@ final class AppModel {
     }
 
     func loadSplat(_ url: URL) {
+        remoteWatch.stop()
         isLoading = true
         Task.detached(priority: .userInitiated) {
             do {
@@ -168,6 +169,7 @@ final class AppModel {
     func openDataset(_ root: URL) {
         do {
             let ds = try PreparedDataset.load(root)
+            remoteWatch.stop()   // the viewer now shows this project; a watched job's cameras would be another scene
             dataset = ds
             // A worker job that was still running when this project was last open: pick it back up.
             training.resumePendingRemote(dataset: ds, outputsDir: ds.root.deletingLastPathComponent().appendingPathComponent("outputs", isDirectory: true))

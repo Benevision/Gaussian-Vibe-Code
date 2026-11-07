@@ -53,6 +53,7 @@ final class TrainingSession {
 
     func start(dataset: PreparedDataset) {
         guard !isActive else { return }
+        app?.remoteWatch.stop()   // training this project replaces whatever was being watched
         history.removeAll(); evalHistory.removeAll()
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config

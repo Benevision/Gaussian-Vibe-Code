@@ -221,7 +221,18 @@ enum DatasetBuilder {
                 // SfM that places only a fraction of the photos (bad masks, textureless rooms) must never
                 // replace the capture: keep the iPhone's own ARKit poses, which are complete, and say so.
                 if Double(sol.poses.count) >= 0.5 * Double(frames.frames.count) {
+                    let stem = { (p: String) in ((p as NSString).lastPathComponent as NSString).deletingPathExtension }
+                    let captured = Dictionary(ds.manifest.cameras.map { (stem($0.image), $0) }, uniquingKeysWith: { a, _ in a })
                     ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.capture.images.holdoutInterval)
+                    // Per-frame capture data the pose solution doesn't carry: exposure (lets training see that
+                    // exposure was locked and skip per-photo colour correction), time and source group.
+                    for i in ds.manifest.cameras.indices {
+                        guard let c = captured[stem(ds.manifest.cameras[i].image)] else { continue }
+                        if ds.manifest.cameras[i].exposure == nil { ds.manifest.cameras[i].exposure = c.exposure }
+                        if ds.manifest.cameras[i].time == nil { ds.manifest.cameras[i].time = c.time }
+                        if ds.manifest.cameras[i].group == nil { ds.manifest.cameras[i].group = c.group }
+                    }
+                    try ds.save()
                 } else {
                     progress?(PipelineProgress(stage: "Camera solving", fraction: -1,
                         message: "SfM placed only \(sol.poses.count) of \(frames.frames.count) photos — keeping the capture's own (ARKit) camera poses"))
