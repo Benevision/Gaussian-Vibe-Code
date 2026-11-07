@@ -241,7 +241,7 @@ def driver(cuda, cc=(8, 6), mem=24576, name="NVIDIA GeForce RTX 3090", n=1):
 
 
 @pytest.mark.parametrize("cuda,expected", [
-    ((13, 0), "cu124"), ((12, 8), "cu124"), ((12, 4), "cu124"), ((12, 3), "cu121"), ((12, 1), "cu121"),
+    ((13, 0), "cu128"), ((12, 8), "cu128"), ((12, 4), "cu124"), ((12, 3), "cu121"), ((12, 1), "cu121"),
     ((12, 0), "cu118"), ((11, 8), "cu118"),
 ])
 def test_choose_profile_by_driver_cuda(cuda, expected):
@@ -253,7 +253,11 @@ def test_choose_profile_edge_cases():
     old = choose_profile(driver((11, 7)))
     assert old.profile_id == CPU_PROFILE_ID and not old.can_train and "driver" in old.blocking.lower()
     blackwell = choose_profile(driver((12, 8), cc=(12, 0), name="NVIDIA GeForce RTX 5090"))
-    assert blackwell.profile_id == CPU_PROFILE_ID and "install.sh" in blackwell.blocking
+    assert blackwell.profile_id == "cu128" and blackwell.can_train and blackwell.blocking is None
+    old_blackwell_driver = choose_profile(driver((12, 4), cc=(12, 0), name="NVIDIA GeForce RTX 5090"))
+    assert old_blackwell_driver.profile_id == CPU_PROFILE_ID and "570" in old_blackwell_driver.blocking
+    pascal = choose_profile(driver((12, 8), cc=(6, 1), name="NVIDIA GeForce GTX 1080"))
+    assert pascal.profile_id == "cu124"     # the CUDA 12.8 build has no Pascal kernels
     nogpu = choose_profile(DriverInfo())
     assert nogpu.profile_id == CPU_PROFILE_ID and not nogpu.can_train and nogpu.blocking
     unknown = choose_profile(driver(None))
@@ -268,7 +272,7 @@ def test_choose_profile_edge_cases():
     mixed = DriverInfo(cuda_version=(12, 8), gpus=[GpuInfo(0, "RTX 5090", 32000, (12, 0)),
                                                    GpuInfo(1, "RTX 4090", 24000, (8, 9))])
     m = choose_profile(mixed)
-    assert m.profile_id == "cu124" and any("RTX 5090" in w for w in m.warnings)
+    assert m.profile_id == "cu128" and not m.warnings
 
 
 def test_build_plan_gpu(paths, tmp_path):
@@ -463,3 +467,11 @@ def test_gui_core_does_not_import_gtk():
             "assert 'gi' not in sys.modules, 'gi imported'; print('ok')")
     r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_build_plan_gsplat16_uses_own_wheels(paths, tmp_path):
+    plan = build_plan(choose_profile(driver((12, 8))), paths, with_splatprep=True, splatprep_dir=tmp_path)
+    g = [s for s in plan.steps if s.id == "gsplat"][0].argv
+    assert "gsplat==1.6.0+pt27cu128" in g and "--find-links" in g and "torch==2.7.1" in g
+    t = [s for s in plan.steps if s.id == "torch"][0].argv
+    assert "torch==2.7.1" in t and t[t.index("--index-url") + 1].endswith("/cu128")

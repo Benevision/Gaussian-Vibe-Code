@@ -80,6 +80,19 @@ For a systemd **user** service, put `ExecStart=/usr/bin/flatpak run com.example.
 `~/.config/systemd/user/splatworker.service`. Then run `loginctl enable-linger $USER` so it runs without a
 login. The native `splatworker serve` / `install.sh` / Docker paths below are unchanged.
 
+### GPU runtimes (gsplat 1.6 and 1.5.3)
+
+The setup assistant picks the runtime from your NVIDIA driver and GPU:
+
+| Driver | GPUs | Runtime |
+|---|---|---|
+| 570+ (CUDA 12.8) | RTX 20-series → RTX 50-series (compute 7.5–12.0) | PyTorch 2.7.1 + **gsplat 1.6 development build**, compiled by this repository's GitHub Actions from the commit in `flatpak/gsplat-pin.env` |
+| 520–569 | GTX 10-series and newer (not RTX 50) | PyTorch 2.4.1 + gsplat 1.5.3 (official prebuilt wheels) |
+
+gsplat 1.6 isn't released yet, so the pinned development commit is compiled once per pin (CI caches it) and
+published next to the Flatpak at `…/wheels/`. To try a newer gsplat, change `GSPLAT_COMMIT` in
+`flatpak/gsplat-pin.env` and push. Existing installs switch runtime when you run **Set Up…** again.
+
 ### How the Flatpak gets CUDA
 
 * **Driver libraries** (`libcuda.so.1`, `libnvidia-ml.so.1`) come from the

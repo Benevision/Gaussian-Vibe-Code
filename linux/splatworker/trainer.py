@@ -43,11 +43,17 @@ def _check_gsplat_kernels(torch, gsplat) -> None:
     """gsplat's prebuilt CUDA kernels only load with the torch build they were compiled for; if something
     replaced torch (e.g. a package that pulled a newer PyTorch), fail with a fix instead of a cryptic
     "'NoneType' object has no attribute 'CameraModelType'" on the first render."""
-    try:
-        from gsplat.cuda import _backend  # type: ignore
-        ok = getattr(_backend, "_C", None) is not None
-    except Exception:
-        ok = False
+    import importlib
+
+    ok = False
+    for mod in ("gsplat.csrc", "gsplat.cuda._backend"):   # 1.6 / prebuilt wheels ship gsplat.csrc
+        try:
+            m = importlib.import_module(mod)
+            ok = getattr(m, "_C", m) is not None
+            if ok:
+                break
+        except Exception:
+            continue
     if not ok:
         raise TrainingError(
             f"gsplat {getattr(gsplat, '__version__', '?')}'s GPU kernels can't load with PyTorch {torch.__version__} — "

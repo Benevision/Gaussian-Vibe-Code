@@ -101,6 +101,8 @@ class GpuProfile:
     disk_mb: int                 # installed size, approximate
     max_compute_capability: Tuple[int, int] = (9, 0)
     min_compute_capability: Tuple[int, int] = (6, 0)
+    # When set, gsplat comes from this --find-links page (our own CI-built wheels) instead of GSPLAT_INDEX.
+    gsplat_find_links: Optional[str] = None
 
     @property
     def torch_index(self) -> str:
@@ -111,7 +113,14 @@ class GpuProfile:
         return f"gsplat=={self.gsplat}+{self.gsplat_index}"
 
 
+# gsplat 1.6 is unreleased: GitHub Actions compiles the pinned development commit (linux/flatpak/gsplat-pin.env)
+# for PyTorch 2.7.1 + CUDA 12.8 (sm 7.5–12.0, so RTX 20 to RTX 50 series) and publishes it here.
+OWN_WHEELS = "https://benevision.github.io/Gaussian-Vibe-Code/wheels/"
+
 GPU_PROFILES: List[GpuProfile] = [  # newest first
+    GpuProfile("cu128", "PyTorch 2.7 + CUDA 12.8 · gsplat 1.6 (development build)", (12, 8), "2.7.1", "0.22.1",
+               "1.6.0", "pt27cu128", download_mb=3300, disk_mb=6800,
+               max_compute_capability=(12, 0), min_compute_capability=(7, 5), gsplat_find_links=OWN_WHEELS),
     GpuProfile("cu124", "PyTorch 2.4 + CUDA 12.4", (12, 4), "2.4.1", "0.19.1", "1.5.3", "pt24cu124",
                download_mb=2700, disk_mb=5600),
     GpuProfile("cu121", "PyTorch 2.4 + CUDA 12.1", (12, 1), "2.4.1", "0.19.1", "1.5.3", "pt24cu121",
@@ -162,7 +171,8 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> Profil
     warnings: List[str] = []
     caps = [g.compute_capability for g in driver.gpus if g.compute_capability]
     names = ", ".join(g.name for g in driver.gpus)
-    too_new = [g for g in driver.gpus if g.compute_capability and g.compute_capability > GPU_PROFILES[0].max_compute_capability]
+    newest_cc = max(p.max_compute_capability for p in GPU_PROFILES)
+    too_new = [g for g in driver.gpus if g.compute_capability and g.compute_capability > newest_cc]
     if too_new and len(too_new) == len(driver.gpus):
         return ProfileChoice(
             CPU_PROFILE_ID, False,
@@ -175,7 +185,7 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> Profil
     if too_new:
         warnings.append("Some GPUs (" + ", ".join(g.name for g in too_new) + ") are too new for this "
                         "PyTorch build and will fail to train; deselect them in Settings → GPUs.")
-    too_old = [c for c in caps if c < GPU_PROFILES[0].min_compute_capability]
+    too_old = [c for c in caps if c < min(p.min_compute_capability for p in GPU_PROFILES)]
     if too_old:
         warnings.append("Your GPU is quite old (compute capability below 6.0); training may not work.")
     small = [g for g in driver.gpus if 0 < g.memory_total_mb < 7500]
@@ -192,17 +202,36 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None) -> Profil
         return ProfileChoice(prof.id, True, f"{prof.label} for {names} (chosen manually).", warnings)
 
     if driver.cuda_version is None:
-        prof = GPU_PROFILES[0]
+        # unknown driver: the widely supported CUDA 12.4 build is the safe guess (12.8 needs driver 570+)
+        prof = next((p for p in GPU_PROFILES if p.min_driver_cuda <= (12, 4)), GPU_PROFILES[0])
         warnings.append("Could not read the CUDA version supported by your driver; assuming "
                         f"{prof.min_driver_cuda[0]}.{prof.min_driver_cuda[1]}. If training fails with "
                         "\"CUDA driver version is insufficient\", update the NVIDIA driver.")
         return ProfileChoice(prof.id, True, f"{prof.label} for {names}.", warnings)
+    lowest_cc = min(caps) if caps else None
+    highest_cc = max(caps) if caps else None
     for prof in GPU_PROFILES:
+        # the profile's kernels must cover every GPU (e.g. the CUDA 12.8 build has no Pascal kernels,
+        # and only it has Blackwell / RTX 50 kernels)
+        if lowest_cc is not None and lowest_cc < prof.min_compute_capability:
+            continue
+        if highest_cc is not None and highest_cc > prof.max_compute_capability:
+            continue
         if driver.cuda_version >= prof.min_driver_cuda:
             return ProfileChoice(prof.id, True, f"{prof.label} for {names} (driver "
                                  f"{driver.driver_version or '?'}, CUDA {driver.cuda_version[0]}."
                                  f"{driver.cuda_version[1]}).", warnings)
     oldest = GPU_PROFILES[-1].min_driver_cuda
+    needs = [p for p in GPU_PROFILES if (lowest_cc is None or lowest_cc >= p.min_compute_capability)
+             and (highest_cc is None or highest_cc <= p.max_compute_capability)]
+    if needs and driver.cuda_version >= oldest:
+        p = needs[-1]
+        return ProfileChoice(
+            CPU_PROFILE_ID, False, "Processing-only runtime: this GPU needs a newer NVIDIA driver.",
+            blocking=(f"{names} needs {p.label}, which requires a driver supporting CUDA "
+                      f"{p.min_driver_cuda[0]}.{p.min_driver_cuda[1]} (NVIDIA 570 or newer); yours "
+                      f"({driver.driver_version or '?'}) supports {driver.cuda_version[0]}.{driver.cuda_version[1]}. "
+                      "Update the driver, reboot, run \"flatpak update\", then run this setup again."))
     return ProfileChoice(
         CPU_PROFILE_ID, False, "Processing-only runtime: the NVIDIA driver is too old for training.",
         blocking=(f"Your driver ({driver.driver_version or '?'}) supports CUDA {driver.cuda_version[0]}."
@@ -305,9 +334,13 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
         steps.append(Step(
             "gsplat", f"Installing gsplat {gpu.gsplat}",
             "gsplat, the CUDA Gaussian-splatting rasteriser, with prebuilt kernels (no compiler needed).",
-            "command", argv=pip_argv(py, paths, gpu.gsplat_requirement,
-                                     index_url=GSPLAT_INDEX + gpu.gsplat_index + "/",
-                                     extra_index_url=PYPI_INDEX, extra=["--only-binary", "gsplat"]),
+            "command", argv=(pip_argv(py, paths, gpu.gsplat_requirement, *torch_pins(gpu),
+                                      extra_index_url=gpu.torch_index,
+                                      extra=["--find-links", gpu.gsplat_find_links, "--only-binary", "gsplat"])
+                             if gpu.gsplat_find_links else
+                             pip_argv(py, paths, gpu.gsplat_requirement,
+                                      index_url=GSPLAT_INDEX + gpu.gsplat_index + "/",
+                                      extra_index_url=PYPI_INDEX, extra=["--only-binary", "gsplat"])),
             download_mb=10, weight=3, parser="pip"))
         download += gpu.download_mb
         disk += gpu.disk_mb
