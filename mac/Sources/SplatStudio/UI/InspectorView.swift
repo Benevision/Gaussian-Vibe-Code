@@ -224,6 +224,7 @@ struct TrainPanel: View {
 
     var body: some View {
         let s = model.training
+        if let w = model.remoteWatch.watched { RemoteWatchDashboard(watcher: model.remoteWatch, watch: w) }
         if let ds = model.dataset {
             PanelSection(title: "Dataset", systemImage: "tray.full") {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
@@ -262,6 +263,49 @@ struct TrainPanel: View {
     }
 }
 
+/// PSNR (train line + holdout points) and splat-count charts — local training and watched worker jobs.
+struct TrainingCharts: View {
+    let history: [TrainingSession.Sample]
+    let evalHistory: [TrainingSession.Sample]
+    var body: some View {
+        if history.count > 2 {
+            Chart {
+                ForEach(history) { LineMark(x: .value("Step", $0.step), y: .value("PSNR", $0.psnr)).foregroundStyle(by: .value("Series", "Train")) }
+                ForEach(evalHistory) { PointMark(x: .value("Step", $0.step), y: .value("PSNR", $0.psnr)).foregroundStyle(by: .value("Series", "Holdout")) }
+            }
+            .chartYAxisLabel("PSNR (dB)")
+            .frame(height: 140)
+            Chart(history) { AreaMark(x: .value("Step", $0.step), y: .value("Splats", $0.gaussians)).foregroundStyle(.tint.opacity(0.4)) }
+                .chartYAxisLabel("Splats").frame(height: 90)
+        }
+    }
+}
+
+/// The Train tab while watching a job on a Linux worker: the same numbers and charts as local training.
+struct RemoteWatchDashboard: View {
+    let watcher: RemoteJobWatcher
+    let watch: RemoteJobWatcher.Watched
+    var body: some View {
+        PanelSection(title: "Watching on \(watch.workerName)", systemImage: "dot.radiowaves.left.and.right") {
+            Text(watch.name).font(.callout.weight(.semibold)).lineLimit(2)
+            if watch.totalSteps > 0 { ProgressView(value: Double(watch.step), total: Double(max(watch.totalSteps, 1))) }
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
+                GridRow { Text("Status").foregroundStyle(.secondary); Text(watch.state.capitalized + (watch.message.map { $0 == watch.state ? "" : " — \($0)" } ?? "")).lineLimit(2) }
+                GridRow { Text("Step").foregroundStyle(.secondary); Text("\(watch.step) / \(watch.totalSteps)") }
+                GridRow { Text("Speed").foregroundStyle(.secondary); Text(watch.stepsPerSecond.map { String(format: "%.1f steps/s", $0) } ?? "–") }
+                GridRow { Text("Elapsed / ETA").foregroundStyle(.secondary); Text("\(formatDuration(watch.elapsed ?? 0)) / \(formatDuration(watch.eta ?? 0))") }
+                GridRow { Text("Splats").foregroundStyle(.secondary); Text(formatCount(watch.splats)) }
+                if let p = watch.psnr { GridRow { Text("Train PSNR").foregroundStyle(.secondary); Text(String(format: "%.2f dB", p)) } }
+                if let e = watch.evalPsnr { GridRow { Text("Holdout PSNR").foregroundStyle(.secondary); Text(String(format: "%.2f dB", e)).bold() } }
+                if let l = watch.loss { GridRow { Text("Loss").foregroundStyle(.secondary); Text(String(format: "%.4f", l)) } }
+                GridRow { Text("Live preview").foregroundStyle(.secondary); Text(watch.previewStep.map { "from step \($0)" } ?? "waiting for the first one") }
+            }
+            .font(.callout).monospacedDigit()
+            TrainingCharts(history: watcher.history, evalHistory: watcher.evalHistory)
+        }
+    }
+}
+
 struct TrainingDashboard: View {
     let session: TrainingSession
     var body: some View {
@@ -281,16 +325,7 @@ struct TrainingDashboard: View {
                 }
             }
             .font(.callout).monospacedDigit()
-            if session.history.count > 2 {
-                Chart {
-                    ForEach(session.history) { LineMark(x: .value("Step", $0.step), y: .value("PSNR", $0.psnr)).foregroundStyle(by: .value("Series", "Train")) }
-                    ForEach(session.evalHistory) { PointMark(x: .value("Step", $0.step), y: .value("PSNR", $0.psnr)).foregroundStyle(by: .value("Series", "Holdout")) }
-                }
-                .chartYAxisLabel("PSNR (dB)")
-                .frame(height: 140)
-                Chart(session.history) { AreaMark(x: .value("Step", $0.step), y: .value("Splats", $0.gaussians)).foregroundStyle(.tint.opacity(0.4)) }
-                    .chartYAxisLabel("Splats").frame(height: 90)
-            }
+            TrainingCharts(history: session.history, evalHistory: session.evalHistory)
             if session.isActive {
                 HStack {
                     if session.state == .paused { Button("Resume") { session.resume() } } else { Button("Pause") { session.pause() }.disabled(session.state != .training) }
