@@ -450,6 +450,7 @@ struct AdvancedTrainingSettings: View {
             SettingRow(id: "train.depthWeight", showSummary: false) { NumberSlider(value: c.depthWeight.double, range: 0...1, width: 90) }
             SettingRow(id: "train.depthEdgeAware", showSummary: false) { Toggle("", isOn: c.depthEdgeAware).labelsHidden() }
             SettingRow(id: "train.anisotropyReg", showSummary: false) { NumberSlider(value: c.anisotropyReg.double, range: 0...1, width: 90) }
+            SettingRow(id: "train.bigSplatReg", showSummary: false) { NumberSlider(value: c.bigSplatReg.double, range: 0...30, width: 90) }
             SettingRow(id: "train.transientMasking", showSummary: false) { Toggle("", isOn: c.transientMasking).labelsHidden() }
             if session.config.transientMasking {
                 SettingRow(id: "train.transientSensitivity", showSummary: false) { NumberSlider(value: c.transientSensitivity.double, range: 2...8, width: 90) }

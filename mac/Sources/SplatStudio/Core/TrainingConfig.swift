@@ -68,7 +68,7 @@ struct TrainingConfig: Codable, Equatable {
     /// a camera, which explain one photo and fog every other). Measured as the half-angle the splat spans from
     /// the camera; above `bigSplatMaxAngle` (as tan of the half-angle) the splat is shrunk, longest axis first.
     /// 0 = off.
-    var bigSplatReg: Float = 0
+    var bigSplatReg: Float = 10
     var bigSplatMaxAngle: Float = 0.3
     /// MCMC growth/relocation places copies along the parent's longest axis (ImprovedGS / IGS+) instead of
     /// stacking them on top of it. +2.2 dB held-out on a 649-photo bedroom capture (+3.4 dB together with
