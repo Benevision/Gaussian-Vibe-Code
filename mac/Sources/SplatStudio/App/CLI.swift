@@ -192,6 +192,25 @@ enum CLI {
                     g = g.filtered(keep)
                     if let out = value("--clean-out") { try PLYCodec.writeGaussians(g, to: URL(fileURLWithPath: out)) }
                 }
+                if let vf = value("--view-clean").flatMap(Float.init) {
+                    // --view-clean 0.25 [--clean-out out.ply] : Auto clean (invisible + seen by too few photos)
+                    let t0 = Date()
+                    let c = try t.contributionCensus(cloud: g, viewThreshold: AutoClean.peakThreshold)
+                    let p = AutoClean.plan(peak: c.peak, views: c.views, opacityLogits: g.opacities, fewViewsFraction: vf)
+                    print(String(format: "view clean: removed %d invisible + %d seen by < %.0f of %d photos (typical %d) in %.1f s",
+                                 p.invisible, p.fewViews, vf * Float(p.typicalViews), c.photos, p.typicalViews, Date().timeIntervalSince(t0)))
+                    g = g.filtered(p.remove.map { !$0 })
+                    if let out = value("--clean-out") { try PLYCodec.writeGaussians(g, to: URL(fileURLWithPath: out)) }
+                }
+                if let ct = value("--census").flatMap(Float.init) {
+                    // --census 0.05 --census-out views.bin : per-splat count of photos it contributes ≥ thr to (uint32 LE)
+                    let t0 = Date()
+                    let c = try t.contributionCensus(cloud: g, viewThreshold: ct)
+                    print(String(format: "census: %d splats over %d photos in %.1f s", g.count, c.photos, Date().timeIntervalSince(t0)))
+                    if let out = value("--census-out") {
+                        try c.views.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: URL(fileURLWithPath: out))
+                    }
+                }
                 if a.contains("--auto-clean") {
                     let sc = SplatScene(cloud: g)
                     let c = try Coverage.compute(scene: sc, dataset: ds)

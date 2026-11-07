@@ -788,6 +788,44 @@ final class MetalTrainer: @unchecked Sendable {
         return Array(UnsafeBufferPointer(start: p, count: n))
     }
 
+    /// Contribution census over every photo: each splat's largest α·T in any pixel (as `peakContribution`), and
+    /// the number of photos in which it contributes at least `viewThreshold` somewhere. Real surfaces are drawn
+    /// clearly by many photos; a blob hanging in front of a few cameras only by those few.
+    func contributionCensus(cloud g: GaussianCloud, viewThreshold: Float,
+                            progress: ((Double) -> Void)? = nil) throws -> (peak: [Float], views: [UInt32], photos: Int) {
+        load(g)
+        step = config.shDegreeInterval * (config.shDegree + 1)
+        let m = max(n, 1)
+        let peak = ctx.buffer(m * 4, label: "peak"), viewPeak = ctx.buffer(m * 4, label: "view peak"), views = ctx.buffer(m * 4, label: "views")
+        memset(peak.contents(), 0, m * 4); memset(views.contents(), 0, m * 4)
+        let all = trainViews + evalViews
+        var thr = viewThreshold, nn = UInt32(n)
+        for (k, v) in all.enumerated() {
+            paramLock.lock()
+            var u = uniforms(for: v, shDegree: activeSHDegree)
+            var rp = rasterParams(for: v, bg: .zero)
+            if try encodeForward(view: v, u: &u, rp: &rp) {
+                let cb = ctx.queue.makeCommandBuffer()!
+                let enc = cb.makeComputeCommandEncoder()!
+                enc.setBuffer(viewPeak, offset: 0, index: 0); enc.set(UInt32(n), 1)
+                enc.dispatch1D(ctx.pipeline("zero_float"), count: n)
+                enc.memoryBarrier(scope: .buffers)
+                encodeRaster(enc, v: v, rp: &rp, peak: viewPeak)
+                enc.memoryBarrier(scope: .buffers)
+                enc.setComputePipelineState(ctx.pipeline("peak_accumulate"))
+                enc.setBuffer(viewPeak, offset: 0, index: 0); enc.setBuffer(peak, offset: 0, index: 1)
+                enc.setBuffer(views, offset: 0, index: 2)
+                enc.setBytes(&thr, length: 4, index: 3); enc.setBytes(&nn, length: 4, index: 4)
+                enc.dispatch1D(ctx.pipeline("peak_accumulate"), count: n)
+                enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+            }
+            paramLock.unlock()
+            progress?(Double(k + 1) / Double(max(all.count, 1)))
+        }
+        return (Array(UnsafeBufferPointer(start: peak.contents().bindMemory(to: Float.self, capacity: n), count: n)),
+                Array(UnsafeBufferPointer(start: views.contents().bindMemory(to: UInt32.self, capacity: n), count: n)), all.count)
+    }
+
     /// Mean PSNR over the holdout views (or a sample of training views if there are none).
     /// Scores any splat (e.g. from another trainer) on this dataset's held-out photos with the same rasteriser
     /// and exact intrinsics, at full SH degree. Returns mean PSNR and per-view PSNR.

@@ -517,7 +517,9 @@ final class AppModel {
 
     /// Auto clean threshold: a splat that never adds more than this to any pixel of any of the project's photos
     /// is proposed for removal. 2 % removed 16 % of a bedroom splat with no change in held-out PSNR (23.38 dB).
-    static let autoCleanThreshold: Float = 0.02
+    static let autoCleanThreshold: Float = AutoClean.peakThreshold
+    /// Auto clean also selects splats clearly visible in only a few photos (floaters hanging in front of cameras).
+    var autoCleanFewViews = true
 
     /// Selects (does not delete) the splats that make no visible difference from any capture viewpoint: every
     /// training and held-out photo is rendered and each splat's largest contribution to any pixel recorded.
@@ -535,29 +537,38 @@ final class AppModel {
         autoCleanBusy = true
         autoCleanInfo = "Loading the project's photos…"
         Task.detached(priority: .userInitiated) { [weak self] in
-            let r = Result { () -> [Float] in
+            let fewViews = await MainActor.run { self?.autoCleanFewViews ?? true }
+            let r = Result { () -> AutoClean.Plan in
                 var cfg = TrainingConfig()
                 cfg.shDegree = g.shDegree; cfg.antialiased = g.antialiased
                 cfg.randomInitCount = 10; cfg.depthWeight = 0
                 let t = MetalTrainer(dataset: ds, config: cfg)
                 try t.prepare { _ in }
-                return try t.peakContribution(cloud: g) { f in
+                let c = try t.contributionCensus(cloud: g, viewThreshold: AutoClean.peakThreshold) { f in
                     Task { @MainActor in self?.autoCleanInfo = String(format: "Checking which splats show up in the photos… %.0f %%", f * 100) }
                 }
+                return AutoClean.plan(peak: c.peak, views: c.views, opacityLogits: g.opacities,
+                                      fewViewsFraction: fewViews ? AutoClean.fewViewsFraction : 0)
             }
             await MainActor.run {
                 guard let self, self.scene === sc else { return }
                 self.autoCleanBusy = false
                 switch r {
                 case .failure(let e): self.autoCleanInfo = "Couldn't auto clean: \(e.localizedDescription)"
-                case .success(let peaks):
-                    let thr = Self.autoCleanThreshold
+                case .success(let plan):
                     self.modifyFlags { f, _, n in
-                        for i in 0..<min(n, peaks.count) where f[i] & 1 == 0 { if peaks[i] < thr { f[i] |= 2 } else { f[i] &= ~2 } }
+                        for i in 0..<min(n, plan.remove.count) where f[i] & 1 == 0 { if plan.remove[i] { f[i] |= 2 } else { f[i] &= ~2 } }
                     }
                     let pct = Double(self.selectedCount) / Double(max(sc.count, 1)) * 100
-                    self.autoCleanInfo = String(format: "Selected %@ splats (%.0f %%, orange) that never add more than %.0f %% to any pixel of any photo — removing them leaves every photo's view unchanged and the file smaller. Delete selected to remove them (Undo brings them back).",
-                                                self.selectedCount.formatted(), pct, thr * 100)
+                    var msg = String(format: "Selected %@ splats (%.0f %%, orange): %@ never add more than %.0f %% to any pixel of any photo",
+                                     self.selectedCount.formatted(), pct, plan.invisible.formatted(), AutoClean.peakThreshold * 100)
+                    if plan.typicalViews > 0 {
+                        msg += String(format: ", and %@ are clearly visible in fewer than %d photos (a typical splat: %d) — mostly floaters hanging in front of a few cameras", plan.fewViews.formatted(),
+                                      Int(AutoClean.fewViewsFraction * Float(plan.typicalViews)), plan.typicalViews)
+                    } else if fewViews {
+                        msg += " (too few photos per splat to judge floaters)"
+                    }
+                    self.autoCleanInfo = msg + ". Delete selected to remove them (Undo brings them back)."
                 }
             }
         }

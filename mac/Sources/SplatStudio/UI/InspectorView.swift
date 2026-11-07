@@ -216,6 +216,7 @@ struct EditPanel: View {
                         }
                     }
                 }
+                SettingRow(id: "edit.autoCleanFewViews") { Toggle("", isOn: $model.autoCleanFewViews).labelsHidden() }
                 if model.autoCleanBusy { ProgressView().controlSize(.small) }
                 if let info = model.autoCleanInfo { Text(info).font(.caption).fixedSize(horizontal: false, vertical: true) }
                 SettingRow(id: "edit.opacityThreshold") {

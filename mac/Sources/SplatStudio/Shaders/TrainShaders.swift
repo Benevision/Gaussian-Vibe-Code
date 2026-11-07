@@ -236,6 +236,20 @@ kernel void rasterize_peak(device const uint2* ranges [[buffer(0)]],
     }
 }
 
+// Per-view pass of the contribution census: fold this view's peak (α·T bit patterns from rasterize_peak)
+// into the overall peak, and count the views in which each splat contributes at least `thr`.
+kernel void peak_accumulate(device const float* viewPeak [[buffer(0)]],
+                            device float* peak [[buffer(1)]],
+                            device uint* views [[buffer(2)]],
+                            constant float& thr [[buffer(3)]],
+                            constant uint& n [[buffer(4)]],
+                            uint i [[thread_position_in_grid]]) {
+    if (i >= n) return;
+    float v = viewPeak[i];
+    peak[i] = max(peak[i], v);
+    if (v >= thr) views[i] += 1u;
+}
+
 // ---------------------------------------------------------------- rasterise (backward)
 // Accumulator layout per gaussian (12 floats): dmean2D.xy, dconic.abc, dopacity, drgb, ddepth, |dmean2D|.xy
 kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],
