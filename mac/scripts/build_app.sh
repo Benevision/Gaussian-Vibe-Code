@@ -3,8 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
-swift build -c "$CONFIG" --arch arm64
-BIN="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/SplatStudio"
+# SPLAT_BUILD_PATH: build somewhere else, e.g. while a command-line run uses the default .build binary
+# (relinking a binary that is running can crash it).
+BP=(); [ -n "${SPLAT_BUILD_PATH:-}" ] && BP=(--build-path "$SPLAT_BUILD_PATH")
+swift build -c "$CONFIG" --arch arm64 "${BP[@]}"
+BIN="$(swift build -c "$CONFIG" --arch arm64 "${BP[@]}" --show-bin-path)/SplatStudio"
 APP="build/Splat Studio.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
