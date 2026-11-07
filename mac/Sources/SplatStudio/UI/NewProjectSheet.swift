@@ -17,7 +17,7 @@ struct NewProjectSheet: View {
     @State private var matching = "auto"
     @State private var mapper = "auto"
     @State private var maskKind = MaskKind.none
-    @State private var holdout = false
+    @State private var holdout = true   // a few held-out photos give the dashboard an honest quality trend
     /// Reveals every option in this flow even in Easy mode.
     @State private var showAll = false
     @State private var dynamicClasses = MaskingOptions.defaultDynamicClasses.joined(separator: ", ")
@@ -483,7 +483,9 @@ struct NewProjectSheet: View {
     private func start() {
         guard let source else { return }
         var o = options
-        o.holdoutInterval = holdout ? 8 : nil
+        // Easy: every 25th photo (4 %), enough for a trustworthy trend at almost no cost; Advanced: every 8th
+        // (the research-paper convention, a more precise number).
+        o.holdoutInterval = holdout ? (mode == .advanced ? 8 : 25) : nil
         switch solverKind {
         case .automatic: o.poseSolver = .automatic
         case .objectCapture: o.poseSolver = .objectCapture

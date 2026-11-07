@@ -129,6 +129,7 @@ final class TrainingSession {
                         var s = self.status
                         s.step = js.step ?? s.step; s.totalSteps = js.totalSteps ?? s.totalSteps
                         s.loss = Float(js.loss ?? Double(s.loss)); s.psnr = Float(js.psnr ?? Double(s.psnr))
+                        if let e = js.evalPsnr { s.evalPSNR = Float(e) }
                         s.numGaussians = js.numGaussians ?? s.numGaussians
                         s.elapsed = js.elapsedSeconds ?? Date().timeIntervalSince(start); s.eta = js.etaSeconds ?? 0
                         s.itersPerSecond = s.elapsed > 0 ? Double(s.step) / s.elapsed : 0

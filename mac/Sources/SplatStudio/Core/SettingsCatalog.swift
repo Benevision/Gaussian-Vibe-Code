@@ -198,8 +198,8 @@ enum SettingsCatalog {
               defaultValue: "Automatic"),
         .init(id: "source.holdout", group: .sources, title: "Hold out every Nth image",
               summary: "Reserves some images for measuring quality instead of training on them.",
-              detail: "Held-out images give an honest PSNR (quality) number in the training dashboard, the same way research papers evaluate. 8 means every 8th image. 0 trains on everything (slightly better result, no honest metric).",
-              defaultValue: "0 (Easy) / 8 (Advanced)", range: "0–50"),
+              detail: "Held-out images give an honest PSNR (quality) number in the training dashboard, the same way research papers evaluate. Training PSNR is a poor guide on its own: it dips while the learning rate is high, and jumps when moving-object masking starts ignoring the worst pixels (about 30 % into training), while the held-out number shows whether the splat really generalises. Easy mode holds out every 25th photo (4 %: a trustworthy trend for almost no cost); Advanced uses every 8th (the research convention). 0 trains on everything.",
+              defaultValue: "25 (Easy) / 8 (Advanced)", range: "0–50"),
     ]
 
     // MARK: Cameras

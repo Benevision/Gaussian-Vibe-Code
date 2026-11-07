@@ -45,6 +45,8 @@ struct JobStatus: Codable, Hashable, Sendable, Identifiable {
     var totalSteps: Int?
     var loss: Double?
     var psnr: Double?
+    /// Held-out PSNR (worker ≥ 1.1.7); older workers put it in `psnr` once available.
+    var evalPsnr: Double?
     var numGaussians: Int?
     var elapsedSeconds: Double?
     var etaSeconds: Double?

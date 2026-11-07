@@ -46,9 +46,9 @@ from .safezip import UnsafeArchive, safe_extract
 log = logging.getLogger("splatworker")
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-ACTIVE_STATES = ("loading", "training")
+ACTIVE_STATES = ("loading", "training", "running")
 FINAL_STATES = ("completed", "failed", "cancelled")
-STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr",
+STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu")
 
@@ -109,7 +109,7 @@ class Job:
     def update(self, persist: bool = False, **fields) -> None:
         with self.lock:
             for k, v in fields.items():
-                if k in ("state", "step", "totalSteps", "loss", "psnr", "numGaussians",
+                if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None

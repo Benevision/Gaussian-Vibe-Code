@@ -750,7 +750,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             rate = (now - train_start) / cur
             ngs = int(params["means"].shape[0])
             progress.status(step=cur, loss=loss_ema,
-                            psnr=last_eval_psnr if last_eval_psnr is not None else psnr_ema,
+                            psnr=psnr_ema, evalPsnr=last_eval_psnr,   # train and held-out kept apart
                             numGaussians=ngs, elapsedSeconds=elapsed,
                             etaSeconds=rate * (cfg.iterations - cur), message="training")
             if cur % 100 == 0 or cur == cfg.iterations:
