@@ -1,19 +1,19 @@
 # Splat Studio — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
 - [Viewer](#viewer) — 20 settings
-- [Editing](#editing) — 5 settings
+- [Editing](#editing) — 7 settings
 - [Sources & frame extraction](#sources--frame-extraction) — 13 settings
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
 - [Masking](#masking) — 2 settings
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 12 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
-- [Training — losses & regularisation](#training--losses--regularisation) — 15 settings
-- [Compute & networking](#compute--networking) — 7 settings
+- [Training — losses & regularisation](#training--losses--regularisation) — 17 settings
+- [Compute & networking](#compute--networking) — 9 settings
 - [Export](#export) — 5 settings
 
 ## Viewer
@@ -227,7 +227,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 | **Mode** | Advanced |
 | **ID** | `nav.panSpeed` |
 
-**How it works.** At 1.0 the point under the cursor stays under the cursor while you pan.
+**How it works.** At 1.0 a point at the distance you're looking at stays under the cursor while you pan — the orbit pivot in Orbit mode, the surface ahead in Fly mode — so panning feels the same in both modes and at any zoom.
 
 ### Zoom speed
 
@@ -255,11 +255,12 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 | **Mode** | Advanced |
 | **ID** | `nav.flySpeed` |
 
-**How it works.** At 1.0 you travel a quarter of the scene's size per second.
+**How it works.** Speed follows how far away the surface in front of you is (measured a few times a second): at 1.0 you cover a quarter of that distance per second, so you slow down as you approach something and speed up across open space — from the framed overview that is a quarter of the scene per second.
 
 **When to change it**
 
 - Hold ⇧ for 4× faster, ⌥ for 4× slower.
+- Switching back to Orbit pivots on the surface in the middle of the view.
 
 ### Two-finger drag
 
@@ -353,6 +354,8 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 | Setting | Default | Range | Mode |
 |---|---|---|---|
 | [Crop box](#crop-box) | Off | – | Easy |
+| [Auto clean](#auto-clean) | 2 % threshold | – | Easy |
+| [Include floaters](#include-floaters) | On | – | Easy |
 | [Delete below opacity](#delete-below-opacity) | 0.05 | 0–1 | Easy |
 | [Delete larger than](#delete-larger-than) | 0.1 | 0.001–1 | Advanced |
 | [Remove isolated splats](#remove-isolated-splats) | N = 4, radius 1 % | – | Advanced |
@@ -371,6 +374,40 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 **How it works.** Use the sliders (or type values) to fit the box around your subject. While enabled the outside is only hidden; 'Apply crop' marks it deleted, and exporting writes only the remaining splats.
 
 - Undo with ⌘Z.
+
+### Auto clean
+
+> Selects splats that make no visible difference from any of the project's photos, for review before deleting.
+
+| | |
+|---|---|
+| **Default** | 2 % threshold |
+| **Mode** | Easy |
+| **ID** | `edit.autoClean` |
+
+**How it works.** Renders every training and held-out photo and records, for each splat, the most it adds to any pixel.
+
+- Splats that never add more than 2 % are selected: on a 649-photo bedroom that was 16 % of the splats, and on a PC-trained drone survey 69 %, with no change in held-out quality, so files get smaller and stray specks go.
+- Include floaters (below) also selects splats seen by only a few photos.
+- It does not make an indoor scene look tidy from outside — what you see from outside a room is mostly the back of its own walls, which every inside view needs (F jumps back inside).
+- Nothing is deleted until you press Delete selected; Undo restores it.
+- Needs the project open and a finished splat.
+
+### Include floaters
+
+> Auto clean also selects splats clearly visible in only a few photos — blobs hanging in front of the cameras.
+
+| | |
+|---|---|
+| **Default** | On |
+| **Mode** | Easy |
+| **ID** | `edit.autoCleanFewViews` |
+
+**How it works.** A real surface shows up in most photos that look its way; a floater just in front of a few cameras only in those few, where it helps match them and blocks the view from anywhere closer.
+
+- With this on, splats clearly visible in fewer than a quarter as many photos as a typical splat are selected too.
+- On a 1,258-photo drone survey that removed every floater more than 25 m above the ground (the ones you fly into when zooming down) and touched 0.2 % of ground and tree splats, for −0.1 dB held-out.
+- Indoors it can also pick close-up surfaces that only a few photos saw (bedroom: −0.07 dB on average), so check the orange selection before deleting.
 
 ### Delete below opacity
 
@@ -653,7 +690,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 | Setting | Default | Range | Mode |
 |---|---|---|---|
-| [Camera solver](#camera-solver) | Automatic (capture poses if present, else Object Capture) | – | Easy |
+| [Camera solver](#camera-solver) | Automatic (capture poses if present; 360° video: learned SfM, on the worker when in use; else Object Capture) | – | Easy |
 | [Feature model](#feature-model) | SuperPoint + LightGlue (if installed) else SIFT | – | Easy |
 | [Pair selection](#pair-selection) | Automatic | – | Advanced |
 | [Sequential overlap](#sequential-overlap) | 10 | 3–50 | Advanced |
@@ -662,7 +699,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 | [Lens model](#lens-model) | Automatic | – | Advanced |
 | [All images from one camera](#all-images-from-one-camera) | On | – | Advanced |
 | [Keypoints per image](#keypoints-per-image) | 4096 | 512–16384 | Advanced |
-| [Refine capture poses](#refine-capture-poses) | Off | – | Advanced |
+| [Refine capture poses](#refine-capture-poses) | On | – | Advanced |
 
 ### Camera solver
 
@@ -670,7 +707,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 | | |
 |---|---|
-| **Default** | Automatic (capture poses if present, else Object Capture) |
+| **Default** | Automatic (capture poses if present; 360° video: learned SfM, on the worker when in use; else Object Capture) |
 | **Mode** | Easy |
 | **ID** | `sfm.solver` |
 
@@ -751,8 +788,14 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 **How it works.** GLOMAP solves all cameras at once and is 10–100× faster on large sets.
 
-- COLMAP's incremental mapper adds cameras one at a time: slower on big sets but much more forgiving with weak connectivity, repeated textures and unknown focal length — in our benchmark a 360° orbit without EXIF focal scored AUC@5° 0.98 incremental vs 0.38 global.
-- Automatic uses COLMAP up to 300 images (it only takes seconds to minutes there) and GLOMAP above, estimating the focal length from the view graph first when photos have no EXIF focal (e.g. video frames).
+- COLMAP's incremental mapper adds cameras one at a time: slower on big sets, but more forgiving of weak connectivity, repeated textures and unknown focal length.
+- Neither wins everywhere — in our benchmark incremental was far better on a 360° orbit (pose accuracy 0.52–0.98 vs 0.12–0.38) while global was far better on a forward walk with learned matchers (0.90–0.96 vs 0.14–0.50).
+- Automatic therefore runs both on the same matches for sets up to 1,000 photos (mapping takes seconds to minutes; matching is the slow part) and keeps the one that places more photos with longer feature tracks — a measure that picked the more accurate result in every benchmark pair.
+
+**When to change it**
+
+- Above 1,000 photos it uses GLOMAP, estimating focal length from the view graph first when photos have no EXIF focal.
+- When photos carry a focal length (EXIF or iPhone capture), it is held fixed while mapping and freed only in a final adjustment that is kept if it moves less than 8% — on flat scenes such as straight-down drone surveys a free focal length collapses (2795 px → 573 px, 33 of 120 photos placed; held fixed: 118 of 120).
 
 ### Lens model
 
@@ -805,13 +848,19 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 | | |
 |---|---|
-| **Default** | Off |
+| **Default** | On |
 | **Mode** | Advanced |
 | **ID** | `sfm.refineCapturePoses` |
 
-**How it works.** ARKit poses drift by a few centimetres over a long capture; refining removes the drift while keeping metric scale.
+**How it works.** ARKit tracks tilt well (gravity) but its compass heading drifts — about 1° over a room scan, which at 1600 px is a 20-pixel disagreement between views of the same wall, so training blurs fine detail.
 
-- Adds a few minutes.
+- Refinement keeps the capture's poses, per-frame lens values and scale, matches frames that look at the same place (revisits are what correct drift), builds 3D points from the capture poses and adjusts only the camera poses.
+- On a 649-frame bedroom scan: 3.6 min instead of 28 for a full re-solve, all frames kept, +2.1 dB held-out PSNR (a full re-solve gave +2.5 dB).
+- Runs on the Linux worker when one is in use.
+
+**When to change it**
+
+- If it can't run (no Models pack, worker offline) or its corrections look implausible, the capture poses are used as recorded.
 
 ## Masking
 
@@ -1075,7 +1124,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 **How it works.** After this the set of splats is fixed and only refined.
 
-- Typically half of the iterations for adaptive, ~80 % for MCMC.
+- Roughly half of the iterations: stopping growth early leaves more steps to sharpen the splats that exist (on a 30k bedroom run, 14k scored 0.3 dB higher than 25k).
 
 ### Densify every
 
@@ -1268,9 +1317,11 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 | [Moving-object sensitivity](#moving-object-sensitivity) | 3× | 2–8 | Advanced |
 | [Edge-aware depth](#edge-aware-depth) | On | – | Advanced |
 | [Needle-splat penalty](#needle-splat-penalty) | 0.1 | 0–1 | Advanced |
+| [Big-splat penalty](#big-splat-penalty) | 10 | 0–30 | Advanced |
 | [Needle ratio limit](#needle-ratio-limit) | 10 | 2–50 | Advanced |
 | [Coverage needed to ignore moving objects](#coverage-needed-to-ignore-moving-objects) | 15° | 5–45 | Advanced |
-| [Per-photo colour correction](#per-photo-colour-correction) | On | – | Easy |
+| [Local colour correction (PC)](#local-colour-correction-pc) | Off | – | Advanced |
+| [Per-photo colour correction](#per-photo-colour-correction) | On (off automatically when exposure is locked) | – | Easy |
 | [Colour-correction learning rate](#colour-correction-learning-rate) | 0.02 | 0.001–0.1 | Advanced |
 | [Colour-correction strength limit](#colour-correction-strength-limit) | 0.001 | 0–0.1 | Advanced |
 | [Opacity regularisation (MCMC)](#opacity-regularisation-mcmc) | 0.01 | – | Advanced |
@@ -1379,6 +1430,23 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 - Flat discs (two long axes, one very thin) are the normal shape of splats on surfaces and are never penalised.
 - 0 turns it off.
 
+### Big-splat penalty
+
+> Shrinks splats that fill a large part of a photo they're drawn in — fog and blobs just in front of a camera.
+
+| | |
+|---|---|
+| **Default** | 10 |
+| **Range** | 0–30 |
+| **Mode** | Advanced |
+| **ID** | `train.bigSplatReg` |
+
+**How it works.** A splat very close to one camera can cover much of that photo and still help match it, while it fogs the view from everywhere else.
+
+- This measures how wide each drawn splat looks from the camera (out to where it fades to nothing) and, above about a 33° radius, shrinks it, longest axis first, more the further over it is.
+- On our 649-photo bedroom test it raised held-out PSNR by 0.07 dB and the worst photo by 0.6 dB.
+- 0 turns it off.
+
 ### Needle ratio limit
 
 > How elongated a splat may get before the needle penalty applies.
@@ -1413,13 +1481,33 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 - On a sparse bedroom capture (~21° apart) turning it off improved held-out PSNR by about 1 dB, because real scenery was being ignored as 'moving'.
 - Dense captures are typically 3–10°.
 
+### Local colour correction (PC)
+
+> Lets each photo have its own shadows and lighting, for long captures where the sun moved. Linux worker only.
+
+| | |
+|---|---|
+| **Default** | Off |
+| **Mode** | Advanced |
+| **ID** | `train.bilateralGrid` |
+
+**How it works.** Each photo gets a coarse 16×16 grid (× 8 brightness levels) of colour adjustments, so a patch that is in shadow in one photo and in sun in another no longer forces the splats to blur the two into a dull smear.
+
+- The splats keep the average lighting, so moving shadows come out faded rather than baked in.
+- On a 96-minute, 1,258-photo drone flight: 17.16 → 17.91 dB held-out, with the smeared shadow patches gone; training took about 50 % longer (24 vs 16 min on an RTX 4080).
+- Replaces the per-photo colour correction above while on.
+
+**When to change it**
+
+- Only used when training on a Linux worker; the Mac trainer ignores it.
+
 ### Per-photo colour correction
 
 > Learns each photo's exposure, white balance and tint, so differences between photos don't turn into haze or colour noise.
 
 | | |
 |---|---|
-| **Default** | On |
+| **Default** | On (off automatically when exposure is locked) |
 | **Mode** | Easy |
 | **ID** | `train.appearanceCorrection` |
 
@@ -1427,11 +1515,12 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 - Without correction the scene has to average those differences, which shows up as washed-out haze, blotchy colour and floaters.
 - With this on, every training photo gets a small learned colour transform (3×3 colour matrix + offset) that is applied only while comparing to that photo; the saved splat stays at a neutral, median exposure. iPhone captures seed it with each frame's recorded shutter time and ISO.
-- On our garden test it added about 0.4 dB on held-out views even with locked exposure; expect more on video and handheld photos.
+- It switches itself off when every photo has the same recorded exposure (Splat Capture locks exposure): there is nothing to correct, and the extra freedom cost about 1 dB on held-out views of a 649-frame bedroom scan and let colours drift too bright.
+- Exports bake in the average correction, so the saved splat matches a typical photo.
 
 **When to change it**
 
-- Turn off only for perfectly controlled studio captures.
+- Leave it on for drone footage, video and handheld photos, where exposure changes.
 
 ### Colour-correction learning rate
 
@@ -1523,13 +1612,31 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 
 | Setting | Default | Range | Mode |
 |---|---|---|---|
+| [Benchmark](#benchmark) | – | – | Easy |
 | [Linux GPU workers](#linux-gpu-workers) | None | – | Easy |
 | [Work placement](#work-placement) | This Mac | – | Easy |
+| [Split videos on the worker](#split-videos-on-the-worker) | On | – | Advanced |
 | [Split into blocks above](#split-into-blocks-above) | 400 images | – | Advanced |
 | [Block overlap](#block-overlap) | 15 % | 5–40 % | Advanced |
 | [Receive from iPhone](#receive-from-iphone) | On | – | Easy |
 | [Require pairing code](#require-pairing-code) | On | – | Advanced |
 | [Models pack (Python)](#models-pack-python) | Not installed | – | Easy |
+
+### Benchmark
+
+> Measures how fast each machine trains and how fast files move between them.
+
+| | |
+|---|---|
+| **Default** | – |
+| **Mode** | Easy |
+| **ID** | `net.benchmark` |
+
+**How it works.** Every machine trains the same synthetic scene (about 1 million splats, 1600 × 1200 photos, 2,000 steps; steps 1,000–2,000 are timed) and each worker also gets the scene uploaded and its result downloaded, which measures the network.
+
+- The results replace the built-in guess of each GPU's speed: the training panel shows how long a job would take on each machine (including the upload), and Both mode trains small scenes on whichever finishes first.
+- Run it again after changing hardware, drivers or the worker's runtime.
+- Training on the Mac while another app uses the GPU will make it look slower than it is.
 
 ### Linux GPU workers
 
@@ -1557,7 +1664,24 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 103 sett
 | **Mode** | Easy |
 | **ID** | `net.placement` |
 
-**How it works.** Both: preparation that only exists on the Mac (Object Capture, Apple Vision masks, video decoding) stays local, learned feature matching and training go to the fastest device, and scenes bigger than the block threshold are split into blocks trained on both machines at once.
+**How it works.** Both: preparation that only exists on the Mac (Object Capture, Apple Vision masks) stays local, learned feature matching and training go to the fastest device, and scenes bigger than the block threshold are split into blocks trained on both machines at once.
+
+### Split videos on the worker
+
+> Upload the video once and let the worker pick frames and cut 360° views.
+
+| | |
+|---|---|
+| **Default** | On |
+| **Mode** | Advanced |
+| **ID** | `net.videoOnWorker` |
+
+**How it works.** The video is streamed to the worker unchanged (no zip, no extra copy on this Mac).
+
+- The worker decodes it on its CPU cores, keeps the sharpest frame in each window, cuts 360° footage into the same flat views as this Mac would (resampled on its GPU) and sends back the images and masks.
+- This frees the Mac for other work during the slowest part of video preparation — an 8K 360° clip decodes about 10,000 frames.
+- Same frame choice and file layout as splitting here, so results are interchangeable.
+- Needs worker 1.3 or newer with the processing models installed; otherwise, or if anything goes wrong on the worker, the video is split on this Mac instead.
 
 ### Split into blocks above
 
