@@ -829,6 +829,39 @@ final class MetalTrainer: @unchecked Sendable {
         }
     }
 
+    /// ImprovedGS / IGS+ style split: a source and its new copies (m members) are spread evenly along the
+    /// source's longest axis (spacing 2σ/m, centred on the source) and only that axis is shortened by √m,
+    /// instead of all members sitting on the same spot. Opacity keeps the MCMC relocation formula.
+    private func spreadAlongLongAxis(sources: [Int], copies: [Int]) {
+        var groups: [Int: [Int]] = [:]
+        for (k, s) in sources.enumerated() { groups[s, default: [s]].append(copies[k]) }
+        let p = ptr(params[0]), sc = ptr(params[1]), q = ptr(params[2])
+        for (s, members) in groups {
+            let m = members.count
+            guard m > 1 else { continue }
+            let ls = SIMD3(sc[s*3], sc[s*3+1], sc[s*3+2])
+            let ax = ls.x >= ls.y ? (ls.x >= ls.z ? 0 : 2) : (ls.y >= ls.z ? 1 : 2)
+            let sigma = exp(ls[ax])
+            // rotation matrix column `ax` of the (w, x, y, z) quaternion = the long axis in world space
+            var qw = q[s*4], qx = q[s*4+1], qy = q[s*4+2], qz = q[s*4+3]
+            let ql = max(sqrt(qw*qw + qx*qx + qy*qy + qz*qz), 1e-12); qw /= ql; qx /= ql; qy /= ql; qz /= ql
+            let u: SIMD3<Float>
+            switch ax {
+            case 0: u = SIMD3(1 - 2*(qy*qy + qz*qz), 2*(qx*qy + qw*qz), 2*(qx*qz - qw*qy))
+            case 1: u = SIMD3(2*(qx*qy - qw*qz), 1 - 2*(qx*qx + qz*qz), 2*(qy*qz + qw*qx))
+            default: u = SIMD3(2*(qx*qz + qw*qy), 2*(qy*qz - qw*qx), 1 - 2*(qx*qx + qy*qy))
+            }
+            let centre = SIMD3(p[s*3], p[s*3+1], p[s*3+2])
+            let shrink = log(1 / sqrt(Float(m)))
+            for (j, g) in members.enumerated() {
+                let t = (Float(j) - Float(m - 1) / 2) * 2 * sigma / Float(m)
+                let pos = centre + u * t
+                p[g*3] = pos.x; p[g*3+1] = pos.y; p[g*3+2] = pos.z
+                sc[g*3 + ax] = ls[ax] + shrink
+            }
+        }
+    }
+
     private func mcmcDensify() {
         let op = ptr(params[3])
         var dead: [Int] = [], weights = [Float](repeating: 0, count: n)
@@ -842,6 +875,7 @@ final class MetalTrainer: @unchecked Sendable {
             if src.count == dead.count {
                 applyRelocation(sources: src)
                 for (k, d) in dead.enumerated() { copyGaussian(from: src[k], to: d); zeroMoments(d) }
+                if config.longAxisSplit { spreadAlongLongAxis(sources: src, copies: dead) }
             }
         }
         // grow by 5 % up to the cap
@@ -861,7 +895,9 @@ final class MetalTrainer: @unchecked Sendable {
         grow(to: newN)
         for (k, s) in src.enumerated() { copyGaussian(from: s, to: n + k); zeroMoments(n + k) }
         memset(alive.contents().advanced(by: n), 1, src.count)
+        let base = n
         n = newN
+        if config.longAxisSplit { spreadAlongLongAxis(sources: src, copies: (0..<src.count).map { base + $0 }) }
     }
 
     /// Ensures buffers can hold `count` gaussians, preserving contents.

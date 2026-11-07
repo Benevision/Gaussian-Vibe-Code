@@ -71,6 +71,11 @@ class TrainingConfig:
     depthEdgeAware: bool = True
     anisotropyReg: float = 0.1
     anisotropyMaxRatio: float = 10.0
+    # Per-photo camera pose refinement (experimental until measured)
+    poseRefinement: bool = False
+    poseRefinementLR: float = 1e-4
+    poseRefinementReg: float = 1e-6
+    poseRefinementStart: int = 500
     # Per-photo colour correction (3×3 matrix + offset), same as the Mac Metal trainer
     appearanceCorrection: bool = True
     appearanceLR: float = 0.02

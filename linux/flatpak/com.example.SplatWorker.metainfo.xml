@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.6" date="2026-11-07">
+      <description>
+        <p>Experimental per-photo camera pose refinement (off by default).</p>
+      </description>
+    </release>
     <release version="1.1.5" date="2026-11-07">
       <description>
         <p>Fix: the needle-splat penalty could make long High-quality runs diverge; it now only shortens long splats.</p>

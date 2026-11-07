@@ -85,3 +85,20 @@ def test_view_gap_dense_vs_sparse():
             cams.append(SimpleNamespace(camera_to_world=m))
         return cams
     assert median_nearest_view_gap(ring(120), 3.0) < 15 < median_nearest_view_gap(ring(12), 3.0)
+
+
+def test_pose_refiner_identity_and_gradient():
+    from types import SimpleNamespace
+    from splatworker.trainer import PoseRefiner
+
+    cfg = SimpleNamespace(poseRefinementLR=1e-3, poseRefinementReg=1e-6)
+    pr = PoseRefiner(torch, 3, cfg, "cpu")
+    w2c = torch.eye(4)
+    w2c[:3, 3] = torch.tensor([0.1, -0.2, 2.0])
+    out = pr.apply(1, w2c)
+    assert torch.allclose(out, w2c, atol=1e-5)          # zero correction = identity
+    # a loss on the corrected pose reaches the embedding and one step moves only that photo's row
+    (out[:3, 3] - torch.tensor([0.0, 0.0, 2.5])).pow(2).sum().add(pr.reg_loss()).backward()
+    pr.step()
+    w = pr.embed.weight.detach()
+    assert w[1].abs().sum() > 0 and w[0].abs().sum() == 0 and w[2].abs().sum() == 0

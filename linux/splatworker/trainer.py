@@ -242,6 +242,54 @@ def median_nearest_view_gap(cams, scene_extent: float) -> float:
     return float(np.median(gaps))
 
 
+class PoseRefiner:
+    """Per-photo camera correction learned during training (gsplat ``CameraOptModule`` style).
+
+    Each training photo gets 9 numbers — a translation and a 6D rotation residual — starting at zero
+    (identity). The corrected world-to-camera is ``inv(c2w @ ΔT)``; gsplat's rasteriser provides the
+    gradients w.r.t. ``viewmats``. A sparse Adam only updates photos that were drawn this step, and a
+    small L2 pull keeps corrections minimal. Held-out photos are evaluated with their original poses.
+    """
+
+    def __init__(self, torch, n_views: int, cfg, dev):
+        self.torch = torch
+        self.embed = torch.nn.Embedding(n_views, 9, sparse=True).to(dev)
+        torch.nn.init.zeros_(self.embed.weight)
+        self.opt = torch.optim.SparseAdam(list(self.embed.parameters()), lr=cfg.poseRefinementLR)
+        self.reg = cfg.poseRefinementReg
+        self.identity6 = torch.tensor([1.0, 0, 0, 0, 1.0, 0], device=dev)
+        self._last = None
+
+    @staticmethod
+    def _rot6d(torch, d6):
+        a1, a2 = d6[..., :3], d6[..., 3:]
+        b1 = torch.nn.functional.normalize(a1, dim=-1)
+        b2 = torch.nn.functional.normalize(a2 - (b1 * a2).sum(-1, keepdim=True) * b1, dim=-1)
+        b3 = torch.cross(b1, b2, dim=-1)
+        return torch.stack([b1, b2, b3], dim=-2)
+
+    def apply(self, i: int, w2c):
+        torch = self.torch
+        idx = torch.tensor([i], device=w2c.device)
+        d = self.embed(idx)[0]
+        self._last = d
+        R = self._rot6d(torch, d[3:] + self.identity6)
+        dT = torch.eye(4, device=w2c.device, dtype=w2c.dtype)
+        dT = torch.cat([torch.cat([R, d[:3, None]], 1), dT[3:4]], 0)
+        c2w = torch.linalg.inv(w2c)
+        return torch.linalg.inv(c2w @ dT)
+
+    def reg_loss(self):
+        """Small L2 pull towards no correction (add to the loss before backward)."""
+        if self._last is None or self.reg <= 0:
+            return 0.0
+        return self.reg * (self._last ** 2).sum()
+
+    def step(self):
+        self.opt.step()
+        self.opt.zero_grad(set_to_none=True)
+
+
 class AppearanceCorrection:
     """Per-photo colour correction: corrected = M · rendered + b (3×3 + 3 per photo).
 
@@ -584,6 +632,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     last_report = 0.0
 
     appearance = AppearanceCorrection(torch, cfg, train_views + eval_views, dev) if cfg.appearanceCorrection else None
+    pose_refiner = PoseRefiner(torch, len(train_views), cfg, dev) if cfg.poseRefinement else None
 
     for step in range(cfg.iterations):
         if progress.should_stop():
@@ -597,6 +646,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         sh_degree = min(step // cfg.shDegreeInterval, cfg.shDegree)
         use_depth = depth_weight > 0 and depth_gt is not None
 
+        if pose_refiner is not None and step >= cfg.poseRefinementStart:
+            w2c = pose_refiner.apply(view_idx, w2c)
         renders, alphas, info = render(w2c, K, v.width, v.height, sh_degree, use_depth)
         if fixed_bg is None:
             bg = torch.rand(3, device=dev)
@@ -640,6 +691,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             ratio = torch.exp(ls.max(dim=1).values - ls.min(dim=1).values.detach())
             loss = loss + cfg.anisotropyReg * torch.clamp(ratio - cfg.anisotropyMaxRatio, min=0).mean()
 
+        if pose_refiner is not None and step >= cfg.poseRefinementStart:
+            loss = loss + pose_refiner.reg_loss()
         loss.backward()
 
         # Block training does not kill gaussians that leave the region: the block's cameras also see
@@ -661,6 +714,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         pos_sched.step()
         if appearance is not None:
             appearance.step(view_idx)
+        if pose_refiner is not None and step >= cfg.poseRefinementStart:
+            pose_refiner.step()
 
         if isinstance(strategy, DefaultStrategy):
             strategy.step_post_backward(params, optimizers, strategy_state, step, info, packed=False)

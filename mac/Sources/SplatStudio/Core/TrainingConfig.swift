@@ -62,6 +62,9 @@ struct TrainingConfig: Codable, Equatable {
     /// that streak along view rays in sparsely covered areas). 0 = off.
     var anisotropyReg: Float = 0.1
     var anisotropyMaxRatio: Float = 10
+    /// MCMC growth/relocation places copies along the parent's longest axis (ImprovedGS / IGS+) instead of
+    /// on top of it. Experimental until measured on real captures.
+    var longAxisSplit = false
     var region: Region? = nil
     var cameraIds: [Int]? = nil
 
@@ -84,7 +87,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.previewInterval, &previewInterval); d(.evalInterval, &evalInterval)
         d(.transientMasking, &transientMasking); d(.transientSensitivity, &transientSensitivity); d(.transientStart, &transientStart)
         d(.transientMaxViewGap, &transientMaxViewGap)
-        d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio)
+        d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio); d(.longAxisSplit, &longAxisSplit)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
