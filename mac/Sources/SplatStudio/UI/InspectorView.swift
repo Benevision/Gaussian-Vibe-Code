@@ -76,7 +76,10 @@ struct ViewPanel: View {
             }
             SettingRow(id: "viewer.splatScale") { NumberSlider(value: $model.viewer.splatScale.double, range: 0.1...3, width: 110) }
             SettingRow(id: "viewer.alphaCutoff") { NumberSlider(value: $model.viewer.alphaCutoff.double, range: 0.002...0.5, log: true, width: 110) }
-            SettingRow(id: "viewer.showCameras") { Toggle("", isOn: $model.viewer.showCameras).labelsHidden().disabled(model.dataset == nil) }
+            SettingRow(id: "viewer.showCameras") { Toggle("", isOn: $model.viewer.showCameras).labelsHidden()
+                    .disabled(model.dataset == nil && (model.remoteWatch.cameras ?? []).isEmpty)
+                    .help(model.dataset == nil && (model.remoteWatch.cameras ?? []).isEmpty
+                          ? "No camera positions for this splat: open its project (or a splat from a project's outputs folder)" : "") }
             SettingRow(id: "viewer.antialias") {
                 Picker("", selection: Binding(get: { model.viewer.antialiasOverride.map { $0 ? 1 : 0 } ?? -1 },
                                               set: { model.viewer.antialiasOverride = $0 < 0 ? nil : $0 == 1 })) {

@@ -140,11 +140,21 @@ final class AppModel {
             do {
                 let g = try SplatFileFormat.load(url: url)
                 let sc = SplatScene(cloud: g)
+                // A splat in a project's outputs/ folder: load that project's cameras too (training cameras,
+                // F, Coverage, Auto clean), keeping this splat. Anything else: no cameras — never a previous
+                // project's, which would belong to another scene.
+                let projectDS: PreparedDataset? = url.deletingLastPathComponent().lastPathComponent == "outputs"
+                    ? try? PreparedDataset.load(url.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("dataset"))
+                    : nil
                 await MainActor.run {
                     self.documentURL = url
-                    self.worldUp = Orientation.savedUp(for: url) ?? Orientation.upFromPLYComment(url)
-                        ?? Orientation.upFromProject(of: url) ?? Orientation.standardUp
+                    self.dataset = projectDS
+                    // The project's measured gravity beats the up note stored in the file (older files were
+                    // written with a guessed level); a direction you chose yourself beats both.
+                    self.worldUp = Orientation.savedUp(for: url) ?? Orientation.upFromProject(of: url)
+                        ?? Orientation.upFromPLYComment(url) ?? Orientation.standardUp
                     self.setScene(cloud: g, scene: sc, frame: true)
+                    self.updateCameraLines()
                     self.homeCamera = self.renderer.camera
                     self.isLoading = false
                 }
