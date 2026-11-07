@@ -110,7 +110,10 @@ struct WorkersView: View {
                     Text(browser.isBrowsing ? "Searching the local network… Start Splat Worker on your PC and it will appear here." : "Discovery is off.")
                         .foregroundStyle(.secondary).padding(6).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                ForEach(browser.workers) { w in WorkerRow(endpoint: w, browser: browser) }
+                ForEach(browser.workers) { w in
+                    WorkerRow(endpoint: w, browser: browser)
+                    WorkerJobsList(endpoint: w, model: model)
+                }
             }
             GroupBox("Add manually") {
                 HStack {
@@ -130,6 +133,49 @@ struct WorkersView: View {
         }
         .padding(24)
         .onAppear { browser.start() }
+    }
+}
+
+/// Jobs currently on a worker, with "Watch" to stream a training job's preview into the viewer.
+private struct WorkerJobsList: View {
+    let endpoint: WorkerEndpoint
+    let model: AppModel
+    @State private var jobs: [JobStatus] = []
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(jobs) { j in
+                HStack(spacing: 8) {
+                    Image(systemName: j.kind == "process" ? "gearshape.2" : "cube.transparent").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(j.name ?? j.jobId).font(.callout).lineLimit(1)
+                        Text(subtitle(j)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if (j.kind ?? "train") == "train" {
+                        let watching = model.remoteWatch.watched?.jobId == j.jobId
+                        Button(watching ? "Watching" : "Watch") {
+                            model.remoteWatch.watch(workerId: endpoint.id, jobId: j.jobId, name: j.name ?? j.jobId)
+                            model.sidebar = .viewer
+                        }.disabled(watching)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 44).padding(.bottom, jobs.isEmpty ? 0 : 6)
+        .task(id: endpoint.id) {
+            while !Task.isCancelled {
+                if let c = WorkerBrowser.shared.client(for: endpoint.id), let all = try? await c.jobs() {
+                    jobs = all.filter { !$0.state.isTerminal }
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+    private func subtitle(_ j: JobStatus) -> String {
+        var p = [j.state.rawValue]
+        if let s = j.step, let t = j.totalSteps, t > 0 { p.append("\(s.formatted())/\(t.formatted())") }
+        if let ps = j.psnr { p.append(String(format: "%.2f dB", ps)) }
+        return p.joined(separator: " · ")
     }
 }
 

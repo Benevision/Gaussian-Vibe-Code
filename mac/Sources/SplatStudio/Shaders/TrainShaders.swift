@@ -559,7 +559,10 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
         uint ia = s.x >= s.y ? (s.x >= s.z ? 0u : 2u) : (s.y >= s.z ? 1u : 2u);
         uint ib = s.x <= s.y ? (s.x <= s.z ? 0u : 2u) : (s.y <= s.z ? 1u : 2u);
         float r = s[ia] / max(s[ib], 1e-12f);
-        if (r > reg.w && ia != ib) { gls[ia] += reg.z * r; gls[ib] -= reg.z * r; }   // d r / d log s
+        // Shrink the long axis only. Also widening the short axis (the full d r / d log s) made splats fatter,
+        // and MCMC's SGLD noise scales with each splat's covariance: on 1.5 M-splat / 30 k-step runs splats
+        // grew, faded and drifted until training diverged (PSNR 18 → 11 dB by step 6 k).
+        if (r > reg.w && ia != ib) { gls[ia] += reg.z * r; }
     }
     float3 gp = float3(0);
     float4 gq = float4(0);

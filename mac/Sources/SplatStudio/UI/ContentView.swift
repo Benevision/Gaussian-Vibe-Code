@@ -73,6 +73,7 @@ struct ContentView: View {
             if model.isLoading { ProgressView("Loading…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if model.scene != nil { ViewerHUD(model: model, tool: tool).padding(10) }
             if model.training.isActive { TrainingBanner(session: model.training).padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom) }
+            else if let w = model.remoteWatch.watched { RemoteWatchBanner(watch: w) { model.remoteWatch.stop() }.padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom) }
             if model.showShortcuts { ShortcutsOverlay { model.showShortcuts = false } }
         }
         // SwiftUI writes `false` back when it auto-collapses the inspector during window resizing / launch;
@@ -362,5 +363,36 @@ enum OrientationChoice: String, CaseIterable, Identifiable {
         case .posX: return "Up is +X"
         case .negX: return "Up is −X"
         }
+    }
+}
+
+
+/// Bottom banner while watching a worker job: what, where, how far, how good.
+private struct RemoteWatchBanner: View {
+    let watch: RemoteJobWatcher.Watched
+    var onStop: () -> Void
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Watching “\(watch.name)” on \(watch.workerName)").font(.callout.weight(.semibold)).lineLimit(1)
+                Text(details).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            if watch.totalSteps > 0 {
+                ProgressView(value: Double(watch.step), total: Double(max(watch.totalSteps, 1))).frame(width: 140)
+            }
+            Button(isFinished ? "Close" : "Stop Watching", action: onStop)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+    private var isFinished: Bool { ["completed", "failed", "cancelled"].contains(watch.state) }
+    private var details: String {
+        var parts = ["\(watch.state)"]
+        if watch.totalSteps > 0 { parts.append("step \(watch.step.formatted())/\(watch.totalSteps.formatted())") }
+        if let p = watch.psnr { parts.append(String(format: "PSNR %.2f dB", p)) }
+        if watch.splats > 0 { parts.append("\(watch.splats.formatted()) splats") }
+        parts.append(watch.previewStep.map { "preview from step \($0.formatted())" } ?? "waiting for the first preview")
+        return parts.joined(separator: " · ")
     }
 }

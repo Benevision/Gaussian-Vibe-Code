@@ -15,6 +15,8 @@ final class AppModel {
     enum InspectorTab: String, CaseIterable, Identifiable { case view = "View", edit = "Edit", train = "Train", export = "Export"; var id: String { rawValue } }
     var inspectorTab: InspectorTab = .view
     var sidebar: ContentView.SidebarItem? = .viewer
+    /// Live view of a job running on a Linux worker (Compute → Watch).
+    let remoteWatch = RemoteJobWatcher()
     var showInspector = true
     var showNewProject = false
     var newProjectSource: SourceDescription? = nil
@@ -68,6 +70,7 @@ final class AppModel {
         renderer.settings = viewer
         renderer.smoothing = navigation.smoothing ? 0.08 : 0
         training.app = self
+        remoteWatch.app = self
         prep.app = self
     }
 

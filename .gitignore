@@ -18,3 +18,9 @@ linux/flatpak/build-dir/
 linux/flatpak/repo/
 linux/flatpak/dist/
 site/
+
+# Large sample footage / datasets (kept local, never committed)
+Sample datasets/
+*.mp4
+*.mov
+*.splatcapture/

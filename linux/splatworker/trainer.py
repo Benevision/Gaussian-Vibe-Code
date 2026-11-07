@@ -634,8 +634,10 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             loss = loss + scale_reg * torch.exp(params["scales"]).mean()
         if cfg.anisotropyReg > 0:
             # Penalise needle splats (longest / shortest axis above the limit), as on the Mac.
+            # Shrink the long axis only (short axis detached): widening the short axis made splats fatter,
+            # MCMC's noise scales with covariance, and long High-preset runs diverged (18 → 11 dB by 6 k).
             ls = params["scales"]
-            ratio = torch.exp(ls.max(dim=1).values - ls.min(dim=1).values)
+            ratio = torch.exp(ls.max(dim=1).values - ls.min(dim=1).values.detach())
             loss = loss + cfg.anisotropyReg * torch.clamp(ratio - cfg.anisotropyMaxRatio, min=0).mean()
 
         loss.backward()

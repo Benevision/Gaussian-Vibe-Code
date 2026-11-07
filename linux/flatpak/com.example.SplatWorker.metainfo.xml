@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.5" date="2026-11-07">
+      <description>
+        <p>Fix: the needle-splat penalty could make long High-quality runs diverge; it now only shortens long splats.</p>
+      </description>
+    </release>
     <release version="1.1.4" date="2026-11-07">
       <description>
         <p>Processing models: transformers pinned to releases that work with this runtime (Python 3.10, PyTorch 2.4); setup checks that torchvision actually loads.</p>
