@@ -252,7 +252,12 @@ final class TrainingSession {
         // Splitting only pays off for big scenes: below 400 images a block still sees most of the scene,
         // so two half-blocks cost nearly as much as one whole run each. Train it whole on the fastest device.
         if dataset.manifest.cameras.count < 400 {
-            let best = devices.max { $0.throughput < $1.throughput }
+            // Benchmarked machines: compare estimated wall time including the upload; otherwise raw throughput.
+            let est = Dictionary(uniqueKeysWithValues: TrainingTimeEstimate.entries(dataset: dataset, config: cfg,
+                                    workers: browser.workers.filter { clients[$0.id] != nil }).map { ($0.deviceId, $0.seconds) })
+            let best = est.count == devices.count
+                ? devices.min { (est[$0.id] ?? .infinity) < (est[$1.id] ?? .infinity) }
+                : devices.max { $0.throughput < $1.throughput }
             if let best, case .remote = best.kind {
                 remoteMessage = "\(dataset.manifest.cameras.count) images is too small to split — training the whole scene on \(best.name), the faster device."
                 workerId = best.id

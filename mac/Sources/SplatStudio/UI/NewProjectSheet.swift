@@ -585,8 +585,11 @@ struct TrainingPresetPicker: View {
 struct ComputePicker: View {
     @Bindable var session: TrainingSession
     @Binding var prepPlacement: ComputePlacement
+    var dataset: PreparedDataset? = nil
     private var browser = WorkerBrowser.shared
-    init(session: TrainingSession, prepPlacement: Binding<ComputePlacement>) { self.session = session; self._prepPlacement = prepPlacement }
+    init(session: TrainingSession, prepPlacement: Binding<ComputePlacement>, dataset: PreparedDataset? = nil) {
+        self.session = session; self._prepPlacement = prepPlacement; self.dataset = dataset
+    }
 
     var body: some View {
         SettingRow(id: "train.device") {
@@ -597,6 +600,18 @@ struct ComputePicker: View {
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: 260)
             .onChange(of: session.placement) { _, v in prepPlacement = v }
+        }
+        if let ds = dataset {
+            let est = TrainingTimeEstimate.entries(dataset: ds, config: session.config, workers: browser.workers)
+            if est.isEmpty || (est.count == 1 && !browser.workers.isEmpty) {
+                Text("Run Compute → Benchmark to see how long this takes on each machine.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                let fastest = est.min { $0.seconds < $1.seconds }?.deviceId
+                Text("Estimated: " + est.map { e in
+                    "\(e.name) ≈ \(formatDuration(e.seconds))" + (e.uploadSeconds >= 30 ? " (incl. \(formatDuration(e.uploadSeconds)) upload)" : "")
+                        + (e.deviceId == fastest && est.count > 1 ? " — fastest" : "")
+                }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+            }
         }
         if session.placement != .thisMac {
             if browser.workers.isEmpty {

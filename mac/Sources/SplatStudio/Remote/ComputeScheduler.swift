@@ -55,6 +55,7 @@ struct ComputeScheduler: Sendable {
             let gb = Double(dev.recommendedMaxWorkingSetSize) / 1e9
             t = min(3, max(0.3, gb / 20))
         }
+        if let measured = BenchmarkStore.shared.throughput(for: "local") { t = measured }   // Compute → Benchmark
         return ComputeDevice(id: "local", name: Host.current().localizedName ?? "This Mac", kind: .local, capabilities: caps, throughput: t)
     }
 
@@ -64,8 +65,11 @@ struct ComputeScheduler: Sendable {
         if info.canTrain { caps.insert("train") }
         if info.canProcess { caps.insert("process"); caps.insert("frames") }
         caps.formUnion(info.models ?? [])
+        // Measured (Compute → Benchmark) beats the GPU-name table. Both use the same scale (1.0 ≈ 20 benchmark steps/s
+        // ≈ an M4 Pro), so a measured device and a table guess can still be compared.
+        let t = BenchmarkStore.shared.throughput(for: ep.id) ?? estimateThroughput(gpus: info.gpus ?? [])
         return ComputeDevice(id: ep.id, name: info.name, kind: .remote(ep), capabilities: caps,
-                             throughput: estimateThroughput(gpus: info.gpus ?? []), queueLength: info.queueLength ?? 0)
+                             throughput: t, queueLength: info.queueLength ?? 0)
     }
 
     /// Rough CUDA throughput score relative to an M4 Pro (from GPU name / memory), summed over GPUs.

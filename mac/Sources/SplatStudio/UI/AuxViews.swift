@@ -116,6 +116,7 @@ struct WorkersView: View {
                     WorkerJobsList(endpoint: w, model: model)
                 }
             }
+            BenchmarkBox()
             GroupBox("Add manually") {
                 HStack {
                     TextField("Host or IP", text: $host).textFieldStyle(.roundedBorder)
@@ -532,5 +533,84 @@ struct SettingsReferenceView: View {
         guard !query.isEmpty else { return SettingsCatalog.all }
         let q = query.lowercased()
         return SettingsCatalog.all.filter { "\($0.title) \($0.summary) \($0.detail)".lowercased().contains(q) }
+    }
+}
+
+
+/// Compute → Benchmark: the same training test on this Mac and every online worker, plus transfer speed.
+/// Results drive the time estimates next to the training device picker and which machine Both mode picks.
+private struct BenchmarkBox: View {
+    @State private var results = BenchmarkStore.shared.all
+    @State private var running = false
+    @State private var status = ""
+    @State private var fraction = 0.0
+    @State private var error: String?
+    @State private var includeMac = true
+    private let browser = WorkerBrowser.shared
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Trains the same synthetic scene (1 M splats, 1600 × 1200, 2,000 steps) on each machine and times the transfer to and from each worker. Takes a few minutes per machine; results set the time estimates and which machine gets the work.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    HelpButton(id: "net.benchmark")
+                }
+                if !results.isEmpty {
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
+                        GridRow {
+                            Text("Machine").bold(); Text("GPU").bold(); Text("Training").bold(); Text("Relative").bold()
+                            Text("Upload").bold(); Text("Download").bold(); Text("Measured").bold()
+                        }.font(.caption)
+                        let slowest = results.map(\.trainStepsPerSecond).min() ?? 1
+                        ForEach(results) { r in
+                            GridRow {
+                                Text(r.deviceId == "local" ? "This Mac" : r.name)
+                                Text(r.gpu ?? "–").lineLimit(1)
+                                Text(String(format: "%.1f steps/s", r.trainStepsPerSecond))
+                                Text(String(format: "%.1f×", r.trainStepsPerSecond / max(slowest, 0.01)))
+                                Text(r.uploadMBps.map { String(format: "%.0f MB/s", $0) } ?? "–")
+                                Text(r.downloadMBps.map { String(format: "%.0f MB/s", $0) } ?? "–")
+                                Text(r.date.formatted(date: .abbreviated, time: .shortened))
+                            }.font(.caption.monospacedDigit())
+                        }
+                    }
+                }
+                HStack {
+                    Button(running ? "Running…" : "Run benchmark") { run() }.disabled(running)
+                    Toggle("Include this Mac", isOn: $includeMac).toggleStyle(.checkbox)
+                    if running { ProgressView(value: fraction).frame(width: 140) }
+                    Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }.padding(6)
+        } label: { Text("Benchmark") }
+    }
+
+    private func run() {
+        running = true; error = nil
+        let targets = browser.workers.compactMap { w -> (WorkerEndpoint, WorkerClient)? in
+            guard let h = browser.health[w.id], case .online = h.status, let c = browser.client(for: w.id) else { return nil }
+            return (w, c)
+        }
+        let mac = includeMac
+        Task {
+            func report(_ m: String, _ f: Double) { Task { @MainActor in status = m; fraction = f } }
+            do {
+                for (w, c) in targets {
+                    let r = try await SystemBenchmark.runRemote(endpoint: w, client: c) { m, f in report(m, f) }
+                    BenchmarkStore.shared.save(r)
+                    await MainActor.run { results = BenchmarkStore.shared.all }
+                }
+                if mac {
+                    let r = try await SystemBenchmark.runLocal { m, f in report(m, f) }
+                    BenchmarkStore.shared.save(r)
+                }
+                await MainActor.run { results = BenchmarkStore.shared.all; status = "Done"; running = false }
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription; running = false }
+            }
+        }
     }
 }

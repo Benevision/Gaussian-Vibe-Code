@@ -275,7 +275,7 @@ struct TrainPanel: View {
             if !s.isActive {
                 PanelSection(title: "Settings", systemImage: "gearshape.2") {
                     TrainingPresetPicker(session: s)
-                    ComputePicker(session: s, prepPlacement: $prepPlacement)
+                    ComputePicker(session: s, prepPlacement: $prepPlacement, dataset: ds)
                     if model.mode == .advanced { AdvancedTrainingSettings(session: s) }
                 }
                 Button { s.start(dataset: ds) } label: { Label("Start training", systemImage: "play.fill").frame(maxWidth: .infinity) }

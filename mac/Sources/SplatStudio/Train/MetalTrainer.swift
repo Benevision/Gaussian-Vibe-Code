@@ -826,6 +826,15 @@ final class MetalTrainer: @unchecked Sendable {
                 Array(UnsafeBufferPointer(start: views.contents().bindMemory(to: UInt32.self, capacity: n), count: n)), all.count)
     }
 
+    /// Renders `g` from every dataset view (training and held out), e.g. to make a synthetic benchmark scene.
+    func renderEach(cloud g: GaussianCloud, _ body: (_ camera: DatasetCamera, _ width: Int, _ height: Int, _ rgba: [UInt8]) throws -> Void) throws {
+        load(g)
+        step = config.shDegreeInterval * (config.shDegree + 1)
+        for v in trainViews + evalViews {
+            if let r = try render(view: v) { try body(v.camera, v.width, v.height, r.pixels) }
+        }
+    }
+
     /// Mean PSNR over the holdout views (or a sample of training views if there are none).
     /// Scores any splat (e.g. from another trainer) on this dataset's held-out photos with the same rasteriser
     /// and exact intrinsics, at full SH degree. Returns mean PSNR and per-view PSNR.

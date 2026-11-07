@@ -44,6 +44,38 @@ enum CLI {
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }
+        if a.contains("--benchmark") {
+            // SplatStudio --benchmark [--worker http://host:port [--token T]] [--no-local]: the Compute → Benchmark test.
+            let sem = DispatchSemaphore(value: 0); var code: Int32 = 0
+            let wurl = value("--worker").flatMap(URL.init(string:)); let tok = value("--token"); let local = !a.contains("--no-local")
+            // [--save [--id <worker id as the app knows it> --name N]] stores the results for the app
+            let save = a.contains("--save"), id = value("--id"), name = value("--name")
+            Task.detached {
+                var last = ""
+                let p: @Sendable (String, Double) -> Void = { m, f in
+                    let line = String(format: "  %3.0f%% %@", f * 100, m)
+                    if line != last { print(line); fflush(stdout) }
+                }
+                do {
+                    if let u = wurl {
+                        let c = WorkerClient(baseURL: u, token: tok)
+                        let h = u.host ?? "worker", port = u.port ?? 7878
+                        let ep = WorkerEndpoint(id: id ?? "manual:\(h):\(port)", name: name ?? h, host: h, port: port, isManual: true)
+                        let r = try await SystemBenchmark.runRemote(endpoint: ep, client: c, progress: p)
+                        if save { BenchmarkStore.shared.save(r) }
+                        print(String(format: "%@ (%@): %.2f steps/s · upload %.0f MB/s · download %.0f MB/s", r.name, r.gpu ?? "?",
+                                     r.trainStepsPerSecond, r.uploadMBps ?? 0, r.downloadMBps ?? 0))
+                    }
+                    if local {
+                        let r = try await SystemBenchmark.runLocal(progress: p)
+                        if save { BenchmarkStore.shared.save(r) }
+                        print(String(format: "This Mac (%@): %.2f steps/s", r.gpu ?? "?", r.trainStepsPerSecond))
+                    }
+                } catch { fputs("error: \(error.localizedDescription)\n", stderr); code = 1 }
+                sem.signal()
+            }
+            sem.wait(); exit(code)
+        }
         if let src = value("--prepare") {
             // Headless dataset preparation: SplatStudio --prepare <photos dir | video | capture> --out <project dir>
             //   [--solver auto|objectcapture|capture|<splatprep feature id>] [--mask none|people|dynamic]

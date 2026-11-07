@@ -447,6 +447,10 @@ enum SettingsCatalog {
 
     // MARK: Compute
     static let compute: [SettingDoc] = [
+        .init(id: "net.benchmark", group: .compute, title: "Benchmark",
+              summary: "Measures how fast each machine trains and how fast files move between them.",
+              detail: "Every machine trains the same synthetic scene (about 1 million splats, 1600 × 1200 photos, 2,000 steps; steps 1,000–2,000 are timed) and each worker also gets the scene uploaded and its result downloaded, which measures the network. The results replace the built-in guess of each GPU's speed: the training panel shows how long a job would take on each machine (including the upload), and Both mode trains small scenes on whichever finishes first. Run it again after changing hardware, drivers or the worker's runtime. Training on the Mac while another app uses the GPU will make it look slower than it is.",
+              defaultValue: "–", advanced: false),
         .init(id: "net.workers", group: .compute, title: "Linux GPU workers",
               summary: "Splat Worker servers found on your network (Bonjour) or added manually.",
               detail: "Install Splat Worker on a Linux PC with an NVIDIA GPU (see linux/README.md). It appears here automatically. Add it manually with host:port if your network blocks Bonjour. A token protects it from other devices on the LAN.",
