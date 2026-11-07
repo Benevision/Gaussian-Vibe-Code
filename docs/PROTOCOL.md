@@ -228,7 +228,7 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
   "matching": "sequential" | "exhaustive" | "retrieval" | "auto",
   "retrievalTopK": 30,
   "sequentialOverlap": 10,
-  "mapper": "glomap" | "colmap" | "auto",   // auto: COLMAP incremental ≤ 300 images, global above (with view-graph focal calibration when EXIF focal is missing)
+  "mapper": "glomap" | "colmap" | "auto",   // auto: ≤ 1000 images run both and keep more-registered / longer-track result; above: global (view-graph focal calibration when EXIF focal is missing)
   "cameraModel": "auto" | "pinhole" | "opencv" | "fisheye",
   "singleCamera": true,
   "maxKeypoints": 4096,

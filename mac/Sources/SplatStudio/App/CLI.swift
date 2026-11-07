@@ -121,6 +121,26 @@ enum CLI {
         }
         // Developer aid: --fly-test <splat> flies the camera through the scene (forward, strafe, up) rendering
         // every step like the viewer does, to reproduce navigation crashes headlessly.
+        // --eval <splat> --dataset <dir> [--sh N] [--aa|--no-aa]: held-out PSNR of any splat file (ours, Spirula,
+        // gsplat…) on a dataset's holdout photos, rendered by the Metal trainer's rasteriser with exact intrinsics.
+        if let f = value("--eval"), let dsPath = value("--dataset") {
+            do {
+                let g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))
+                let ds = try PreparedDataset.load(URL(fileURLWithPath: dsPath))
+                var cfg = TrainingConfig()
+                cfg.shDegree = value("--sh").flatMap(Int.init) ?? g.shDegree
+                cfg.antialiased = a.contains("--aa") ? true : (a.contains("--no-aa") ? false : g.antialiased)
+                cfg.maxImageSize = value("--max-size").flatMap(Int.init) ?? 1600
+                cfg.randomInitCount = 10; cfg.depthWeight = 0
+                let t = MetalTrainer(dataset: ds, config: cfg)
+                try t.prepare { _ in }
+                let r = try t.evaluate(cloud: g)
+                print(String(format: "eval %@: %d splats, SH %d, antialiased %@ → held-out PSNR %.2f dB over %d views (min %.2f, max %.2f)",
+                             (f as NSString).lastPathComponent, g.count, cfg.shDegree, cfg.antialiased ? "yes" : "no", r.mean, r.perView.count,
+                             r.perView.min() ?? 0, r.perView.max() ?? 0))
+                exit(0)
+            } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
+        }
         if let f = value("--fly-test") {
             do {
                 let g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))

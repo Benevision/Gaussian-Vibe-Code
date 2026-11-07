@@ -20,6 +20,28 @@ from ..pairs import select_pairs, write_pairs_txt
 from .base import Availability, Backend, SfMContext, SfMOutput, camera_model_name
 
 
+def gps_fraction(paths, sample: int = 20) -> float:
+    """Share of (a sample of) images with GPS latitude/longitude in EXIF."""
+    try:
+        from PIL import Image
+    except Exception:
+        return 0.0
+    paths = list(paths)
+    if not paths:
+        return 0.0
+    step = max(1, len(paths) // sample)
+    picked = paths[::step][:sample]
+    hits = 0
+    for p in picked:
+        try:
+            with Image.open(p) as im:
+                g = im.getexif().get_ifd(0x8825)
+            hits += 1 if (g.get(2) and g.get(4)) else 0
+        except Exception:
+            pass
+    return hits / len(picked)
+
+
 class ColmapSiftBackend(Backend):
     id = "colmap_sift"
     display_name = "COLMAP SIFT"
@@ -81,8 +103,20 @@ class ColmapSiftBackend(Backend):
             ctx.names, ctx.paths, strategy, int(ctx.opt("sequentialOverlap", 10)), int(ctx.opt("retrievalTopK", 30)), prior_c2w or None, has_ts, ctx.work_dir
         )
         resolved = pinfo["resolved"]
-        ctx.progress.update("pairs", 1.0, f"{len(pairs)} pairs ({resolved})")
-        if resolved == "exhaustive" and not prior_c2w:
+        # Aerial / drone sets: photos with GPS in EXIF are matched with their spatial neighbours (COLMAP's
+        # spatial_matcher reads the GPS priors feature_extractor stored), which beats retrieval for surveys.
+        gps = (strategy in ("auto", "spatial") and not prior_c2w and (strategy == "spatial" or n > 60)
+               and gps_fraction(ctx.paths) >= 0.9)
+        if gps:
+            resolved = "spatial"
+            pinfo["resolved"] = "spatial"
+        ctx.progress.update("pairs", 1.0, f"{len(pairs)} pairs ({resolved})" if not gps else "spatial (GPS) matching")
+        if gps:
+            mcmd = [colmap, "spatial_matcher", "--database_path", str(db), "--SpatialMatching.ignore_z", "0",
+                    "--SpatialMatching.max_num_neighbors", str(int(ctx.opt("spatialNeighbors", 40))),
+                    "--SpatialMatching.max_distance", str(float(ctx.opt("spatialMaxDistance", 200)))]
+            c = "spatial_matcher"
+        elif resolved == "exhaustive" and not prior_c2w:
             mcmd = [colmap, "exhaustive_matcher", "--database_path", str(db)]
             c = "exhaustive_matcher"
         elif resolved == "sequential" and not prior_c2w and strategy == "sequential":

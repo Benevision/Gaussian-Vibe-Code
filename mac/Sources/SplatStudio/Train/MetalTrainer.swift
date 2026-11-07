@@ -709,6 +709,17 @@ final class MetalTrainer: @unchecked Sendable {
     }
 
     /// Mean PSNR over the holdout views (or a sample of training views if there are none).
+    /// Scores any splat (e.g. from another trainer) on this dataset's held-out photos with the same rasteriser
+    /// and exact intrinsics, at full SH degree. Returns mean PSNR and per-view PSNR.
+    func evaluate(cloud g: GaussianCloud) throws -> (mean: Float, perView: [Float]) {
+        load(g)
+        step = config.shDegreeInterval * (config.shDegree + 1)
+        let set = evalViews.isEmpty ? Array(trainViews.prefix(8)) : evalViews
+        var per: [Float] = []
+        for v in set { if let r = try render(view: v) { per.append(r.mse > 0 ? -10 * log10(r.mse) : 99) } }
+        return (per.isEmpty ? 0 : per.reduce(0, +) / Float(per.count), per)
+    }
+
     func evaluate() throws -> Float {
         let set = evalViews.isEmpty ? Array(trainViews.prefix(8)) : evalViews
         var sum: Float = 0, c = 0

@@ -24,6 +24,8 @@ _EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
 #: With ``mapper: auto``, sets larger than this use global mapping (GLOMAP / colmap global_mapper);
 #: smaller ones use COLMAP's incremental mapper, which is more robust and still fast at that size.
 AUTO_GLOBAL_MIN_IMAGES = 300
+#: With ``mapper: auto`` and at most this many images, both mappers run and the better result is kept.
+AUTO_BOTH_MAX = 1000
 
 
 def _prior_focal_fraction(database) -> float:
@@ -129,7 +131,60 @@ def run_mapper(
     progress: Optional[Callable[[float, str], None]] = None,
     num_images: int = 0,
 ) -> tuple[Reconstruction, str]:
-    """Run the mapper; returns (largest reconstruction, mapper name used)."""
+    """Run the mapper; returns (largest reconstruction, mapper name used).
+
+    ``auto`` with up to AUTO_BOTH_MAX images runs the incremental *and* the global mapper on the same matches
+    and keeps the better reconstruction: more registered images first, then the longer mean track length,
+    then the lower reprojection error. On the synthetic benchmark neither mapper won everywhere (incremental:
+    orbit AUC@5° 0.52–0.96 vs 0.12–0.29; global: walk 0.90–0.96 vs 0.14–0.50 for learned matchers), and the
+    longer track length picked the right one in every pair. Mapping is cheap next to matching.
+    """
+    progress = progress or (lambda f, m="": None)
+    pref = (preference or "auto").lower()
+    avail = available_mappers()
+    inc = next((m for m in ("colmap", "pycolmap") if avail.get(m)), None)
+    if pref != "auto" or num_images > AUTO_BOTH_MAX or not (inc and avail.get("glomap")):
+        return _run_single(database, image_dir, out_dir, preference, log_path, progress, num_images)
+    out_dir = Path(out_dir)
+    results = []
+    # incremental first: the global path may calibrate focal lengths in the shared database
+    for name, sub, lo, hi in ((inc, "incremental", 0.0, 0.55), ("glomap", "global", 0.55, 1.0)):
+        sub_p = (lambda f, m="", lo=lo, hi=hi, name=name: progress(lo + (hi - lo) * f, f"{name}: {m}"))
+        try:
+            rec, used = _run_single(database, image_dir, out_dir / sub, name, log_path, sub_p, num_images)
+            st = rec.stats()
+            results.append((rec, used, st))
+            progress(hi, f"{used}: {st.get('numRegistered')} images, track length {st.get('meanTrackLength') or 0:.2f}")
+        except Exception as e:  # noqa: BLE001 — one mapper failing is fine if the other works
+            progress(hi, f"{name} failed: {e}")
+    if not results:
+        raise SplatPrepError("both mappers failed to produce a reconstruction")
+
+    def key(r):
+        st = r[2]
+        reg = int(st.get("numRegistered") or 0)
+        return (round(reg / max(num_images or reg or 1, 1) * 50),   # ~2 % registration buckets
+                float(st.get("meanTrackLength") or 0), -float(st.get("meanReprojError") or 1e9))
+    best = max(results, key=key)
+    if log_path:
+        with open(log_path, "a") as fh:
+            for r in results:
+                fh.write(f"auto mapper candidate {r[1]}: {r[2]}\n")
+            fh.write(f"auto mapper chose {best[1]}\n")
+    progress(1.0, f"chose {best[1]} (registered {best[2].get('numRegistered')}, track length {best[2].get('meanTrackLength') or 0:.2f})")
+    return best[0], f"auto:{best[1]}"
+
+
+def _run_single(
+    database: Path,
+    image_dir: Path,
+    out_dir: Path,
+    preference: str = "auto",
+    log_path: Optional[Path] = None,
+    progress: Optional[Callable[[float, str], None]] = None,
+    num_images: int = 0,
+) -> tuple[Reconstruction, str]:
+    """Run one mapper (by preference order); returns (largest reconstruction, mapper name used)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     avail = available_mappers()

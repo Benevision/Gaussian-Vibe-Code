@@ -41,18 +41,34 @@ def test_prior_focal_fraction(tmp_path):
     assert mapper._prior_focal_fraction(tmp_path / "missing.db") == 1.0
 
 
-def test_auto_prefers_incremental_for_small_sets(tmp_path, monkeypatch):
+def test_auto_runs_both_mappers_and_keeps_longer_tracks(tmp_path, monkeypatch):
     monkeypatch.setattr(mapper, "available_mappers", lambda: {"glomap": True, "colmap": True, "pycolmap": True})
-    calls = []
-    monkeypatch.setattr(mapper, "run_logged", lambda cmd, *a, **k: calls.append([Path(str(c)).name for c in cmd[:2]]))
-    monkeypatch.setattr(mapper, "find_executable", lambda n: "/usr/bin/" + n if n == "colmap" else None)
-    monkeypatch.setattr(mapper, "colmap_commands", lambda c: frozenset({"mapper", "global_mapper"}))
 
     class Rec:
-        images = {1: None}
+        def __init__(self, reg, track, err):
+            self._s = {"numRegistered": reg, "meanTrackLength": track, "meanReprojError": err}
+            self.images = {i: None for i in range(reg)}
 
-    monkeypatch.setattr(mapper, "read_largest_model", lambda d: Rec())
-    _, used = mapper.run_mapper(tmp_path / "db", tmp_path, tmp_path / "s", "auto", num_images=60)
-    assert used == "colmap" and calls[-1] == ["colmap", "mapper"]
-    _, used = mapper.run_mapper(tmp_path / "db", tmp_path, tmp_path / "s", "auto", num_images=mapper.AUTO_GLOBAL_MIN_IMAGES + 1)
-    assert used == "glomap" and calls[-1] == ["colmap", "global_mapper"]
+        def stats(self):
+            return self._s
+
+    runs = []
+
+    def fake_single(db, img, out, pref, log, prog, n):
+        runs.append(pref)
+        return (Rec(60, 14.4, 1.4), "colmap") if pref == "colmap" else (Rec(60, 22.1, 1.3), "glomap")
+
+    monkeypatch.setattr(mapper, "_run_single", fake_single)
+    rec, used = mapper.run_mapper(tmp_path / "db", tmp_path, tmp_path / "s", "auto", num_images=60)
+    assert runs == ["colmap", "glomap"] and used == "auto:glomap" and rec.stats()["meanTrackLength"] == 22.1
+
+    # more registered images beat track length
+    def fake2(db, img, out, pref, log, prog, n):
+        return (Rec(60, 6.0, 0.6), "colmap") if pref == "colmap" else (Rec(40, 9.0, 0.5), "glomap")
+    monkeypatch.setattr(mapper, "_run_single", fake2)
+    assert mapper.run_mapper(tmp_path / "db", tmp_path, tmp_path / "s", "auto", num_images=60)[1] == "auto:colmap"
+
+    # large sets: global only
+    runs.clear(); monkeypatch.setattr(mapper, "_run_single", fake_single)
+    mapper.run_mapper(tmp_path / "db", tmp_path, tmp_path / "s", "auto", num_images=mapper.AUTO_BOTH_MAX + 1)
+    assert runs == ["auto"]
