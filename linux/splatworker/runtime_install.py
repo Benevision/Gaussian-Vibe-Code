@@ -32,7 +32,7 @@ def installed_components() -> Dict[str, bool]:
     importlib.invalidate_caches()
     return {"lightglue": _has("lightglue"), "pycolmap": _has("pycolmap"), "sam2": _has("sam2"),
             "transformers": _has("transformers"), "torchvision": _has("torchvision"),
-            "processing": all(_has(m) for m in ("lightglue", "pycolmap", "sam2", "transformers", "torchvision"))}
+            "processing": all(_has(m) for m in ("lightglue", "pycolmap", "sam2", "transformers", "torchvision", "av"))}
 
 
 def _profile():

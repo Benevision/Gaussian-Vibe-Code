@@ -380,6 +380,9 @@ class JobManager:
 # Datasets
 # ---------------------------------------------------------------------------
 
+_RAW_NAME = re.compile(r"[A-Za-z0-9._ -]{1,200}")
+
+
 def dataset_root(settings: ServerSettings, dataset_id: str) -> Optional[Path]:
     if not ID_RE.match(dataset_id or ""):
         return None
@@ -596,6 +599,43 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         finally:
             tmp.unlink(missing_ok=True)
         log.info("dataset %s uploaded (%d bytes zip, %s)", dataset_id, received, info)
+        return {"datasetId": dataset_id}
+
+    @app.post("/v1/datasets/file")
+    async def upload_file(request: Request, name: str):
+        """One raw file (e.g. a multi-GB video) as a dataset, streamed to disk: no zip, no client-side copy.
+        The file lands at the dataset root as ``name`` (a plain file name)."""
+        if not _RAW_NAME.fullmatch(name or "") or name.startswith("."):
+            raise ApiError(400, "name must be a plain file name")
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > settings.max_upload_bytes:
+                    raise ApiError(413, f"upload exceeds {settings.max_upload_bytes} bytes")
+            except ValueError:
+                raise ApiError(400, "invalid Content-Length")
+        dataset_id = "d" + uuid.uuid4().hex[:11]
+        partial = settings.datasets_dir / f".{dataset_id}.partial"
+        files = partial / "files"
+        files.mkdir(parents=True)
+        received = 0
+        try:
+            with open(files / name, "wb") as fh:
+                async for chunk in request.stream():
+                    received += len(chunk)
+                    if received > settings.max_upload_bytes:
+                        raise ApiError(413, f"upload exceeds {settings.max_upload_bytes} bytes")
+                    fh.write(chunk)
+            if received == 0:
+                raise ApiError(400, "empty body")
+            info = {"datasetId": dataset_id, "createdAt": _now_iso(), "bytes": received,
+                    "hasDatasetJson": False, "file": name, "root": "files"}
+            _write_json_atomic(partial / "meta.json", info)
+            os.replace(partial, settings.datasets_dir / dataset_id)
+        except BaseException:
+            shutil.rmtree(partial, ignore_errors=True)
+            raise
+        log.info("file dataset %s uploaded (%s, %d bytes)", dataset_id, name, received)
         return {"datasetId": dataset_id}
 
     @app.get("/v1/datasets")

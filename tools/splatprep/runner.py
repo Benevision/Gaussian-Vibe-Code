@@ -67,8 +67,10 @@ def normalize_request(request: dict) -> dict:
     req = dict(DEFAULTS)
     req.update({k: v for k, v in request.items() if v is not None})
     task = req.get("task")
-    if task not in ("sfm", "masks", "benchmark", "maskpreview"):
-        raise RequestError(f"unknown task: {task!r} (expected sfm | masks | benchmark | maskpreview)")
+    if task not in ("sfm", "masks", "benchmark", "maskpreview", "frames"):
+        raise RequestError(f"unknown task: {task!r} (expected sfm | masks | benchmark | maskpreview | frames)")
+    if task == "frames" and not req.get("video"):
+        raise RequestError("task frames needs 'video'")
     if task == "sfm" and req["matching"] not in ("sequential", "exhaustive", "retrieval", "auto"):
         raise RequestError(f"unknown matching: {req['matching']!r}")
     if task == "sfm" and req["mapper"] not in ("glomap", "colmap", "pycolmap", "auto"):
@@ -87,6 +89,8 @@ def run_request(request: dict, workdir: Path, progress: Optional[ProgressFn] = N
         stats = run_mask_task(req, workdir, progress)
     elif req["task"] == "maskpreview":
         stats = run_maskpreview_task(req, workdir, progress)
+    elif req["task"] == "frames":
+        stats = run_frames_task(req, workdir, progress)
     else:
         from .benchmark import run_benchmark_request
 
@@ -206,6 +210,22 @@ def run_mask_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:
     sp.message("masks", f"{model}: {len(names)} images, device {device}")
     info = run_masks(model, image_dir, names, out_dir, device, sp.sub("masks"), req.get("maskPrompt"), bool(req.get("invertMask")), request=req)
     return {"task": "masks", "device": device, "status": "ok", **info}
+
+
+def run_frames_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:
+    """Video → ``outputDir/images`` (+ ``masks``) and ``frames.json`` — the Mac app's frame extraction."""
+    from .frames import extract_frames
+
+    video = _resolve(workdir, req["video"])
+    if not video.is_file():
+        raise RequestError(f"video not found: {req['video']}")
+    out_dir = _resolve(workdir, req["outputDir"])
+    stage = "splitting 360° video" if req.get("equirect") else "extracting frames"
+    sp = StagedProgress(progress, [(stage, 1.0)])
+    device = select_device(req.get("device"))
+    info = extract_frames(video, out_dir, req.get("videoOptions") or {}, req.get("equirect"), device,
+                          sp.sub(stage), lambda m: sp.message(stage, m))
+    return {"task": "frames", "device": device, "status": "ok", **info}
 
 
 def run_maskpreview_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:

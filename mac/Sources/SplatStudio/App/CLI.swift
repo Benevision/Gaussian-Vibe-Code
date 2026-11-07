@@ -61,13 +61,46 @@ enum CLI {
             case "dynamic": o.masking.model = .splatprep(maskModelId: "dynamic")
             default: break
             }
+            // [--worker http://host:port [--token T]] uses a Linux worker ("Remote" placement);
+            // [--frames-only] stops after frame extraction (video / 360° video); [--end seconds] trims the video.
+            var worker: WorkerClient? = nil
+            if let w = value("--worker"), let u = URL(string: w) {
+                worker = WorkerClient(baseURL: u, token: value("--token"))
+                o.compute = .remote
+            }
+            if let e = value("--end").flatMap(Double.init) { o.video.endTime = e }
             let sem = DispatchSemaphore(value: 0)
             var exitCode: Int32 = 0
             let start = Date()
+            if a.contains("--frames-only") {
+                let wk = worker, opts = o.resolved
+                Task.detached {
+                    do {
+                        let dir = out.appendingPathComponent("frames")
+                        let p: PipelineProgressHandler = { p in print("  \(p.stage) \(p.fraction >= 0 ? String(format: "%3.0f%%", p.fraction * 100) : "  …") \(p.message)"); fflush(stdout) }
+                        var fs: FrameSet
+                        switch source {
+                        case .video(let u):
+                            if let r = try await DatasetBuilder.framesOnWorker(u, equirect: nil, opts, worker: wk, into: dir, progress: p) { fs = r }
+                            else { fs = try await VideoFrameExtractor.extract(video: u, options: opts.video, into: dir, progress: p) }
+                        case .video360(let u):
+                            if let r = try await DatasetBuilder.framesOnWorker(u, equirect: opts.equirect, opts, worker: wk, into: dir, progress: p) { fs = r }
+                            else { fs = try await Equirect360.extract(video: u, video: opts.video, options: opts.equirect, into: dir, progress: p) }
+                        default: throw PipelineError.unsupported("--frames-only needs a video")
+                        }
+                        let groups = Set(fs.frames.compactMap(\.group)).count
+                        print(String(format: "Frames ready: %d images (%d groups, %d masks, %d rejected) in %.0f s → %@", fs.frames.count, groups,
+                                     fs.frames.filter { $0.mask != nil }.count, fs.rejected.count, Date().timeIntervalSince(start), dir.path))
+                    } catch { fputs("error: \(error.localizedDescription)\n", stderr); exitCode = 1 }
+                    sem.signal()
+                }
+                sem.wait()
+                exit(exitCode)
+            }
             Task.detached {
                 do {
                     var last = ""
-                    var ds = try await DatasetBuilder.build(source: source, options: o, into: out.appendingPathComponent("dataset")) { p in
+                    var ds = try await DatasetBuilder.build(source: source, options: o, into: out.appendingPathComponent("dataset"), worker: worker) { p in
                         let line = "\(p.stage) \(p.fraction >= 0 ? String(format: "%3.0f%%", p.fraction * 100) : "  …") \(p.message)"
                         if line != last { print("  " + line); fflush(stdout); last = line }
                     }

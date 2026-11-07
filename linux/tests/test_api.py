@@ -390,11 +390,34 @@ def test_process_without_splatprep(client, monkeypatch):
 
 
 @pytest.mark.parametrize("req", [None, {"task": "dance"}, {"task": "sfm", "outputDir": "../../x"},
-                                 {"task": "sfm", "imagesDir": "/etc"}, {"task": "sfm", "priorPoses": "../p.json"}])
+                                 {"task": "sfm", "imagesDir": "/etc"}, {"task": "sfm", "priorPoses": "../p.json"},
+                                 {"task": "frames"}, {"task": "frames", "video": "../../v.mp4"}])
 def test_process_request_validation(client, req):
     ds = upload(client, _images_zip()).json()["datasetId"]
     r = client.post("/v1/process", headers=AUTH, json={"datasetId": ds, "request": req})
     assert r.status_code == 400 and "error" in r.json()
+
+
+def test_raw_file_upload(client, tmp_path):
+    r = client.post("/v1/datasets/file?name=clip.mp4", content=b"\x00" * 1000, headers={**AUTH, "Content-Type": "application/octet-stream"})
+    assert r.status_code == 200, r.text
+    ds = r.json()["datasetId"]
+    listed = {d["datasetId"]: d for d in client.get("/v1/datasets", headers=AUTH).json()}
+    assert listed[ds]["file"] == "clip.mp4" and listed[ds]["bytes"] == 1000
+    j = client.post("/v1/process", headers=AUTH,
+                    json={"datasetId": ds, "request": {"task": "frames", "video": "clip.mp4"}})
+    assert j.status_code == 200, j.text
+
+
+@pytest.mark.parametrize("name", ["../x.mp4", ".hidden", "a/b.mp4", ""])
+def test_raw_file_upload_rejects_bad_names(client, name):
+    r = client.post(f"/v1/datasets/file?name={name}", content=b"x", headers={**AUTH, "Content-Type": "application/octet-stream"})
+    assert r.status_code in (400, 404, 422)
+
+
+def test_raw_file_upload_size_limit(client):
+    r = client.post("/v1/datasets/file?name=big.mp4", content=b"x" * (6 * 1024 * 1024), headers={**AUTH, "Content-Type": "application/octet-stream"})
+    assert r.status_code == 413
 
 
 # ------------------------------------------------ real subprocess backend

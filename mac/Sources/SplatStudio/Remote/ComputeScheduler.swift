@@ -107,7 +107,8 @@ struct ComputeScheduler: Sendable {
         case .both: pool = devices
         }
         let candidates = pool.filter(capable)
-        // Frame extraction reads local files: keep it local unless forced remote.
+        // Frame extraction reads local files: keep it local unless forced remote. (Videos can still be split on the
+        // worker: DatasetBuilder.framesOnWorker uploads the file itself when PrepOptions.videoOnWorker is on.)
         if stage == .frameExtraction, let local, capable(local) { return StagePlacement(stage: stage, deviceId: local.id, reason: "source files are local") }
         guard !candidates.isEmpty else { return nil }
         let best = candidates.max { score($0, stage, model) < score($1, stage, model) }!

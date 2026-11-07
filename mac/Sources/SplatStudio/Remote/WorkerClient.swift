@@ -18,6 +18,8 @@ struct WorkerInfo: Codable, Hashable, Sendable {
 
     var canTrain: Bool { capabilities?.contains("train") ?? true }
     var canProcess: Bool { capabilities?.contains("process") ?? false }
+    /// Worker ≥ 1.3 with PyAV: splits videos (incl. 360°) itself (`task: frames`).
+    var canExtractFrames: Bool { capabilities?.contains("frames") ?? false }
 }
 
 /// Job state (tolerant: unknown values are preserved).
@@ -158,6 +160,21 @@ final class WorkerClient: @unchecked Sendable {
         return id
     }
 
+    /// `POST /v1/datasets/file?name=…`: streams one file (e.g. a multi-GB video) as a dataset — no zip, no copy.
+    func uploadFile(_ file: URL, name: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
+        let safe = String(name.map { $0.isLetter || $0.isNumber || "._- ".contains($0) ? $0 : "_" }).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        var r = request("v1/datasets/file", method: "POST", contentType: "application/octet-stream")
+        if let u = r.url, var comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
+            comps.queryItems = [URLQueryItem(name: "name", value: safe.isEmpty ? "upload.bin" : safe)]
+            r.url = comps.url
+        }
+        r.timeoutInterval = 3 * 3600
+        let (d, resp) = try await session.upload(for: r, fromFile: file, delegate: UploadProgressDelegate(progress))
+        try check(d, resp)
+        guard let id = try JSONDecoder().decode([String: String].self, from: d)["datasetId"] else { throw WorkerError(status: 200, message: "no datasetId") }
+        return id
+    }
+
     /// Zips a directory (`ditto -c -k --keepParent`) and uploads it. Returns `datasetId`.
     func uploadDataset(directory: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
         let zip = FileManager.default.temporaryDirectory.appendingPathComponent("splat-upload-\(UUID().uuidString).zip")
@@ -290,11 +307,18 @@ final class WorkerClient: @unchecked Sendable {
     /// `masks/`), waits, and unzips the output into `outputDirectory`.
     func runProcessing(directory: URL, request: ProcessingRequest, outputDirectory: URL,
                        progress: PipelineProgressHandler? = nil) async throws {
+        try await runProcessing(upload: { cb in try await self.uploadDataset(directory: directory, progress: cb) },
+                                request: request, outputDirectory: outputDirectory, progress: progress)
+    }
+
+    /// Same as `runProcessing(directory:…)` with a caller-chosen upload (e.g. `uploadFile` for a video).
+    func runProcessing(upload: (@escaping @Sendable (Double) -> Void) async throws -> String, request: ProcessingRequest,
+                       outputDirectory: URL, progress: PipelineProgressHandler? = nil) async throws {
         // Phases on the overall bar: upload 0–15 %, remote work 15–95 %, download 95–100 %.
         let host = baseURL.host ?? "worker"
         let task = request.task.rawValue
         progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0, message: "preparing \(task) job"))
-        let did = try await uploadDataset(directory: directory) { f in
+        let did = try await upload { f in
             progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0.15 * f, message: String(format: "%.0f %%", f * 100)))
         }
         let jid = try await process(datasetId: did, request: request)

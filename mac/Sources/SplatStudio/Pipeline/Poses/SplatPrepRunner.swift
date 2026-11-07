@@ -6,7 +6,7 @@ import simd
 
 /// `ProcessingRequest` of PROTOCOL.md §6 (sent to `python -m splatprep run` or worker `/v1/process`).
 struct ProcessingRequest: Codable, Hashable, Sendable {
-    enum Task: String, Codable, Sendable { case sfm, masks, benchmark }
+    enum Task: String, Codable, Sendable { case sfm, masks, benchmark, frames }
     var task: Task
     var imagesDir: String = "images"
     var outputDir: String = "out"
@@ -44,6 +44,10 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var device: String? = nil
     /// Rig description for multi-camera captures (Splat Studio extension; ignored by toolkits that don't support it).
     var rig: RigHint? = nil
+    /// task = frames: the video (relative to the work dir), its extraction options and, for 360° footage, the views.
+    var video: String? = nil
+    var videoOptions: VideoExtractionOptions? = nil
+    var equirect: Equirect360Options? = nil
 
     struct MaskPrompt: Codable, Hashable, Sendable {
         var points: [[Float]]? = nil   // [x, y, label]

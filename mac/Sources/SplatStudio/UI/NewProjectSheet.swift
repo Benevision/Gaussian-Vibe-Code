@@ -339,6 +339,10 @@ struct NewProjectSheet: View {
         }
     }
 
+    private var isVideoSource: Bool {
+        switch source { case .video, .video360: return true; default: return false }
+    }
+
     @ViewBuilder private var trainingPage: some View {
         Text("Training").font(.title2.bold())
         Text("You can change all of this later and retrain from the same dataset.").foregroundStyle(.secondary)
@@ -347,6 +351,9 @@ struct NewProjectSheet: View {
             TrainingPresetPicker(session: model.training)
             ComputePicker(session: model.training, prepPlacement: $options.compute)
             missingWorkerModelsNotice
+            if options.compute != .thisMac, isVideoSource {
+                SettingRow(id: "net.videoOnWorker") { Toggle("", isOn: $options.videoOnWorker).labelsHidden() }
+            }
             DisclosureGroup(isExpanded: $showTrainingDetails) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Changing any value switches the preset to Custom. Every setting has an ⓘ explanation.")

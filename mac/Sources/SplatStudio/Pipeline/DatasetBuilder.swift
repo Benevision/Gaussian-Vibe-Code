@@ -99,6 +99,8 @@ struct PrepOptions: Codable, Hashable, Sendable {
     var compute: ComputePlacement = .thisMac
     /// Worker used for remote / both placement (WorkerBrowser id).
     var remoteWorkerId: String? = nil
+    /// With a worker in use, split videos (incl. 360°) on it: the video is uploaded once and the views come back.
+    var videoOnWorker: Bool = true
     /// Use the known stereo baseline to rescale the solved scene to metres.
     var metricScaleFromStereo: Bool = true
     /// After solving, re-derive right-eye poses from the left eye and the rig (stereo), and 360 view poses
@@ -116,7 +118,7 @@ struct PrepOptions: Codable, Hashable, Sendable {
         objectCaptureHighSensitivity = c(.objectCaptureHighSensitivity, objectCaptureHighSensitivity)
         sfmCameraModel = c(.sfmCameraModel, sfmCameraModel); masking = c(.masking, masking)
         holdoutInterval = c(.holdoutInterval, holdoutInterval); maxImageSize = c(.maxImageSize, maxImageSize)
-        compute = c(.compute, compute); remoteWorkerId = c(.remoteWorkerId, remoteWorkerId)
+        compute = c(.compute, compute); remoteWorkerId = c(.remoteWorkerId, remoteWorkerId); videoOnWorker = c(.videoOnWorker, videoOnWorker)
         metricScaleFromStereo = c(.metricScaleFromStereo, metricScaleFromStereo)
         enforceRigConstraints = c(.enforceRigConstraints, enforceRigConstraints); keepIntermediates = c(.keepIntermediates, keepIntermediates)
     }
@@ -139,6 +141,28 @@ enum DatasetBuilder {
     /// - Parameters:
     ///   - dir: output dataset directory (created; images are written into `dir/images`).
     ///   - worker: client used when `options.compute` puts SfM on a remote worker.
+    /// Splits a video on the worker when one is in use and supports it; nil = do it on this Mac.
+    /// A worker failure (old version, network) falls back to this Mac with a note instead of failing the build.
+    static func framesOnWorker(_ u: URL, equirect: Equirect360Options?, _ o: PrepOptions, worker: WorkerClient?,
+                               into dir: URL, progress: PipelineProgressHandler?) async throws -> FrameSet? {
+        guard o.videoOnWorker, o.compute != .thisMac, let worker else { return nil }
+        let stage = equirect == nil ? "Extracting frames" : "Splitting 360° video"
+        guard let info = try? await worker.info(timeout: 10), info.canExtractFrames else {
+            progress?(PipelineProgress(stage: stage, fraction: -1, message: "the worker can't split videos yet (update it and install the processing models) — doing it on this Mac"))
+            return nil
+        }
+        do {
+            return try await RemoteFrameExtraction.extract(video: u, options: o.video, equirect: equirect, into: dir, worker: worker, progress: progress)
+        } catch let e as CancellationError {
+            throw e
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            for sub in ["images", "masks"] { try? FileManager.default.removeItem(at: dir.appendingPathComponent(sub)) }
+            progress?(PipelineProgress(stage: stage, fraction: -1, message: "worker couldn't split the video (\(error.localizedDescription)) — doing it on this Mac"))
+            return nil
+        }
+    }
+
     static func build(source: SourceDescription, options: PrepOptions = .init(), into dir: URL,
                       worker: WorkerClient? = nil, progress: PipelineProgressHandler? = nil) async throws -> PreparedDataset {
         let o = options.resolved
@@ -187,9 +211,11 @@ enum DatasetBuilder {
         case .photoFiles(let files):
             frames = try await PhotoIngest.ingest(files: files, options: o.photos, into: dir, progress: ingestP)
         case .video(let u):
-            frames = try await VideoFrameExtractor.extract(video: u, options: o.video, into: dir, progress: ingestP)
+            if let f = try await framesOnWorker(u, equirect: nil, o, worker: worker, into: dir, progress: ingestP) { frames = f }
+            else { frames = try await VideoFrameExtractor.extract(video: u, options: o.video, into: dir, progress: ingestP) }
         case .video360(let u):
-            frames = try await Equirect360.extract(video: u, video: o.video, options: o.equirect, into: dir, progress: ingestP)
+            if let f = try await framesOnWorker(u, equirect: o.equirect, o, worker: worker, into: dir, progress: ingestP) { frames = f }
+            else { frames = try await Equirect360.extract(video: u, video: o.video, options: o.equirect, into: dir, progress: ingestP) }
         case .photos360(let folder):
             frames = try await Equirect360.extract(photos: PhotoIngest.listImages(in: folder, recursive: false), options: o.equirect,
                                                    encoding: o.photos.encoding, into: dir, progress: ingestP)

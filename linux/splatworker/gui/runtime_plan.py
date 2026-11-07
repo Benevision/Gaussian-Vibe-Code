@@ -68,7 +68,9 @@ LIGHTGLUE_DEPS = ["kornia>=0.7",
 # runtime is Python 3.10 + PyTorch 2.4 (pinned for gsplat). OWLv2 has been in transformers since 4.35.
 PROCESSING_DEPS = ["pycolmap>=3.10", "transformers>=4.38,<4.50", "huggingface_hub>=0.20", "safetensors",
                    # SAM 2's own runtime deps (SAM 2 itself is installed with --no-deps, see below)
-                   "hydra-core>=1.3.2", "iopath>=0.1.10", "tqdm"]
+                   "hydra-core>=1.3.2", "iopath>=0.1.10", "tqdm",
+                   # video → frames on the worker (bundled FFmpeg; 8K HEVC decodes on the CPU threads)
+                   "av>=12"]
 # Installed with --no-deps: SAM 2 declares torch>=2.5.1, and letting pip resolve that silently replaced the
 # runtime's torch 2.4.1 (+cu124) with the newest PyPI build, which gsplat's prebuilt CUDA kernels can't load
 # ("'NoneType' object has no attribute 'CameraModelType'"). SAM 2 runs fine on torch 2.4.
@@ -440,6 +442,7 @@ except Exception as _e:
     r["torchvisionError"] = str(_e)[:200]
 r["sam2"] = has("sam2")
 r["transformers"] = has("transformers")
+r["av"] = has("av")
 print("SPLATWORKER-VERIFY " + json.dumps(r), flush=True)
 """
 

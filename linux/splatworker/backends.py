@@ -59,13 +59,15 @@ class SubprocessBackend(Backend):
 
     def capabilities(self) -> List[str]:
         from .gpu import training_available
-        from .processing import splatprep_available
+        from .processing import frames_available, splatprep_available
 
         caps = []
         if training_available():
             caps.append("train")
         if splatprep_available():
             caps.append("process")
+        if frames_available():
+            caps.append("frames")
         return caps
 
     def models(self) -> List[str]:

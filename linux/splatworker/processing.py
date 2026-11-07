@@ -28,6 +28,14 @@ def splatprep_available() -> bool:
         return False
 
 
+def frames_available() -> bool:
+    """Video → frames (splatprep ``task: frames``) needs PyAV, installed with the processing models."""
+    try:
+        return splatprep_available() and importlib.util.find_spec("av") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def available_models() -> List[str]:
     """``splatprep.models.available_models()`` if importable, else []."""
     if not splatprep_available():
@@ -55,13 +63,15 @@ def validate_request(request: Any) -> Dict[str, Any]:
     if not isinstance(request, dict):
         raise ProcessingError("request must be a JSON object")
     task = request.get("task")
-    if task not in ("sfm", "masks", "benchmark"):
-        raise ProcessingError("request.task must be one of 'sfm', 'masks', 'benchmark'")
+    if task not in ("sfm", "masks", "benchmark", "frames"):
+        raise ProcessingError("request.task must be one of 'sfm', 'masks', 'benchmark', 'frames'")
     req = dict(request)
     req["imagesDir"] = _safe_rel(req.get("imagesDir", "images"), "imagesDir")
     req["outputDir"] = _safe_rel(req.get("outputDir", "out"), "outputDir")
     if req.get("priorPoses") is not None:
         req["priorPoses"] = _safe_rel(req["priorPoses"], "priorPoses")
+    if task == "frames":
+        req["video"] = _safe_rel(req.get("video"), "video")
     return req
 
 
