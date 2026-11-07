@@ -264,6 +264,12 @@ final class AppModel {
     /// from outside shows the haze of splats beyond the walls that no photo constrained (indoor captures),
     /// while every capture viewpoint shows the scene as photographed. Without a project: the bounding box.
     func frameScene() {
+        // Watching a worker job: its own capture viewpoints (the open project, if any, is another scene).
+        if remoteWatch.watched != nil, let cams = remoteWatch.cameras, let cam = Self.centralCamera(cams) {
+            if let u = remoteWatch.cameraUp { worldUp = u }
+            lookThrough(cam, sceneCenter: Self.mean(cams.map(\.center)))
+            return
+        }
         if let ds = dataset, let cam = Self.centralCamera(ds) {
             worldUp = SIMD3(ds.manifest.upVector[0], ds.manifest.upVector[1], ds.manifest.upVector[2])
             lookThrough(cam)
@@ -297,16 +303,18 @@ final class AppModel {
     }
 
     /// The training camera nearest the middle of the capture path (ties: the earlier one).
-    static func centralCamera(_ ds: PreparedDataset) -> DatasetCamera? {
-        let cams = ds.manifest.cameras.filter { $0.holdout != true }
-        guard !cams.isEmpty else { return ds.manifest.cameras.first }
-        let mid = cams.map(\.center).reduce(SIMD3<Float>(repeating: 0), +) / Float(cams.count)
+    static func centralCamera(_ ds: PreparedDataset) -> DatasetCamera? { centralCamera(ds.manifest.cameras) }
+    static func centralCamera(_ all: [DatasetCamera]) -> DatasetCamera? {
+        let cams = all.filter { $0.holdout != true }
+        guard !cams.isEmpty else { return all.first }
+        let mid = mean(cams.map(\.center))
         return cams.min { simd_distance($0.center, mid) < simd_distance($1.center, mid) }
     }
+    static func mean(_ p: [SIMD3<Float>]) -> SIMD3<Float> { p.isEmpty ? .zero : p.reduce(SIMD3<Float>(repeating: 0), +) / Float(p.count) }
 
-    func lookThrough(_ cam: DatasetCamera) {
+    func lookThrough(_ cam: DatasetCamera, sceneCenter: SIMD3<Float>? = nil) {
         var c = renderer.camera
-        let ctr = dataset.map { SIMD3($0.manifest.sceneCenter[0], $0.manifest.sceneCenter[1], $0.manifest.sceneCenter[2]) } ?? .zero
+        let ctr = sceneCenter ?? dataset.map { SIMD3($0.manifest.sceneCenter[0], $0.manifest.sceneCenter[1], $0.manifest.sceneCenter[2]) } ?? .zero
         let focus = max(simd_distance(cam.center, ctr), 0.1)
         c.adopt(cameraToWorld: cam.c2w, focusDistance: focus, fovY: 2 * atan(Float(cam.height) / (2 * cam.fy)), worldUp: worldUp)
         c.mode = cameraMode

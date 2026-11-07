@@ -223,7 +223,12 @@ enum DatasetBuilder {
                 if Double(sol.poses.count) >= 0.5 * Double(frames.frames.count) {
                     let stem = { (p: String) in ((p as NSString).lastPathComponent as NSString).deletingPathExtension }
                     let captured = Dictionary(ds.manifest.cameras.map { (stem($0.image), $0) }, uniquingKeysWith: { a, _ in a })
+                    let gravity = ds.manifest.gravityUp
                     ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.capture.images.holdoutInterval)
+                    // The refined poses are Sim3-aligned back onto the capture's frame (rotation ≈ 0.5°), so the
+                    // phone's measured gravity still holds — without it, levelling falls back to guessing from how
+                    // the camera was held, which tilts handheld phone scans badly.
+                    if ds.manifest.gravityUp == nil { ds.manifest.gravityUp = gravity }
                     // Per-frame capture data the pose solution doesn't carry: exposure (lets training see that
                     // exposure was locked and skip per-photo colour correction), time and source group.
                     for i in ds.manifest.cameras.indices {

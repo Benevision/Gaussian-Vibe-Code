@@ -191,7 +191,7 @@ final class WorkerClient: @unchecked Sendable {
         return id
     }
 
-    struct JobCameras: Decodable { var cameras: [DatasetCamera]; var sceneExtent: Float? }
+    struct JobCameras: Decodable { var cameras: [DatasetCamera]; var sceneExtent: Float?; var upVector: [Float]? }
     /// `GET /v1/jobs/{id}/cameras` (worker ≥ 1.3.1): the training job's cameras, in its splats' coordinates.
     func jobCameras(_ id: String) async throws -> JobCameras { try await json(request("v1/jobs/\(id)/cameras")) }
 

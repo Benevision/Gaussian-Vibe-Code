@@ -35,6 +35,7 @@ final class RemoteJobWatcher {
     /// instead of the open project's cameras, which belong to a different scene.
     private(set) var cameras: [DatasetCamera]? = nil
     private(set) var cameraExtent: Float? = nil
+    private(set) var cameraUp: SIMD3<Float>? = nil
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var task: Task<Void, Never>?
 
@@ -48,7 +49,7 @@ final class RemoteJobWatcher {
     }
 
     func stop() {
-        task?.cancel(); task = nil; watched = nil; cameras = nil; cameraExtent = nil
+        task?.cancel(); task = nil; watched = nil; cameras = nil; cameraExtent = nil; cameraUp = nil
         history = []; evalHistory = []
         app?.updateCameraLines()
     }
@@ -94,6 +95,7 @@ final class RemoteJobWatcher {
             }
             if cameras == nil, let jc = try? await client.jobCameras(w.jobId) {
                 cameras = jc.cameras; cameraExtent = jc.sceneExtent
+                if let u = jc.upVector, u.count == 3 { cameraUp = SIMD3(u[0], u[1], u[2]) }
                 app?.updateCameraLines()
             }
             if first, history.isEmpty, let log = try? await client.log(w.jobId) { backfill(log) }
