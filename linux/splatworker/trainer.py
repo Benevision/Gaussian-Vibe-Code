@@ -502,7 +502,7 @@ def init_points(ds: DatasetInfo, cfg: TrainingConfig, region_box, log) -> tuple:
     return xyz.astype(np.float32), rgb.astype(np.float32)
 
 
-def export_ply(splats, path: Path, region_box=None) -> int:
+def export_ply(splats, path: Path, region_box=None, up=None) -> int:
     import torch
 
     with torch.no_grad():
@@ -522,7 +522,7 @@ def export_ply(splats, path: Path, region_box=None) -> int:
         means_np = get("means")
         write_gaussian_ply(path, means_np, get("sh0"),
                            get("shN") if splats["shN"].shape[1] > 0 else None,
-                           get("opacities"), get("scales"), get("quats"))
+                           get("opacities"), get("scales"), get("quats"), up=up)
         return int(means_np.shape[0])
 
 
@@ -911,7 +911,9 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                 log(f"step {cur}/{cfg.iterations} loss {loss_ema or 0:.4f} psnr {psnr_ema or 0:.2f} "
                     f"gaussians {ngs} sh {sh_degree}")
 
-    final_n = export_ply(params, Path(out_path))  # uncropped: the Mac merger crops with open outer faces
+    g_up = ds.raw.get("gravityUp") if isinstance(ds.raw, dict) else None
+    scene_up = g_up if isinstance(g_up, list) and len(g_up) == 3 else ds.up_vector
+    final_n = export_ply(params, Path(out_path), up=scene_up)  # uncropped: the Mac merger crops with open outer faces
     elapsed = time.time() - t_start
     stats = {"numGaussians": final_n, "psnr": last_eval_psnr if last_eval_psnr is not None else psnr_ema,
              "loss": loss_ema, "elapsedSeconds": elapsed, "previewStep": preview_step}

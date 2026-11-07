@@ -458,6 +458,7 @@ struct AdvancedTrainingSettings: View {
             }
             SettingRow(id: "train.longAxisSplit", showSummary: false) { Toggle("", isOn: c.longAxisSplit).labelsHidden() }
             SettingRow(id: "train.appearanceCorrection", showSummary: false) { Toggle("", isOn: c.appearanceCorrection).labelsHidden() }
+            SettingRow(id: "train.bilateralGrid", showSummary: false) { Toggle("", isOn: c.bilateralGrid).labelsHidden() }
             if session.config.appearanceCorrection {
                 SettingRow(id: "train.appearanceLR", showSummary: false) { NumberSlider(value: c.appearanceLR.double, range: 0.001...0.1, log: true, width: 90) }
                 SettingRow(id: "train.appearanceReg", showSummary: false) { NumberSlider(value: c.appearanceReg.double, range: 0...0.1, width: 90) }

@@ -58,6 +58,10 @@ struct TrainingConfig: Codable, Equatable {
     var appearanceLR: Float = 0.02
     /// Pulls each photo's correction towards its starting value (higher = corrections stay smaller).
     var appearanceReg: Float = 0.001
+    /// Per-photo LOCAL colour correction (bilateral grid) — Linux worker only; the Mac trainer ignores it.
+    /// For long captures where lighting moves between shots (drone flights: sun and shadows). Replaces the
+    /// global per-photo correction when on.
+    var bilateralGrid = false
     /// Down-weight LiDAR / stereo depth at image edges, where depth sensors are least reliable.
     var depthEdgeAware = true
     /// Penalty on splats whose longest axis exceeds `anisotropyMaxRatio` × their shortest (needle splats
@@ -98,7 +102,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.transientMaxViewGap, &transientMaxViewGap)
         d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio); d(.longAxisSplit, &longAxisSplit)
         d(.bigSplatReg, &bigSplatReg); d(.bigSplatMaxAngle, &bigSplatMaxAngle)
-        d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg)
+        d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
     }

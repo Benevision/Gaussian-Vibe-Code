@@ -218,3 +218,15 @@ def test_select_cameras(dataset_dir):
     region = Region(min=(3.5, -0.2, -0.2), max=(4.0, 0.2, 0.2))
     ids = [c.id for c in select_cameras(ds, None, region.expanded())]
     assert ids == [2]
+
+
+def test_ply_records_scene_up(tmp_path):
+    import numpy as np
+    from splatworker.ply import write_gaussian_ply
+    p = tmp_path / "s.ply"
+    n = 2
+    write_gaussian_ply(p, np.zeros((n, 3)), np.zeros((n, 3)), None, np.zeros(n), np.zeros((n, 3)),
+                       np.tile([1.0, 0, 0, 0], (n, 1)), up=[0, 0, 1])
+    head = p.read_bytes()[:300].decode("ascii", "replace")
+    assert "comment splatstudio_up 0 0 1\n" in head
+    assert head.index("comment splatstudio_up") < head.index("element vertex")

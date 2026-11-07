@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.3.7" date="2026-11-07">
+      <description>
+        <p>Trained splats record the scene's up direction, so drone and other Z-up scenes open the right way up in Splat Studio.</p>
+      </description>
+    </release>
     <release version="1.3.6" date="2026-11-07">
       <description>
         <p>Optional per-photo local colour correction (bilateralGrid): lets each photo have its own shadows and lighting, for long drone flights where the sun moves between shots.</p>

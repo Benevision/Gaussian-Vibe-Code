@@ -59,8 +59,12 @@ def write_gaussian_ply(
     opacity_logits: np.ndarray,
     log_scales: np.ndarray,
     quats_wxyz: np.ndarray,
+    up=None,
 ) -> None:
     """Write a standard 3DGS PLY atomically (tmp file + rename).
+
+    ``up`` (the scene's up direction, from the dataset) is recorded as ``comment splatstudio_up x y z`` so
+    Splat Studio opens the result the right way up (other viewers ignore comments).
 
     Args:
         means: [N, 3]
@@ -96,7 +100,11 @@ def write_gaussian_ply(
     names = gaussian_property_names()
     assert data.shape[1] == len(names)
 
-    header = ["ply", "format binary_little_endian 1.0", f"element vertex {n}"]
+    header = ["ply", "format binary_little_endian 1.0"]
+    if up is not None:
+        u = [float(x) for x in np.asarray(up, dtype=np.float64).reshape(3)]
+        header.append(f"comment splatstudio_up {u[0]:.6g} {u[1]:.6g} {u[2]:.6g}")
+    header.append(f"element vertex {n}")
     header += [f"property float {p}" for p in names]
     header.append("end_header")
     header_bytes = ("\n".join(header) + "\n").encode("ascii")
