@@ -398,6 +398,15 @@ def test_process_request_validation(client, req):
     assert r.status_code == 400 and "error" in r.json()
 
 
+def test_job_cameras(client, dataset_zip):
+    ds = upload(client, dataset_zip).json()["datasetId"]
+    j = client.post("/v1/jobs", headers=AUTH, json={"datasetId": ds, "name": "t", "config": {"iterations": 10}}).json()["jobId"]
+    r = client.get(f"/v1/jobs/{j}/cameras", headers=AUTH)
+    assert r.status_code == 200, r.text
+    cams = r.json()["cameras"]
+    assert cams and len(cams[0]["cameraToWorld"]) == 4 and "fx" in cams[0]
+
+
 def test_raw_file_upload(client, tmp_path):
     r = client.post("/v1/datasets/file?name=clip.mp4", content=b"\x00" * 1000, headers={**AUTH, "Content-Type": "application/octet-stream"})
     assert r.status_code == 200, r.text

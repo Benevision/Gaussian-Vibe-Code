@@ -21,6 +21,10 @@ final class RemoteJobWatcher {
     }
 
     private(set) var watched: Watched?
+    /// The watched job's cameras (nil = unknown: older worker). While watching, the viewer draws these
+    /// instead of the open project's cameras, which belong to a different scene.
+    private(set) var cameras: [DatasetCamera]? = nil
+    private(set) var cameraExtent: Float? = nil
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var task: Task<Void, Never>?
 
@@ -31,14 +35,22 @@ final class RemoteJobWatcher {
         task = Task { [weak self] in await self?.loop() }
     }
 
-    func stop() { task?.cancel(); task = nil; watched = nil }
+    func stop() {
+        task?.cancel(); task = nil; watched = nil; cameras = nil; cameraExtent = nil
+        app?.updateCameraLines()
+    }
 
     private func loop() async {
         var shownPreview: Int? = nil
         var first = true
+        app?.updateCameraLines()   // hide the open project's cameras straight away
         while !Task.isCancelled, let w = watched {
             guard let client = WorkerBrowser.shared.client(for: w.workerId) else {
                 watched?.message = "\(w.workerName) is offline"; try? await Task.sleep(nanoseconds: 5_000_000_000); continue
+            }
+            if cameras == nil, let jc = try? await client.jobCameras(w.jobId) {
+                cameras = jc.cameras; cameraExtent = jc.sceneExtent
+                app?.updateCameraLines()
             }
             if let s = try? await client.job(w.jobId) {
                 watched?.state = s.state.rawValue

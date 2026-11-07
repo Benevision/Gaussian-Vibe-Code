@@ -754,6 +754,23 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}-preview.splat",
                             headers=headers)
 
+    @app.get("/v1/jobs/{job_id}/cameras")
+    def get_job_cameras(job_id: str):
+        """The training job's cameras (same coordinates as its splats) — lets a viewer that watches the job
+        draw the right camera frustums instead of whatever project it has open."""
+        job = manager.get(job_id)
+        root = dataset_root(settings, job.spec.get("datasetId", "")) if job.spec.get("datasetId") else None
+        dj = root / "dataset.json" if root is not None else None
+        if dj is None or not dj.is_file():
+            raise ApiError(404, "job has no dataset cameras")
+        try:
+            raw = json.loads(dj.read_text(encoding="utf-8"))
+        except Exception:
+            raise ApiError(500, "unreadable dataset.json")
+        keys = ("image", "width", "height", "fx", "fy", "cx", "cy", "cameraToWorld", "holdout")
+        cams = [{"id": i, **{k: c.get(k) for k in keys if k in c}} for i, c in enumerate(raw.get("cameras") or [])]
+        return {"cameras": cams, "sceneExtent": raw.get("sceneExtent"), "upVector": raw.get("upVector")}
+
     @app.get("/v1/jobs/{job_id}/result.ply")
     def get_result(job_id: str):
         job = manager.get(job_id)

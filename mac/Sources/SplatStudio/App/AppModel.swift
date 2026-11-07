@@ -284,11 +284,21 @@ final class AppModel {
         renderer.camera = c
     }
 
+    static func extent(of cams: [DatasetCamera]) -> Float {
+        guard !cams.isEmpty else { return 1 }
+        let c = cams.map(\.center), m = c.reduce(SIMD3<Float>(repeating: 0), +) / Float(c.count)
+        return max(1e-3, 1.1 * (c.map { simd_length($0 - m) }.max() ?? 1))
+    }
+
     func updateCameraLines() {
         var lines: [LineVertex] = []
-        if viewer.showCameras, let ds = dataset {
-            let size = ds.manifest.sceneExtent * 0.04
-            for cam in ds.manifest.cameras {
+        // Watching a worker job: its own cameras (or none), never the open project's — they're another scene.
+        let watching = remoteWatch.watched != nil
+        let cams: [DatasetCamera] = watching ? (remoteWatch.cameras ?? []) : (dataset?.manifest.cameras ?? [])
+        let extent: Float = watching ? (remoteWatch.cameraExtent ?? Self.extent(of: cams)) : (dataset?.manifest.sceneExtent ?? 1)
+        if viewer.showCameras, !cams.isEmpty {
+            let size = extent * 0.04
+            for cam in cams {
                 let m = cam.c2w
                 let o = cam.center
                 let col: SIMD4<Float> = (cam.holdout ?? false) ? SIMD4(1, 0.6, 0.1, 0.9) : SIMD4(0.3, 0.7, 1, 0.8)
