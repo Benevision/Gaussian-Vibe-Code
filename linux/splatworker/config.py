@@ -84,6 +84,12 @@ class TrainingConfig:
     appearanceCorrection: bool = True
     appearanceLR: float = 0.02
     appearanceReg: float = 0.001
+    # Per-photo LOCAL colour correction (bilateral grid: 16×16 image cells × 8 brightness levels of 3×4 colour
+    # transforms per photo). For lighting that changes across one photo between shots — moving sun / shadows on
+    # long drone flights. Replaces appearanceCorrection when on.
+    bilateralGrid: bool = False
+    bilateralGridLR: float = 2e-3
+    bilateralGridTV: float = 10.0
     # PROTOCOL.md §7 (block-parallel training)
     region: Optional[Region] = None
     cameraIds: Optional[List[int]] = None
@@ -144,9 +150,9 @@ class TrainingConfig:
         need(self.previewInterval >= 0, "previewInterval must be >= 0 (0 disables previews)")
         need(self.evalInterval >= 0, "evalInterval must be >= 0 (0 disables eval)")
         for name in ("lrPosition", "lrPositionFinal", "lrColor", "lrSHRest", "lrOpacity",
-                     "lrScale", "lrRotation"):
+                     "lrScale", "lrRotation", "bilateralGridLR"):
             need(getattr(self, name) > 0, f"{name} must be > 0")
-        for name in ("opacityReg", "scaleReg", "noiseLR", "depthWeight", "densifyGradThreshold"):
+        for name in ("opacityReg", "scaleReg", "noiseLR", "depthWeight", "densifyGradThreshold", "bilateralGridTV"):
             need(getattr(self, name) >= 0, f"{name} must be >= 0")
 
     # ------------------------------------------------------- resolved defaults

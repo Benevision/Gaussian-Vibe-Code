@@ -387,6 +387,81 @@ class AppearanceCorrection:
         self.opts[i].step()
         self.opts[i].zero_grad(set_to_none=True)
 
+class BilateralGrid:
+    """Per-photo *local* colour correction: a coarse 3-D grid of colour transforms per photo.
+
+    The grid spans the image (x, y) and brightness (the rendered pixel's luminance): each cell holds a 3×4 affine
+    colour transform, and every pixel gets the trilinear blend of the cells around (x, y, its luminance). That lets
+    a photo say "this corner is in shadow here" or "highlights are warmer" without the splats having to bake it in —
+    e.g. a drone flight where the sun moved and tree shadows swung round over 90 minutes, which a single 3×3 per
+    photo (AppearanceCorrection) cannot express, so the trainer smeared the shadows into the ground.
+
+    Only used in the loss. Each grid starts as "no change", is kept smooth (total variation), and the average over
+    all photos is pinned to "no change" (every `pin_every` steps the mean deviation is subtracted from every grid),
+    so the splats hold the average lighting and the export needs nothing baked in. Held-out photos are scored with
+    no correction at all.
+    """
+
+    def __init__(self, torch, cfg, n_views: int, dev, shape=(8, 16, 16)):
+        self.torch = torch
+        d, h, w = shape
+        ident = torch.zeros(12, d, h, w, device=dev)
+        for r in range(3):
+            ident[r * 4 + r] = 1.0                      # rows of [A | b]: A = I, b = 0
+        self.ident = ident
+        self.grids = [ident.clone().requires_grad_(True) for _ in range(n_views)]
+        self.opts = [torch.optim.Adam([g], lr=cfg.bilateralGridLR, eps=1e-15) for g in self.grids]
+        self.tv_weight = cfg.bilateralGridTV
+        self.lum = torch.tensor([0.299, 0.587, 0.114], device=dev)
+        self._coords = {}
+
+    def _xy(self, h, w, dev):
+        key = (h, w)
+        if key not in self._coords:
+            ys = (self.torch.arange(h, device=dev, dtype=self.torch.float32) + 0.5) / h * 2 - 1
+            xs = (self.torch.arange(w, device=dev, dtype=self.torch.float32) + 0.5) / w * 2 - 1
+            gy, gx = self.torch.meshgrid(ys, xs, indexing="ij")
+            self._coords = {key: (gx, gy)}               # one resolution cached (views share sizes)
+        return self._coords[key]
+
+    def apply(self, i: int, rgb):
+        torch = self.torch
+        h, w, _ = rgb.shape
+        gx, gy = self._xy(h, w, rgb.device)
+        gz = (rgb.detach() @ self.lum).clamp(0, 1) * 2 - 1
+        grid = torch.stack([gx, gy, gz], dim=-1)[None, None]          # (1, 1, H, W, 3): x→W, y→H, z→D
+        coef = torch.nn.functional.grid_sample(self.grids[i][None], grid, mode="bilinear",
+                                               padding_mode="border", align_corners=True)[0, :, 0]   # (12, H, W)
+        A = coef.permute(1, 2, 0).reshape(h, w, 3, 4)
+        return (A[..., :3] @ rgb[..., None])[..., 0] + A[..., 3]
+
+    def tv_loss(self, i: int):
+        g = self.grids[i]
+        tv = 0.0
+        for dim in (1, 2, 3):
+            n = g.shape[dim]
+            if n > 1:
+                tv = tv + (g.narrow(dim, 1, n - 1) - g.narrow(dim, 0, n - 1)).pow(2).mean()
+        return self.tv_weight * tv
+
+    def step(self, i: int):
+        g = self.grids[i]
+        if g.grad is None:
+            return
+        if not self.torch.isfinite(g.grad).all():
+            g.grad = None
+            return
+        self.opts[i].step()
+        self.opts[i].zero_grad(set_to_none=True)
+
+    def pin_mean(self):
+        """Shift every grid so the average over photos is exactly "no change"."""
+        with self.torch.no_grad():
+            dev_mean = self.torch.stack([g.detach() for g in self.grids]).mean(0) - self.ident
+            for g in self.grids:
+                g.sub_(dev_mean)
+
+
 def init_points(ds: DatasetInfo, cfg: TrainingConfig, region_box, log) -> tuple:
     """Return (xyz [N,3], rgb [N,3]) initial points as numpy arrays."""
     rng = np.random.default_rng(cfg.seed)
@@ -691,6 +766,12 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         # locked exposure (Splat Capture): nothing to correct; the extra freedom cost 1 dB held-out on the Mac
         use_appearance = False
         log("exposure is the same in every photo: per-photo colour correction off")
+    bilagrid = None
+    if cfg.bilateralGrid:
+        # local per-photo correction replaces the global 3×3 one (it can express everything that does)
+        use_appearance = False
+        bilagrid = BilateralGrid(torch, cfg, len(train_views), dev)
+        log(f"per-photo local colour correction: {len(train_views)} grids of 16×16×8")
     appearance = AppearanceCorrection(torch, cfg, train_views + eval_views, dev) if use_appearance else None
     pose_refiner = PoseRefiner(torch, len(train_views), cfg, dev) if cfg.poseRefinement else None
 
@@ -716,6 +797,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         pred = renders[0, ..., :3] + (1.0 - alphas[0]) * bg
         if appearance is not None:
             pred = appearance.apply(view_idx, pred)
+        if bilagrid is not None:
+            pred = bilagrid.apply(view_idx, pred)
         gt = img if alpha is None else img * alpha + (1.0 - alpha) * bg
 
         if isinstance(strategy, DefaultStrategy):
@@ -753,6 +836,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             ratio = torch.exp(srt[:, 2] - srt[:, 1].detach())
             loss = loss + cfg.anisotropyReg * torch.clamp(ratio - cfg.anisotropyMaxRatio, min=0).mean()
 
+        if bilagrid is not None:
+            loss = loss + bilagrid.tv_loss(view_idx)
         if pose_refiner is not None and step >= cfg.poseRefinementStart:
             loss = loss + pose_refiner.reg_loss()
         loss.backward()
@@ -776,6 +861,10 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         pos_sched.step()
         if appearance is not None:
             appearance.step(view_idx)
+        if bilagrid is not None:
+            bilagrid.step(view_idx)
+            if (step + 1) % 50 == 0:
+                bilagrid.pin_mean()
         if pose_refiner is not None and step >= cfg.poseRefinementStart:
             pose_refiner.step()
 
