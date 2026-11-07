@@ -281,7 +281,7 @@ class Installer:
         from .runtime_plan import gsplat_wheel_published, profile_by_id
 
         prof = profile_by_id(self.plan.profile_id)
-        if prof is not None and gsplat_wheel_published(prof, self.opener) is False:
+        if prof is not None and gsplat_wheel_published(prof, self.opener, local_dir=self.paths.local_wheels_dir) is False:
             raise InstallError(f"gsplat {prof.gsplat} for {prof.label} is not published yet",
                                f"{prof.gsplat_find_links} has no gsplat-{prof.gsplat}+{prof.gsplat_index} wheel.",
                                "Choose \"PyTorch 2.4 + CUDA 12.4\" in the advanced options, or wait for the next "

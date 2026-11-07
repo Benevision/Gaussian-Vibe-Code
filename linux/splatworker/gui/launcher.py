@@ -72,7 +72,7 @@ def _install_runtime(args: List[str]) -> int:
     driver = detect()
     from .runtime_plan import unpublished_profiles
 
-    choice = choose_profile(driver, a.profile, unpublished_profiles())
+    choice = choose_profile(driver, a.profile, unpublished_profiles(local_dir=paths.local_wheels_dir))
     print(choice.summary)
     for w in choice.warnings:
         print("warning:", w)

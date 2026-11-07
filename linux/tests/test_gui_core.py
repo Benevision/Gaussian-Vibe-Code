@@ -507,3 +507,20 @@ def test_gsplat_wheel_published():
     assert gsplat_wheel_published(p, offline) is None
     assert gsplat_wheel_published(profile_by_id("cu124"), offline) is True   # public index, not checked
     assert unpublished_profiles(offline) == ["cu128"]
+
+
+def test_local_gsplat_wheel_is_preferred(tmp_path):
+    from splatworker.gui.runtime_plan import gsplat_wheel_published, profile_by_id, unpublished_profiles
+
+    paths = AppPaths(config_dir=tmp_path / "c", data_root=tmp_path / "d", cache_dir=tmp_path / "k")
+
+    def offline(url, timeout=None):
+        raise OSError("offline")
+    p = profile_by_id("cu128")
+    assert unpublished_profiles(offline, local_dir=paths.local_wheels_dir) == ["cu128"]
+    paths.local_wheels_dir.mkdir(parents=True)
+    (paths.local_wheels_dir / "gsplat-1.6.0+pt27cu128-cp310-cp310-linux_x86_64.whl").write_bytes(b"x")
+    assert gsplat_wheel_published(p, offline, local_dir=paths.local_wheels_dir) is True
+    assert unpublished_profiles(offline, local_dir=paths.local_wheels_dir) == []
+    g = [s for s in build_plan("cu128", paths).steps if s.id == "gsplat"][0].argv
+    assert g[g.index("--find-links") + 1] == str(paths.local_wheels_dir)

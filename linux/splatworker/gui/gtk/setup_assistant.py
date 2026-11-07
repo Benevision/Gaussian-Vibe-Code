@@ -62,7 +62,7 @@ class SetupAssistant(Adw.Window):
         def work():
             info = detect()
             # which runtimes can actually be downloaded right now (our own gsplat builds may lag behind)
-            self.unavailable = unpublished_profiles()
+            self.unavailable = unpublished_profiles(local_dir=self.state.paths.local_wheels_dir)
             GLib.idle_add(self._show_plan, info)
 
         threading.Thread(target=work, daemon=True).start()

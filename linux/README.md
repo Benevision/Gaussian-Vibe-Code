@@ -414,3 +414,21 @@ and icons, and byte-compiles the GTK files. Run the GUI from a checkout on Linux
 The tests use a fake in-thread backend and a stand-in `splatprep` package. One test runs the real
 spawn-based subprocess backend for a processing job, and another checks that the training subprocess
 fails cleanly when torch is missing.
+
+### Building gsplat 1.6 on your own PC
+
+The "PyTorch 2.7 + CUDA 12.8 · gsplat 1.6" runtime needs a gsplat wheel compiled for the pinned development
+commit (`flatpak/gsplat-pin.env`). Instead of waiting for GitHub Actions (hours on 4 vCPUs), build it on the
+worker PC in a throwaway container:
+
+```bash
+sudo pacman -S podman          # CachyOS / Arch (Fedora: sudo dnf install podman)
+cd linux/flatpak
+./build-gsplat-wheel.sh        # just this PC's GPU (e.g. RTX 4080 → compute capability 8.9) — minutes
+./build-gsplat-wheel.sh --all  # every supported card (RTX 20 – RTX 50) — for publishing
+```
+
+The wheel is copied to Splat Worker's `wheels/` folder (`~/.var/app/com.example.SplatWorker/data/splatworker/wheels`)
+and Set Up uses it from there. To publish an `--all` build for everyone, create a GitHub Release tagged
+`gsplat-1.6.0-cu128` and attach the `.whl`: the Flatpak workflow then uses it instead of compiling. When gsplat 1.6
+is officially released with prebuilt wheels, switch the profile back to the public index and delete the release.

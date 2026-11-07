@@ -105,6 +105,11 @@ class AppPaths:
         return self.venv_dir / "bin" / "python"
 
     @property
+    def local_wheels_dir(self) -> Path:
+        """Wheels built on this PC (linux/flatpak/build-gsplat-wheel.sh); Set Up prefers them."""
+        return self.data_root / "wheels"
+
+    @property
     def venv_staging_dir(self) -> Path:
         """New runtimes are built here and swapped into ``venv_dir`` only once verified, so a failed or
         cancelled setup never breaks a working runtime."""

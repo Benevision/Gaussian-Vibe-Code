@@ -143,10 +143,21 @@ CPU_TORCH_DOWNLOAD_MB = 200    # torch CPU build for LightGlue in the processing
 CPU_TORCH_DISK_MB = 750
 
 
-def gsplat_wheel_published(prof: GpuProfile, opener: Callable[..., Any] = None, timeout: float = 10) -> Optional[bool]:
-    """For profiles whose gsplat comes from our own wheel page: is the wheel there? None = couldn't tell
-    (offline); True for profiles that use the public gsplat index."""
+def local_gsplat_wheel(prof: GpuProfile, local_dir: Optional[Path]) -> Optional[Path]:
+    """A wheel for this profile built on this PC (build-gsplat-wheel.sh), if any."""
+    if local_dir is None or not Path(local_dir).is_dir():
+        return None
+    hits = sorted(Path(local_dir).glob(f"gsplat-{prof.gsplat}+{prof.gsplat_index}-*.whl"))
+    return hits[-1] if hits else None
+
+
+def gsplat_wheel_published(prof: GpuProfile, opener: Callable[..., Any] = None, timeout: float = 10,
+                           local_dir: Optional[Path] = None) -> Optional[bool]:
+    """For profiles whose gsplat comes from our own wheel page: is the wheel there (or built locally)?
+    None = couldn't tell (offline); True for profiles that use the public gsplat index."""
     if not prof.gsplat_find_links:
+        return True
+    if local_gsplat_wheel(prof, local_dir) is not None:
         return True
     import urllib.request
 
@@ -160,9 +171,9 @@ def gsplat_wheel_published(prof: GpuProfile, opener: Callable[..., Any] = None, 
     return want in page or want.replace("+", "%2B") in page
 
 
-def unpublished_profiles(opener: Callable[..., Any] = None) -> List[str]:
+def unpublished_profiles(opener: Callable[..., Any] = None, local_dir: Optional[Path] = None) -> List[str]:
     """Ids of profiles whose gsplat wheel is not (yet) downloadable — skipped by ``choose_profile``."""
-    return [p.id for p in GPU_PROFILES if gsplat_wheel_published(p, opener) is not True]
+    return [p.id for p in GPU_PROFILES if gsplat_wheel_published(p, opener, local_dir=local_dir) is not True]
 
 
 def profile_by_id(pid: str) -> Optional[GpuProfile]:
@@ -377,7 +388,9 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
             "gsplat, the CUDA Gaussian-splatting rasteriser, with prebuilt kernels (no compiler needed).",
             "command", argv=(pip_argv(py, paths, gpu.gsplat_requirement, *torch_pins(gpu),
                                       extra_index_url=gpu.torch_index,
-                                      extra=["--find-links", gpu.gsplat_find_links, "--only-binary", "gsplat"])
+                                      extra=["--find-links", str(paths.local_wheels_dir), "--only-binary", "gsplat"]
+                                      if local_gsplat_wheel(gpu, paths.local_wheels_dir) else
+                                      ["--find-links", gpu.gsplat_find_links, "--only-binary", "gsplat"])
                              if gpu.gsplat_find_links else
                              pip_argv(py, paths, gpu.gsplat_requirement,
                                       index_url=GSPLAT_INDEX + gpu.gsplat_index + "/",
