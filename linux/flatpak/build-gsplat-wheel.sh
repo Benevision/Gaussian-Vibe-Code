@@ -77,7 +77,10 @@ START=$(date +%s)
     echo "compiling ~50 CUDA/C++ files with $MAX_JOBS jobs (quiet until done; the last few big files run on one core)"
     tail -1 gsplat/version.py
     nvcc --version | tail -1
-    pip wheel --no-deps --no-build-isolation -w /tmp/w .
+    # -v so ninja prints each file; show just "[n/50] file.o" (+ any errors), keep the full log next to the wheel.
+    pip wheel -v --no-deps --no-build-isolation -w /tmp/w . 2>&1 | tee /out/gsplat-build.log \
+      | grep --line-buffered -E "^ *\[[0-9]+/[0-9]+\]|error:|FAILED|Successfully built|ERROR" \
+      | sed -u -E "s#^ *(\[[0-9]+/[0-9]+\]).* -o [^ ]*/([^/ ]+\.o)( .*)?\$#  \1 \2#"
     cp /tmp/w/gsplat-*.whl /out/
   '
 
