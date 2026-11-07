@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - iPhone inbox
 
@@ -141,6 +142,8 @@ private struct WorkerJobsList: View {
     let endpoint: WorkerEndpoint
     let model: AppModel
     @State private var jobs: [JobStatus] = []
+    @State private var downloading: Set<String> = []
+    @State private var downloadError: String? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(jobs) { j in
@@ -151,7 +154,11 @@ private struct WorkerJobsList: View {
                         Text(subtitle(j)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if (j.kind ?? "train") == "train" {
+                    if (j.kind ?? "train") == "train" && j.state == .completed {
+                        Button(downloading.contains(j.jobId) ? "Downloading…" : "Open result") { openResult(j) }
+                            .disabled(downloading.contains(j.jobId))
+                            .help("Save this job's trained splat on this Mac and open it")
+                    } else if (j.kind ?? "train") == "train" && !j.state.isTerminal {
                         let watching = model.remoteWatch.watched?.jobId == j.jobId
                         Button(watching ? "Watching" : "Watch") {
                             model.remoteWatch.watch(workerId: endpoint.id, jobId: j.jobId, name: j.name ?? j.jobId)
@@ -161,16 +168,35 @@ private struct WorkerJobsList: View {
                 }
             }
         }
+        .overlay(alignment: .bottomLeading) { if let e = downloadError { Text(e).font(.caption).foregroundStyle(.red) } }
         .padding(.leading, 44).padding(.bottom, jobs.isEmpty ? 0 : 6)
         .task(id: endpoint.id) {
             while !Task.isCancelled {
                 if let c = WorkerBrowser.shared.client(for: endpoint.id), let all = try? await c.jobs() {
-                    jobs = all.filter { !$0.state.isTerminal }
+                    // running / queued, then the most recent finished training jobs (results stay on the worker)
+                    let done = all.filter { $0.state == .completed && ($0.kind ?? "train") == "train" }.suffix(5)
+                    jobs = all.filter { !$0.state.isTerminal } + done.reversed()
                 }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
     }
+    private func openResult(_ j: JobStatus) {
+        guard let c = WorkerBrowser.shared.client(for: endpoint.id) else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "ply")!]
+        panel.nameFieldStringValue = (j.name ?? j.jobId).replacingOccurrences(of: "/", with: "-") + ".ply"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        downloading.insert(j.jobId); downloadError = nil
+        Task {
+            do {
+                try await c.downloadResultRetrying(j.jobId, to: url)
+                model.open(url)
+            } catch { downloadError = "Couldn't download \(j.name ?? j.jobId): \(error.localizedDescription)" }
+            downloading.remove(j.jobId)
+        }
+    }
+
     private func subtitle(_ j: JobStatus) -> String {
         var p = [j.state.rawValue]
         if let s = j.step, let t = j.totalSteps, t > 0 { p.append("\(s.formatted())/\(t.formatted())") }

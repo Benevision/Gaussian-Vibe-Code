@@ -198,7 +198,7 @@ final class WorkerClient: @unchecked Sendable {
     /// `GET /v1/jobs`
     func jobs() async throws -> [JobStatus] { try await json(request("v1/jobs")) }
     /// `GET /v1/jobs/{id}`
-    func job(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)")) }
+    func job(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)", timeout: 15)) }
     /// `POST /v1/jobs/{id}/cancel`
     @discardableResult func cancelJob(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)/cancel", method: "POST")) }
     /// `DELETE /v1/jobs/{id}`
@@ -276,13 +276,50 @@ final class WorkerClient: @unchecked Sendable {
     // MARK: High level
 
     /// Polls a job until it reaches a terminal state. Cancelling the Swift task cancels the remote job.
-    func waitForJob(_ id: String, pollInterval: TimeInterval = 2, onUpdate: (@Sendable (JobStatus) -> Void)? = nil) async throws -> JobStatus {
+    /// Errors that mean "can't reach the worker right now" (Wi-Fi drop, Mac asleep, worker restarting) rather
+    /// than "the job is gone". Waiting rides these out; the job keeps running on the worker regardless.
+    static func isTransient(_ error: Error) -> Bool {
+        if let u = error as? URLError {
+            switch u.code {
+            case .notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost, .cannotFindHost,
+                 .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff, .callIsActive, .secureConnectionFailed,
+                 .resourceUnavailable, .backgroundSessionWasDisconnected, .badServerResponse:
+                return true
+            default: return false
+            }
+        }
+        if let w = error as? WorkerError { return w.status >= 500 && w.status != 501 }   // proxy / restart hiccups
+        let ns = error as NSError
+        return ns.domain == NSPOSIXErrorDomain   // e.g. ECONNRESET
+    }
+
+    /// Polls until the job ends. Network trouble is retried (gaps growing to 30 s) for up to `maxOffline`, with
+    /// `onOffline` told how long the worker has been unreachable; only the worker saying the job failed, the job
+    /// disappearing (404) or that long an outage ends the wait with an error. Cancelling the task cancels the
+    /// job on the worker.
+    func waitForJob(_ id: String, pollInterval: TimeInterval = 2, maxOffline: TimeInterval = 12 * 3600,
+                    onUpdate: (@Sendable (JobStatus) -> Void)? = nil,
+                    onOffline: (@Sendable (TimeInterval) -> Void)? = nil) async throws -> JobStatus {
+        var offlineSince: Date? = nil
+        var backoff = pollInterval
         do {
             while true {
-                let s = try await job(id)
-                onUpdate?(s)
-                if s.state.isTerminal { return s }
-                try await Task.sleep(nanoseconds: UInt64(pollInterval * 1e9))
+                do {
+                    let s = try await job(id)
+                    offlineSince = nil; backoff = pollInterval
+                    onUpdate?(s)
+                    if s.state.isTerminal { return s }
+                    try await Task.sleep(nanoseconds: UInt64(pollInterval * 1e9))
+                } catch {
+                    if error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled { throw error }
+                    guard Self.isTransient(error) else { throw error }
+                    let since = offlineSince ?? Date(); offlineSince = since
+                    let gone = Date().timeIntervalSince(since)
+                    if gone > maxOffline { throw WorkerError(status: 503, message: "worker unreachable for \(Int(gone / 60)) min: \(error.localizedDescription)") }
+                    onOffline?(gone)
+                    try await Task.sleep(nanoseconds: UInt64(backoff * 1e9))
+                    backoff = min(backoff * 2, 30)
+                }
             }
         } catch {
             // Cancelling surfaces as CancellationError or as URLError.cancelled from the in-flight poll.
@@ -293,17 +330,43 @@ final class WorkerClient: @unchecked Sendable {
         }
     }
 
+    /// `downloadResult` that rides out network trouble (up to `maxOffline`).
+    func downloadResultRetrying(_ id: String, to destination: URL, maxOffline: TimeInterval = 3600,
+                                onOffline: (@Sendable (TimeInterval) -> Void)? = nil) async throws {
+        let start = Date()
+        var backoff: TimeInterval = 2
+        while true {
+            do { try await downloadResult(id, to: destination); return } catch {
+                guard Self.isTransient(error), !Task.isCancelled else { throw error }
+                let gone = Date().timeIntervalSince(start)
+                if gone > maxOffline { throw error }
+                onOffline?(gone)
+                try await Task.sleep(nanoseconds: UInt64(backoff * 1e9)); backoff = min(backoff * 2, 30)
+            }
+        }
+    }
+
     /// Uploads a prepared dataset, trains, and returns the result. `datasetId` may be reused for several jobs.
     func train(dataset: PreparedDataset, config: TrainingConfig, name: String, datasetId existing: String? = nil,
-               progress: (@Sendable (JobStatus) -> Void)? = nil, uploadProgress: (@Sendable (Double) -> Void)? = nil) async throws -> GaussianCloud {
+               progress: (@Sendable (JobStatus) -> Void)? = nil, uploadProgress: (@Sendable (Double) -> Void)? = nil,
+               onJobCreated: (@Sendable (_ jobId: String, _ datasetId: String) -> Void)? = nil,
+               onOffline: (@Sendable (TimeInterval) -> Void)? = nil) async throws -> GaussianCloud {
         let did: String
         if let existing { did = existing } else { did = try await uploadDataset(directory: dataset.root, progress: uploadProgress) }
         let jid = try await createJob(datasetId: did, name: name, config: config)
-        let final = try await waitForJob(jid, onUpdate: progress)
+        onJobCreated?(jid, did)
+        return try await finishJob(jid, progress: progress, onOffline: onOffline)
+    }
+
+    /// Waits for a training job (riding out disconnects) and downloads its result — also used to re-attach to
+    /// a job after the Mac slept, lost the network or the app was relaunched.
+    func finishJob(_ jid: String, progress: (@Sendable (JobStatus) -> Void)? = nil,
+                   onOffline: (@Sendable (TimeInterval) -> Void)? = nil) async throws -> GaussianCloud {
+        let final = try await waitForJob(jid, onUpdate: progress, onOffline: onOffline)
         guard final.state == .completed else { throw WorkerError(status: 500, message: "job \(final.state): \(final.message ?? "")") }
         let dst = FileManager.default.temporaryDirectory.appendingPathComponent("result-\(jid).ply")
         defer { try? FileManager.default.removeItem(at: dst) }
-        try await downloadResult(jid, to: dst)
+        try await downloadResultRetrying(jid, to: dst, onOffline: onOffline)
         return try PLYCodec.readGaussians(url: dst)
     }
 

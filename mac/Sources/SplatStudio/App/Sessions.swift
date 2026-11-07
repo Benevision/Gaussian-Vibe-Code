@@ -98,52 +98,134 @@ final class TrainingSession {
         }
     }
 
+    /// A training job running on a worker, saved next to the result-to-be (`<output>.remote-job.json`) as soon
+    /// as the worker accepts it and removed once the result is saved. If the Mac sleeps, loses the network or
+    /// the app quits, reopening the project re-attaches to the job (see `resumePendingRemote`).
+    struct PendingRemoteJob: Codable {
+        var workerId: String
+        var baseURL: String
+        var jobId: String
+        var datasetId: String
+        var name: String
+        var output: String
+        var startedAt: Date
+
+        static func file(for output: URL) -> URL { URL(fileURLWithPath: output.path + ".remote-job.json") }
+        func save() { try? JSONEncoder().encode(self).write(to: Self.file(for: URL(fileURLWithPath: output)), options: .atomic) }
+        static func all(in dir: URL) -> [PendingRemoteJob] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            return names.filter { $0.hasSuffix(".remote-job.json") }.compactMap {
+                try? JSONDecoder().decode(PendingRemoteJob.self, from: Data(contentsOf: dir.appendingPathComponent($0)))
+            }
+        }
+    }
+
+    /// Updates status / live preview from a worker job's status (shared by new and re-attached jobs).
+    private func remoteProgress(client: WorkerClient, start: Date) -> @Sendable (JobStatus) -> Void {
+        var lastPreviewStep: Int? = nil, lastPreviewFetch = Date.distantPast, fetching = false
+        return { [weak self] js in
+            Task { @MainActor in
+                guard let self else { return }
+                self.state = .training
+                if self.remoteMessage?.hasPrefix("Can't reach") == true { self.remoteMessage = nil }
+                // Live preview: pull the worker's compact snapshot at most every 25 s.
+                if self.livePreview, !fetching, let ps = js.previewStep, ps != lastPreviewStep,
+                   Date().timeIntervalSince(lastPreviewFetch) > 25 {
+                    fetching = true; lastPreviewStep = ps; lastPreviewFetch = Date()
+                    let jobId = js.jobId
+                    Task.detached {
+                        let g = try? await client.previewSplat(jobId)
+                        await MainActor.run {
+                            fetching = false
+                            if let g, self.livePreview, self.state == .training {
+                                self.app?.setScene(cloud: nil, scene: SplatScene(cloud: g), frame: false)
+                            }
+                        }
+                    }
+                }
+                var s = self.status
+                s.step = js.step ?? s.step; s.totalSteps = js.totalSteps ?? s.totalSteps
+                s.loss = Float(js.loss ?? Double(s.loss)); s.psnr = Float(js.psnr ?? Double(s.psnr))
+                if let e = js.evalPsnr { s.evalPSNR = Float(e) }
+                s.numGaussians = js.numGaussians ?? s.numGaussians
+                s.elapsed = js.elapsedSeconds ?? Date().timeIntervalSince(start); s.eta = js.etaSeconds ?? 0
+                s.itersPerSecond = s.elapsed > 0 ? Double(s.step) / s.elapsed : 0
+                s.phase = js.message ?? "Training on \(client.baseURL.host ?? "worker")"
+                self.update(s)
+            }
+        }
+    }
+
+    private func offlineNotice(_ host: String) -> @Sendable (TimeInterval) -> Void {
+        { [weak self] gone in
+            Task { @MainActor in
+                self?.remoteMessage = "Can't reach \(host) for \(gone < 60 ? "\(Int(gone)) s" : "\(Int(gone / 60)) min") — the job keeps running there; retrying. You can close this project and reopen it later to pick the result up."
+            }
+        }
+    }
+
     private func startRemote(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String) {
         guard let id = workerId ?? WorkerBrowser.shared.workers.first?.id, let client = WorkerBrowser.shared.client(for: id) else {
             state = .failed("No Linux worker selected. Add one under Compute in the sidebar."); return
         }
         state = .preparing("Uploading dataset")
-        var lastPreviewStep: Int? = nil, lastPreviewFetch = Date.distantPast, fetching = false
+        let host = client.baseURL.host ?? "the worker"
+        let start = Date()
+        let progress = remoteProgress(client: client, start: start)
         task = Task { [weak self] in
             do {
-                let start = Date()
-                let cloud = try await client.train(dataset: dataset, config: cfg, name: name, progress: { js in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        self.state = .training
-                        // Live preview: pull the worker's compact snapshot at most every 25 s.
-                        if self.livePreview, !fetching, let ps = js.previewStep, ps != lastPreviewStep,
-                           Date().timeIntervalSince(lastPreviewFetch) > 25 {
-                            fetching = true; lastPreviewStep = ps; lastPreviewFetch = Date()
-                            let jobId = js.jobId
-                            Task.detached {
-                                let g = try? await client.previewSplat(jobId)
-                                await MainActor.run {
-                                    fetching = false
-                                    if let g, self.livePreview, self.state == .training {
-                                        self.app?.setScene(cloud: nil, scene: SplatScene(cloud: g), frame: false)
-                                    }
-                                }
-                            }
-                        }
-                        var s = self.status
-                        s.step = js.step ?? s.step; s.totalSteps = js.totalSteps ?? s.totalSteps
-                        s.loss = Float(js.loss ?? Double(s.loss)); s.psnr = Float(js.psnr ?? Double(s.psnr))
-                        if let e = js.evalPsnr { s.evalPSNR = Float(e) }
-                        s.numGaussians = js.numGaussians ?? s.numGaussians
-                        s.elapsed = js.elapsedSeconds ?? Date().timeIntervalSince(start); s.eta = js.etaSeconds ?? 0
-                        s.itersPerSecond = s.elapsed > 0 ? Double(s.step) / s.elapsed : 0
-                        s.phase = js.message ?? "Training on \(client.baseURL.host ?? "worker")"
-                        self.update(s)
-                    }
-                }, uploadProgress: { f in Task { @MainActor in self?.state = .preparing("Uploading dataset \(Int(f * 100)) %") } })
+                let cloud = try await client.train(dataset: dataset, config: cfg, name: name, progress: progress,
+                    uploadProgress: { f in Task { @MainActor in self?.state = .preparing("Uploading dataset \(Int(f * 100)) %") } },
+                    onJobCreated: { jid, did in
+                        PendingRemoteJob(workerId: id, baseURL: client.baseURL.absoluteString, jobId: jid, datasetId: did,
+                                         name: name, output: output.path, startedAt: start).save()
+                    },
+                    onOffline: self?.offlineNotice(host))
                 try PLYCodec.writeGaussians(cloud, to: output, up: dataset.upVectorSIMD)
+                try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))
                 let scene = SplatScene(cloud: cloud)
                 self?.finish(result: cloud, scene: scene, output: output)
             } catch is CancellationError {
+                try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))   // Stop also cancelled it there
                 self?.state = .cancelled
             } catch {
                 self?.state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Re-attaches to worker jobs recorded for this project (the Mac slept, lost the network or the app quit
+    /// while they ran): resumes progress and live preview, or downloads the finished result straight away.
+    func resumePendingRemote(dataset: PreparedDataset, outputsDir: URL) {
+        guard !isActive, let p = PendingRemoteJob.all(in: outputsDir).sorted(by: { $0.startedAt > $1.startedAt }).first else { return }
+        let output = URL(fileURLWithPath: p.output)
+        let host = URL(string: p.baseURL)?.host ?? "the worker"
+        workerId = p.workerId
+        state = .preparing("Re-attaching to “\(p.name)” on \(host)")
+        remoteMessage = "Picked up a job that was running on \(host) when this project was last open."
+        task = Task { [weak self] in
+            do {
+                // Right after launch the worker may not be discovered yet (its client carries the access token).
+                WorkerBrowser.shared.start()
+                var known = WorkerBrowser.shared.client(for: p.workerId)
+                for _ in 0..<20 where known == nil {
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                    known = WorkerBrowser.shared.client(for: p.workerId)
+                }
+                guard let client = known ?? URL(string: p.baseURL).map({ WorkerClient(baseURL: $0) }) else { return }
+                guard let progress = self?.remoteProgress(client: client, start: p.startedAt) else { return }
+                let cloud = try await client.finishJob(p.jobId, progress: progress, onOffline: self?.offlineNotice(host))
+                try PLYCodec.writeGaussians(cloud, to: output, up: dataset.upVectorSIMD)
+                try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))
+                self?.finish(result: cloud, scene: SplatScene(cloud: cloud), output: output)
+            } catch is CancellationError {
+                self?.state = .cancelled
+            } catch {
+                // Job gone (worker data cleared) or failed there: forget it so it isn't retried forever.
+                if let w = error as? WorkerError, w.status == 404 || w.status == 500 {
+                    try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))
+                }
+                self?.state = .failed("Couldn't pick up the worker job: \(error.localizedDescription)")
             }
         }
     }

@@ -176,6 +176,23 @@ enum CLI {
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }
+        if let i = a.firstIndex(of: "--fetch-job"), i + 2 < a.count, let u = URL(string: a[i + 1]) {
+            // SplatStudio --fetch-job http://host:7878 <jobId> --out result.ply : the re-attach path (wait through
+            // outages, then download), for testing.
+            let jid = a[i + 2], out = URL(fileURLWithPath: value("--out") ?? "\(jid).ply")
+            let client = WorkerClient(baseURL: u, token: value("--token"))
+            let sem = DispatchSemaphore(value: 0); var code: Int32 = 0
+            Task.detached {
+                do {
+                    let g = try await client.finishJob(jid, progress: { s in print("  \(s.state.rawValue) \(s.step ?? 0)/\(s.totalSteps ?? 0)"); fflush(stdout) },
+                                                       onOffline: { gone in print(String(format: "  unreachable for %.0f s, retrying", gone)); fflush(stdout) })
+                    try PLYCodec.writeGaussians(g, to: out)
+                    print("fetched \(g.count) splats → \(out.path)")
+                } catch { fputs("error: \(error.localizedDescription)\n", stderr); code = 1 }
+                sem.signal()
+            }
+            sem.wait(); exit(code)
+        }
         if let f = value("--fly-test") {
             do {
                 let g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))
