@@ -340,3 +340,40 @@ enum TrainingTimeEstimate {
         return out
     }
 }
+
+/// How much GPU memory a Mac training run needs: every photo is kept on the GPU (RGBA8 at the training size,
+/// plus depth), each splat costs ≈ 1.4 KB (parameters, gradients, two Adam moments, per-frame scratch, tile
+/// lists), and per-pixel scratch for the largest view.
+enum MemoryForecast {
+    static func macBytes(dataset: PreparedDataset, config: TrainingConfig) -> Int64 {
+        var images: Int64 = 0, maxPx: Int64 = 0
+        for c in dataset.manifest.cameras {
+            let longest = max(c.width, c.height)
+            let s = longest > config.maxImageSize ? Double(config.maxImageSize) / Double(longest) : 1
+            let px = Int64((Double(c.width) * s).rounded()) * Int64((Double(c.height) * s).rounded())
+            images += px * 4
+            maxPx = max(maxPx, px)
+            if let dw = c.depthWidth, let dh = c.depthHeight, config.depthWeight > 0 { images += Int64(dw * dh * 4) }
+        }
+        let splats = Int64(Double(config.maxGaussians) * 1.1) * 1_400
+        return images + splats + maxPx * 180 + 300_000_000      // + pipelines, sort scratch, app
+    }
+
+    /// GPU memory this Mac can use for one app (Metal's recommended working set).
+    static var macAvailable: Int64 { Int64(MetalContext.shared.device.recommendedMaxWorkingSetSize) }
+
+    /// A message when a Mac run would not fit, with what to change; nil when it fits.
+    static func macProblem(dataset: PreparedDataset, config: TrainingConfig) -> String? {
+        let need = macBytes(dataset: dataset, config: config), have = macAvailable
+        guard need > Int64(Double(have) * 0.9) else { return nil }
+        // the largest image size that would fit (images dominate for big photo sets)
+        var fit = config.maxImageSize
+        var c = config
+        while fit > 400 {
+            fit = Int(Double(fit) * 0.85); c.maxImageSize = fit
+            if macBytes(dataset: dataset, config: c) <= Int64(Double(have) * 0.9) { break }
+        }
+        return "Training this on the Mac needs about \(formatBytes(Int(need))) of GPU memory, but this Mac has \(formatBytes(Int(have))) for the app: "
+            + "\(dataset.manifest.cameras.count) photos are all kept on the GPU. Train it on a Linux worker, or set Max image size to \(fit) or less."
+    }
+}

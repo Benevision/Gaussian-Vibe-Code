@@ -601,6 +601,9 @@ struct ComputePicker: View {
             .pickerStyle(.segmented).labelsHidden().frame(width: 260)
             .onChange(of: session.placement) { _, v in prepPlacement = v }
         }
+        if let ds = dataset, session.placement != .remote, let problem = MemoryForecast.macProblem(dataset: ds, config: session.config) {
+            Label(problem, systemImage: "memorychip").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
         if let ds = dataset {
             let est = TrainingTimeEstimate.entries(dataset: ds, config: session.config, workers: browser.workers)
             if est.isEmpty || (est.count == 1 && !browser.workers.isEmpty) {

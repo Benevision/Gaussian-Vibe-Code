@@ -73,6 +73,8 @@ final class TrainingSession {
     }
 
     private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL) {
+        // Fail fast with what to change, instead of running out of GPU memory partway through loading.
+        if let problem = MemoryForecast.macProblem(dataset: dataset, config: cfg) { state = .failed(problem); return }
         state = .preparing("Loading images")
         let t = MetalTrainer(dataset: dataset, config: cfg)
         trainer = t
