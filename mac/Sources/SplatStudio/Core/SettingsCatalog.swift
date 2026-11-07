@@ -215,7 +215,7 @@ enum SettingsCatalog {
         .init(id: "sfm.solver", group: .cameras, title: "Camera solver",
               summary: "How camera positions are recovered from your images.",
               detail: "Apple Object Capture: built in, uses the Neural Engine and GPU, very robust for objects and rooms, no install. COLMAP/GLOMAP + learned features (via the Models pack): the research standard, more control, best for large or difficult scenes, can run on your Linux GPU worker. 'From capture' uses the poses recorded by the iPhone (ARKit) — instant and metric, but slightly less precise; enable 'Refine poses' to polish them with SfM.",
-              defaultValue: "Automatic (capture poses if present, else Object Capture)", advanced: false),
+              defaultValue: "Automatic (capture poses if present; 360° video: learned SfM, on the worker when in use; else Object Capture)", advanced: false),
         .init(id: "sfm.features", group: .cameras, title: "Feature model",
               summary: "Which algorithm finds and matches points between images.",
               detail: "See the Models panel for benchmark results on this Mac. Short version: SIFT is the classic baseline (no download, struggles with low texture and big viewpoint changes); SuperPoint+LightGlue is the best all-rounder (fast, robust; non-commercial licence); ALIKED+LightGlue and DISK+LightGlue are permissively licensed alternatives; LoFTR is dense and handles texture-poor walls; MASt3R and VGGT are 3D foundation models that work with very few images (10–30) but need lots of memory.",

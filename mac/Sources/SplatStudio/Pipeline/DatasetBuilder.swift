@@ -312,8 +312,15 @@ enum DatasetBuilder {
                            progress: PipelineProgressHandler?) async throws -> PoseSolution {
         var choice = o.poseSolver
         if choice == .automatic || choice == .fromCapture {
-            choice = ObjectCapturePoseSolver.isSupported ? .objectCapture
-                : .splatprep(featureModelId: "superpoint_lightglue", matching: sequential ? "sequential" : "auto", mapper: "auto")
+            if frames.isMultiViewRig {
+                // 360° footage: Object Capture is built for photographing one object and placed only 1,041 of
+                // 9,824 views of a 360 walk-through. Learned SfM (on the worker when one is in use) handles it;
+                // retrieval matching, because a frame's views are interleaved in file order.
+                choice = .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
+            } else {
+                choice = ObjectCapturePoseSolver.isSupported ? .objectCapture
+                    : .splatprep(featureModelId: "superpoint_lightglue", matching: sequential ? "sequential" : "auto", mapper: "auto")
+            }
         }
         var sol: PoseSolution
         switch choice {
