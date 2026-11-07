@@ -177,6 +177,31 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         sp.update("alignment", 0.1, "aligning to prior poses (Sim3)")
         stats["priorAlignment"] = align_to_priors(rec, priors)
         stats["numPriors"] = len(priors)
+    known_up = None
+    if not priors and req.get("gpsCheck", True):
+        from .gps import check_against_gps
+
+        sp.update("alignment", 0.1, "checking camera positions against GPS")
+        chk = check_against_gps(rec, image_dir, names)
+        if chk is not None:
+            T = chk.pop("_T")
+            stats["gpsCheck"] = chk
+            if chk["ok"]:
+                rec.transform(T)  # metres, +Z up (east / north / up)
+                known_up = np.array([0.0, 0.0, 1.0])
+                # The few cameras far from their GPS position are mis-registered (e.g. a take-off shot of the
+                # horizon placed 290 m away); one such camera alone can wreck a training run's framing.
+                drop = set(chk["outliers"])
+                if drop:
+                    for iid in [i for i, im in rec.images.items() if im.name in drop]:
+                        del rec.images[iid]
+                    stats["numRegistered"] = len(rec.images)
+                    stats["registeredPct"] = round(100.0 * len(rec.images) / len(names), 2)
+                sp.message("alignment", f"camera positions match GPS (median {chk['medianM']} m over {chk['extentM']} m) — scene in metres, Z up"
+                                        + (f"; dropped {len(drop)} camera(s) far from their GPS position" if drop else ""))
+            else:
+                sp.message("alignment", f"WARNING: {chk['badFraction']:.0%} of cameras are more than {chk['limitM']} m from their GPS position "
+                                        f"(flight {chk['extentM']} m) — the solve is wrong in places; scene left in SfM units")
     sp.update("alignment", 1.0, "alignment done")
     exp = export_dataset(
         rec,
@@ -187,6 +212,7 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         export_images=bool(req.get("exportImages", True)),
         log_path=out_dir / "splatprep.log",
         extra={"model": model_id, "mapper": stats.get("mapper"), "registeredPct": stats["registeredPct"]},
+        up=known_up,
     )
     stats.update({"export": exp, "status": "ok"})
     if not req.get("keepWork", False):

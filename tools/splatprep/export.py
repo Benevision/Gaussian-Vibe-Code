@@ -28,12 +28,21 @@ def scene_metrics(c2ws: np.ndarray, points: Optional[np.ndarray] = None) -> Tupl
     """(sceneCenter, sceneExtent, upVector) from camera poses.
 
     * centre: mean camera centre (the same as 3DGS' ``getNerfppNorm``),
-    * extent: 1.1 x max distance of a camera from the centre (min 1e-3),
+    * extent: 1.1 x max distance of a camera from the centre (min 1e-3), ignoring stray cameras,
     * up: minus the mean camera +Y axis (OpenCV +Y is down in the image).
     """
     C = c2ws[:, :3, 3]
     center = C.mean(0)
-    extent = float(max(1.1 * np.max(np.linalg.norm(C - center, axis=1)), 1e-3)) if len(C) else 1.0
+    if len(C):
+        # Ignore stray cameras (> 3x the median distance): one mis-registered camera 290 m out tripled a
+        # drone scene's extent, and trainers scale position learning rates / densification by it.
+        dist = np.linalg.norm(C - C.mean(0), axis=1)
+        core = dist <= 3 * max(float(np.median(dist)), 1e-9)
+        center = C[core].mean(0) if core.any() else C.mean(0)
+        dist = np.linalg.norm(C[core] - center, axis=1) if core.any() else dist
+        extent = float(max(1.1 * np.max(dist), 1e-3))
+    else:
+        extent = 1.0
     up = -c2ws[:, :3, 1].mean(0)
     nrm = np.linalg.norm(up)
     up = up / nrm if nrm > 1e-6 else np.array([0.0, -1.0, 0.0])
@@ -114,8 +123,13 @@ def export_dataset(
     log_path: Optional[Path] = None,
     undistort: str = "auto",
     extra: Optional[dict] = None,
+    up: Optional[np.ndarray] = None,
 ) -> dict:
-    """Write dataset.json + images/ + points3d.ply + sparse/0 into ``out_dir``."""
+    """Write dataset.json + images/ + points3d.ply + sparse/0 into ``out_dir``.
+
+    ``up``: known world up (GPS-aligned scenes: +Z). Otherwise it is guessed from the cameras, which fails
+    for straight-down (nadir) photos whose image-down axes all lie in the ground plane.
+    """
     image_dir, out_dir, work_dir = Path(image_dir), Path(out_dir), Path(work_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_images = out_dir / "images"
@@ -170,7 +184,10 @@ def export_dataset(
         )
     c2ws_a = np.stack(c2ws) if c2ws else np.zeros((0, 4, 4))
     xyz, rgb = rec.points_xyz_rgb()
+    known_up = up
     center, extent, up = scene_metrics(c2ws_a, xyz) if len(c2ws_a) else (np.zeros(3), 1.0, np.array([0, -1.0, 0]))
+    if known_up is not None:
+        up = np.asarray(known_up, float) / np.linalg.norm(known_up)
     ds = {
         "format": "splatdataset",
         "version": 1,
