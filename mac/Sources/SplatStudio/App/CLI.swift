@@ -110,6 +110,8 @@ enum CLI {
                     size = (c.width, c.height)
                 }
                 var st = ViewerSettings()
+                if a.contains("--aa") { st.antialiasOverride = true }
+                if a.contains("--no-aa") { st.antialiasOverride = false }
                 if let m = value("--mode").flatMap(Int.init), let dm = ViewerSettings.DisplayMode(rawValue: m) { st.displayMode = dm }
                 guard let tex = r.renderOffscreen(width: size.0, height: size.1, camera: cam, settings: st) else { throw FormatError.invalid("render failed") }
                 try ImageWriter.writePNG(texture: tex, to: URL(fileURLWithPath: a[i + 2]))

@@ -553,16 +553,17 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
     // Regulariser gradients apply to every gaussian.
     float gop = reg.x * o * (1.0f - o);
     float3 gls = reg.y * s;
-    // Anisotropy: penalise max(r - w, 0) with r = longest / shortest axis, so splats can't become the long
-    // needles that streak along view rays when a surface is seen from few directions.
+    // Needle penalty: r = longest / MIDDLE axis. Flat discs (two long axes, one tiny) are the normal, desirable
+    // shape for surfaces, so the shortest axis must not count — using longest / shortest squashed every disc
+    // into faint thin strokes ("painted" splats, 70 % of them nearly transparent). Only the long axis shrinks.
     if (reg.z > 0.0f) {
         uint ia = s.x >= s.y ? (s.x >= s.z ? 0u : 2u) : (s.y >= s.z ? 1u : 2u);
         uint ib = s.x <= s.y ? (s.x <= s.z ? 0u : 2u) : (s.y <= s.z ? 1u : 2u);
-        float r = s[ia] / max(s[ib], 1e-12f);
-        // Shrink the long axis only. Also widening the short axis (the full d r / d log s) made splats fatter,
-        // and MCMC's SGLD noise scales with each splat's covariance: on 1.5 M-splat / 30 k-step runs splats
-        // grew, faded and drifted until training diverged (PSNR 18 → 11 dB by step 6 k).
-        if (r > reg.w && ia != ib) { gls[ia] += reg.z * r; }
+        if (ia != ib) {   // all three equal → not a needle (and ia == ib would make im out of range)
+            uint im = 3u - ia - ib;
+            float r = s[ia] / max(s[im], 1e-12f);
+            if (r > reg.w) { gls[ia] += reg.z * r; }
+        }
     }
     float3 gp = float3(0);
     float4 gq = float4(0);

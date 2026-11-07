@@ -685,10 +685,12 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             loss = loss + scale_reg * torch.exp(params["scales"]).mean()
         if cfg.anisotropyReg > 0:
             # Penalise needle splats (longest / shortest axis above the limit), as on the Mac.
-            # Shrink the long axis only (short axis detached): widening the short axis made splats fatter,
-            # MCMC's noise scales with covariance, and long High-preset runs diverged (18 → 11 dB by 6 k).
+            # Needle penalty: longest / MIDDLE axis (flat discs — two long axes, one tiny — are the normal
+            # surface shape and must not be penalised; longest / shortest squashed them into faint strokes).
+            # Only the long axis shrinks (middle detached).
             ls = params["scales"]
-            ratio = torch.exp(ls.max(dim=1).values - ls.min(dim=1).values.detach())
+            srt = torch.sort(ls, dim=1).values
+            ratio = torch.exp(srt[:, 2] - srt[:, 1].detach())
             loss = loss + cfg.anisotropyReg * torch.clamp(ratio - cfg.anisotropyMaxRatio, min=0).mean()
 
         if pose_refiner is not None and step >= cfg.poseRefinementStart:

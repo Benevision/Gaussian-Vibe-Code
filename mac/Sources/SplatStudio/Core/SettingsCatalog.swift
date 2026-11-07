@@ -385,7 +385,7 @@ enum SettingsCatalog {
               defaultValue: "On"),
         .init(id: "train.anisotropyReg", group: .regularisation, title: "Needle-splat penalty",
               summary: "Discourages splats much longer than they are wide — the streaks you see in sparsely covered areas.",
-              detail: "When a surface is seen from only a few directions, splats can stretch along the line of sight and still match those photos, which shows up as radial streaks from other viewpoints. This adds a penalty when a splat's longest axis exceeds the ratio below times its shortest. 0 turns it off.",
+              detail: "When a surface is seen from only a few directions, splats can stretch along the line of sight and still match those photos, which shows up as radial streaks from other viewpoints. This adds a penalty when a splat's longest axis exceeds the ratio below times its middle axis, and only shortens the long axis. Flat discs (two long axes, one very thin) are the normal shape of splats on surfaces and are never penalised. 0 turns it off.",
               defaultValue: "0.1", range: "0–1"),
         .init(id: "train.anisotropyMaxRatio", group: .regularisation, title: "Needle ratio limit",
               summary: "How elongated a splat may get before the needle penalty applies.",

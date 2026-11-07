@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.8" date="2026-11-07">
+      <description>
+        <p>Fix: the needle-splat penalty also squashed flat, disc-shaped splats (the normal shape on surfaces), giving faint, painterly results. It now only targets genuine needles.</p>
+      </description>
+    </release>
     <release version="1.1.7" date="2026-11-07">
       <description>
         <p>Reports training and held-out PSNR separately, so Splat Studio's charts no longer switch metrics mid-run.</p>

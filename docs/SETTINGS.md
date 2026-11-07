@@ -449,7 +449,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 | [Stereo baseline](#stereo-baseline) | From metadata | – | Advanced |
 | [Compute stereo depth](#compute-stereo-depth) | Off | – | Advanced |
 | [HDR tone mapping](#hdr-tone-mapping) | Automatic | – | Advanced |
-| [Hold out every Nth image](#hold-out-every-nth-image) | 0 (Easy) / 8 (Advanced) | 0–50 | Advanced |
+| [Hold out every Nth image](#hold-out-every-nth-image) | 25 (Easy) / 8 (Advanced) | 0–50 | Advanced |
 
 ### Maximum image size
 
@@ -638,15 +638,16 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 
 | | |
 |---|---|
-| **Default** | 0 (Easy) / 8 (Advanced) |
+| **Default** | 25 (Easy) / 8 (Advanced) |
 | **Range** | 0–50 |
 | **Mode** | Advanced |
 | **ID** | `source.holdout` |
 
 **How it works.** Held-out images give an honest PSNR (quality) number in the training dashboard, the same way research papers evaluate.
 
-- 8 means every 8th image.
-- 0 trains on everything (slightly better result, no honest metric).
+- Training PSNR is a poor guide on its own: it dips while the learning rate is high, and jumps when moving-object masking starts ignoring the worst pixels (about 30 % into training), while the held-out number shows whether the splat really generalises.
+- Easy mode holds out every 25th photo (4 %: a trustworthy trend for almost no cost); Advanced uses every 8th (the research convention).
+- 0 trains on everything.
 
 ## Camera solving (SfM)
 
@@ -1356,7 +1357,8 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 sett
 
 **How it works.** When a surface is seen from only a few directions, splats can stretch along the line of sight and still match those photos, which shows up as radial streaks from other viewpoints.
 
-- This adds a penalty when a splat's longest axis exceeds the ratio below times its shortest.
+- This adds a penalty when a splat's longest axis exceeds the ratio below times its middle axis, and only shortens the long axis.
+- Flat discs (two long axes, one very thin) are the normal shape of splats on surfaces and are never penalised.
 - 0 turns it off.
 
 ### Needle ratio limit
