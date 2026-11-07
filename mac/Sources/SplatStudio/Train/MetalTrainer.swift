@@ -838,13 +838,22 @@ final class MetalTrainer: @unchecked Sendable {
     /// Mean PSNR over the holdout views (or a sample of training views if there are none).
     /// Scores any splat (e.g. from another trainer) on this dataset's held-out photos with the same rasteriser
     /// and exact intrinsics, at full SH degree. Returns mean PSNR and per-view PSNR.
-    func evaluate(cloud g: GaussianCloud) throws -> (mean: Float, perView: [Float], names: [String], failed: [String]) {
+    /// `saveRendersTo`: also writes each held-out render as a JPEG (same file name as the photo), for image metrics
+    /// and visual side-by-sides (tools/eval/evaluate.py).
+    func evaluate(cloud g: GaussianCloud, saveRendersTo dir: URL? = nil) throws -> (mean: Float, perView: [Float], names: [String], failed: [String]) {
         load(g)
         step = config.shDegreeInterval * (config.shDegree + 1)
         let set = evalViews.isEmpty ? Array(trainViews.prefix(8)) : evalViews
         var per: [Float] = [], names: [String] = [], failed: [String] = []
+        if let dir { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
         for v in set {
-            if let r = try render(view: v) { per.append(r.mse > 0 ? -10 * log10(r.mse) : 99); names.append(v.camera.image) }
+            if let r = try render(view: v) {
+                per.append(r.mse > 0 ? -10 * log10(r.mse) : 99); names.append(v.camera.image)
+                if let dir {
+                    try SystemBenchmark.writeJPEG(r.pixels, width: v.width, height: v.height,
+                                                  to: dir.appendingPathComponent((v.camera.image as NSString).lastPathComponent))
+                }
+            }
             else { failed.append(v.camera.image) }   // nothing rendered (e.g. every splat behind / outside the view)
         }
         return (per.isEmpty ? 0 : per.reduce(0, +) / Float(per.count), per, names, failed)

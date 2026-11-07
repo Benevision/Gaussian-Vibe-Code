@@ -198,7 +198,7 @@ enum SystemBenchmark {
         return g
     }
 
-    private static func writeJPEG(_ rgba: [UInt8], width: Int, height: Int, to url: URL) throws {
+    static func writeJPEG(_ rgba: [UInt8], width: Int, height: Int, to url: URL) throws {
         let cs = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let provider = CGDataProvider(data: Data(rgba) as CFData),
               let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4, space: cs,

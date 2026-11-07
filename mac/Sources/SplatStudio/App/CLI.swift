@@ -261,7 +261,7 @@ enum CLI {
                     g = g.filtered(plan.remove.map { !$0 })
                     print("auto clean removed \(plan.remove.filter { $0 }.count) splats (\(plan.unseenCount) unseen, \(plan.outsideCount) outside box)")
                 }
-                let r = try t.evaluate(cloud: g)
+                let r = try t.evaluate(cloud: g, saveRendersTo: value("--save-renders").map { URL(fileURLWithPath: $0) })
                 print(String(format: "eval %@: %d splats, SH %d, antialiased %@ → held-out PSNR %.2f dB over %d views (min %.2f, max %.2f)",
                              (f as NSString).lastPathComponent, g.count, cfg.shDegree, cfg.antialiased ? "yes" : "no", r.mean, r.perView.count,
                              r.perView.min() ?? 0, r.perView.max() ?? 0))
