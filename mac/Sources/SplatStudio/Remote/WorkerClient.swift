@@ -120,6 +120,27 @@ final class WorkerClient: @unchecked Sendable {
         return r
     }
 
+    // Remote install of optional processing components (worker ≥ 1.1.1)
+
+    struct RuntimeStatus: Codable, Sendable {
+        var state: String            // idle | running | done | failed
+        var component: String?
+        var step: String?
+        var fraction: Double?
+        var message: String?
+        var log: [String]?
+        var installed: [String: Bool]?
+    }
+
+    /// `GET /v1/runtime` — optional components and the progress of a remote install.
+    func runtimeStatus() async throws -> RuntimeStatus { try await json(request("v1/runtime")) }
+
+    /// `POST /v1/runtime/install` — installs a fixed component ("processing": COLMAP mapper, LightGlue,
+    /// OWLv2, SAM 2) into the worker's GPU runtime; poll `runtimeStatus()` for progress.
+    func installRuntime(_ component: String = "processing") async throws -> RuntimeStatus {
+        try await json(jsonBody("v1/runtime/install", ["component": component]))
+    }
+
     // §4
 
     /// `GET /v1/info` (also the health check).

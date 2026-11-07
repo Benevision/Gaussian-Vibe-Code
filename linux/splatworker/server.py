@@ -542,6 +542,24 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             "auth": settings.token is not None,
         }
 
+    # ------------------------------------------------------------ runtime
+    from .runtime_install import RuntimeInstaller
+    installer = RuntimeInstaller()
+
+    @app.get("/v1/runtime")
+    def runtime_status():
+        """Optional components and the progress of a remote install."""
+        return installer.status()
+
+    @app.post("/v1/runtime/install")
+    async def runtime_install(request: Request):
+        body = await json_body(request)
+        comp = (body or {}).get("component", "processing") if isinstance(body, dict) else "processing"
+        try:
+            return installer.start(str(comp))
+        except ValueError as e:
+            raise ApiError(400, str(e))
+
     # ----------------------------------------------------------- datasets
     @app.post("/v1/datasets")
     async def upload_dataset(request: Request):

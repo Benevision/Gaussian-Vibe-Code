@@ -68,3 +68,20 @@ def test_update_version_compare():
     from splatworker.gui import updates
     assert updates.is_newer("1.1.1", "1.1.0") and updates.is_newer("1.10.0", "1.9.9")
     assert not updates.is_newer("1.1.0", "1.1.0") and not updates.is_newer("1.0.9", "1.1.0")
+
+
+def test_view_gap_dense_vs_sparse():
+    import numpy as np
+    from types import SimpleNamespace
+    from splatworker.trainer import median_nearest_view_gap
+
+    def ring(n):
+        cams = []
+        for k in range(n):
+            t = 2 * np.pi * k / n
+            eye = np.array([3 * np.sin(t), 0, 3 * np.cos(t)])
+            z = -eye / np.linalg.norm(eye); x = np.cross([0, 1, 0], z); x /= np.linalg.norm(x); y = np.cross(z, x)
+            m = np.eye(4); m[:3, 0], m[:3, 1], m[:3, 2], m[:3, 3] = x, y, z, eye
+            cams.append(SimpleNamespace(camera_to_world=m))
+        return cams
+    assert median_nearest_view_gap(ring(120), 3.0) < 15 < median_nearest_view_gap(ring(12), 3.0)

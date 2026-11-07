@@ -103,10 +103,33 @@ enum FrameMasker {
         }
         if !ranRemotely { try await runner.run(r, workDir: frames.root, progress: progress) }
         let dir = frames.root.appendingPathComponent("splatprep-masks/masks")
-        for i in frames.frames.indices {
-            let f = frames.frames[i]
-            let stem = ((f.image as NSString).lastPathComponent as NSString).deletingPathExtension
-            let m = dir.appendingPathComponent(stem + ".png")
+        try FileManager.default.ensureDirectory(frames.root.appendingPathComponent("masks"))
+        // A mask that keeps (almost) nothing means the model lost its object (or failed): applying it would
+        // silently remove that whole photo from training. Leave such frames unmasked, and refuse outright
+        // when it's most of them — that's the wrong mask mode for this capture, not a few bad frames.
+        func maskURL(_ f: IngestedFrame) -> URL {
+            dir.appendingPathComponent((((f.image as NSString).lastPathComponent as NSString).deletingPathExtension) + ".png")
+        }
+        var emptyFrames = 0, seen = 0
+        var empty = Set<Int>()
+        for i in frames.frames.indices {     // pass 1: count (no masks kept in memory)
+            let f = frames.frames[i], m = maskURL(f)
+            guard FileManager.default.fileExists(atPath: m.path) else { continue }
+            let (keep, _, _) = try ImageUtil.readGray8(m, width: f.width, height: f.height)
+            seen += 1
+            let kept = keep.reduce(0) { $0 + ($1 >= 128 ? 1 : 0) }
+            if Double(kept) < 0.01 * Double(max(keep.count, 1)) { emptyFrames += 1; empty.insert(i) }
+        }
+        if seen > 0 && Double(emptyFrames) > 0.5 * Double(seen) {
+            throw PipelineError.processFailed("Masking with \(modelId) kept almost nothing in \(emptyFrames) of \(seen) frames, so it was not applied. "
+                + (modelId == "sam2_auto" ? "“Isolate one object” keeps only a single central object — for rooms and scenes choose “Remove moving things” or no masks."
+                                          : "Try a different mask mode or no masks."))
+        }
+        if emptyFrames > 0 {
+            progress?(PipelineProgress(stage: "Masking", fraction: -1, message: "\(emptyFrames) frames had empty masks and were left unmasked"))
+        }
+        for i in frames.frames.indices where !empty.contains(i) {     // pass 2: apply
+            let f = frames.frames[i], m = maskURL(f)
             guard FileManager.default.fileExists(atPath: m.path) else { continue }
             var (keep, _, _) = try ImageUtil.readGray8(m, width: f.width, height: f.height)
             keep = keep.map { $0 >= 128 ? 255 : 0 }

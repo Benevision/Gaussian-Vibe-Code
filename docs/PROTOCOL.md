@@ -148,6 +148,10 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `transientMasking` | bool | true | robust training: ignore solid, strongly-inconsistent regions (moving objects) after 30 % of training |
 | `transientSensitivity` | float | 3 | outlier threshold as a multiple of the image's median error (min 0.10) |
 | `transientStart` | int | 1000 | earliest step for transient masking (actual start = max(this, 0.3 × iterations)) |
+| `transientMaxViewGap` | float | 15 | transient masking is skipped when the median nearest-view gap (degrees, view angle + camera offset at scene scale) exceeds this |
+| `depthEdgeAware` | bool | true | depth loss weighted by exp(−10·|∇I|) of the target image |
+| `anisotropyReg` | float | 0.1 | penalty on max(longest/shortest axis − `anisotropyMaxRatio`, 0) per splat |
+| `anisotropyMaxRatio` | float | 10 | axis ratio above which the needle penalty applies |
 | `appearanceCorrection` | bool | true | per-photo colour correction: rendered RGB → M·rgb + b (3×3 + 3 per training image), seeded from camera `exposure`, used only in the loss |
 | `appearanceLR` | float | 0.02 | Adam LR of the per-photo corrections (each photo updates only when drawn) |
 | `appearanceReg` | float | 0.001 | L2 pull of each correction towards its exposure-seeded start |
@@ -170,6 +174,8 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `GET /v1/jobs/{id}` | – | `JobStatus` |
 | `POST /v1/jobs/{id}/cancel` | – | `JobStatus` |
 | `DELETE /v1/jobs/{id}` | – | `204`, deletes job files |
+| `GET /v1/runtime` | – | optional components (`installed`: lightglue, pycolmap, sam2, transformers, processing) and remote-install progress (`state` idle/running/done/failed, `fraction`, `message`, `log`) (worker ≥ 1.1.2) |
+| `POST /v1/runtime/install` | `{"component":"processing"}` | starts installing a fixed component set into the GPU runtime; poll `GET /v1/runtime` |
 | `GET /v1/jobs/{id}/preview.splat` | – | compact live snapshot (antimatter15 `.splat`, 32 B/splat, the ≤400 k most visible splats, no SH); header `X-Preview-Step`; `404` until first preview (worker ≥ 1.1) |
 | `GET /v1/jobs/{id}/preview.ply` | – | full snapshot PLY (worker 1.0 and test backends only), `404` otherwise |
 | `GET /v1/jobs/{id}/result.ply` | – | final PLY once `state == "completed"` |

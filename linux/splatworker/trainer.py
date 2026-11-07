@@ -204,6 +204,28 @@ def _in_box(xyz, lo, hi):
 
 
 
+def median_nearest_view_gap(cams, scene_extent: float) -> float:
+    """Median over photos of the gap to the most similar other photo: view-direction angle plus the camera
+    offset as an angle at scene scale (degrees). ~5 = dense capture, >15 = sparse (same as the Mac)."""
+    import numpy as np
+
+    if len(cams) < 3:
+        return 0.0
+    c2w = np.stack([np.asarray(c.camera_to_world, dtype=np.float64) for c in cams])
+    pos, fwd = c2w[:, :3, 3], c2w[:, :3, 2]
+    fwd = fwd / np.linalg.norm(fwd, axis=1, keepdims=True)
+    ext = max(float(scene_extent), 1e-3)
+    idx = range(0, len(cams), max(1, len(cams) // 400))
+    gaps = []
+    for i in idx:
+        ang = np.degrees(np.arccos(np.clip(fwd @ fwd[i], -1, 1)))
+        off = np.degrees(np.linalg.norm(pos - pos[i], axis=1) / ext)
+        g = ang + off
+        g[i] = np.inf
+        gaps.append(float(g.min()))
+    return float(np.median(gaps))
+
+
 class AppearanceCorrection:
     """Per-photo colour correction: corrected = M · rendered + b (3×3 + 3 per photo).
 
@@ -534,6 +556,11 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     psnr_ema = None
     last_eval_psnr = None
     transient = TransientMasker(torch, cfg)
+    view_gap = median_nearest_view_gap([v.camera for v in train_views], scene_scale)
+    transient_on = cfg.transientMasking and view_gap <= cfg.transientMaxViewGap
+    if cfg.transientMasking and not transient_on:
+        log(f"sparse coverage (photos ~{view_gap:.0f}° apart): not ignoring moving objects — "
+            "real scenery would be mistaken for them")
     loss_ema = None
     preview_step = None
     train_start = time.time()
@@ -566,7 +593,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if isinstance(strategy, DefaultStrategy):
             strategy.step_pre_backward(params, optimizers, strategy_state, step, info)
 
-        if cfg.transientMasking:
+        if transient_on:
             gt = transient.apply(pred, gt, alphas[0], step)
         l1 = torch.abs(pred - gt).mean()
         ssim_val = ssim(pred.permute(2, 0, 1)[None].contiguous(), gt.permute(2, 0, 1)[None].contiguous())
@@ -575,11 +602,24 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             ed = renders[0, ..., 3]
             valid = (depth_gt > 0) & torch.isfinite(depth_gt)
             if valid.any():
-                loss = loss + depth_weight * torch.abs(ed[valid] - depth_gt[valid]).mean()
+                derr = torch.abs(ed - depth_gt)
+                if cfg.depthEdgeAware:
+                    # DN-Splatter: trust depth less at image edges (exp(-|∇I|) of the photo, as on the Mac)
+                    g = (img[..., :3] * torch.tensor([0.299, 0.587, 0.114], device=dev)).sum(-1)
+                    gx = torch.zeros_like(g); gy = torch.zeros_like(g)
+                    gx[:, 1:-1] = (g[:, 2:] - g[:, :-2]) * 0.5
+                    gy[1:-1, :] = (g[2:, :] - g[:-2, :]) * 0.5
+                    derr = derr * torch.exp(-10.0 * torch.sqrt(gx * gx + gy * gy))
+                loss = loss + depth_weight * derr[valid].sum() / valid.sum().clamp_min(1)
         if opacity_reg > 0:
             loss = loss + opacity_reg * torch.sigmoid(params["opacities"]).mean()
         if scale_reg > 0:
             loss = loss + scale_reg * torch.exp(params["scales"]).mean()
+        if cfg.anisotropyReg > 0:
+            # Penalise needle splats (longest / shortest axis above the limit), as on the Mac.
+            ls = params["scales"]
+            ratio = torch.exp(ls.max(dim=1).values - ls.min(dim=1).values)
+            loss = loss + cfg.anisotropyReg * torch.clamp(ratio - cfg.anisotropyMaxRatio, min=0).mean()
 
         loss.backward()
 

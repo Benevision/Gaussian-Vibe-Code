@@ -158,7 +158,14 @@ enum DatasetBuilder {
                 try PriorsFile.write(dataset: ds, to: dir.appendingPathComponent("priors.json"))
                 var frames = frameSet(from: ds)
                 let sol = try await solvePoses(&frames, o, worker: worker, priors: "priors.json", progress: PipelineProgress.scaled(progress, 0.7...0.97))
-                ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.capture.images.holdoutInterval)
+                // SfM that places only a fraction of the photos (bad masks, textureless rooms) must never
+                // replace the capture: keep the iPhone's own ARKit poses, which are complete, and say so.
+                if Double(sol.poses.count) >= 0.5 * Double(frames.frames.count) {
+                    ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.capture.images.holdoutInterval)
+                } else {
+                    progress?(PipelineProgress(stage: "Camera solving", fraction: -1,
+                        message: "SfM placed only \(sol.poses.count) of \(frames.frames.count) photos — keeping the capture's own (ARKit) camera poses"))
+                }
             }
             return finish(ds, progress)
         case .colmap(let p, let images):
@@ -202,6 +209,11 @@ enum DatasetBuilder {
         // 4. Poses (+ rig constraints / metric scale).
         let sequential: Bool = { switch source { case .video, .video360, .stereoVideo: return true; default: return false } }()
         let sol = try await solvePoses(&frames, o, worker: worker, priors: nil, sequential: sequential, progress: poseP)
+        if frames.frames.count >= 10 && Double(sol.poses.count) < 0.3 * Double(frames.frames.count) {
+            throw PipelineError.processFailed("Camera solving placed only \(sol.poses.count) of \(frames.frames.count) photos. "
+                + (o.masking.model != .none ? "Masks may be hiding most of each photo — try without masks. " : "")
+                + "Try another camera solver, or capture with more overlap between photos.")
+        }
         var ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.holdoutInterval)
         if !o.keepIntermediates {
             try? fm.removeItem(at: dir.appendingPathComponent(".oc-input"))

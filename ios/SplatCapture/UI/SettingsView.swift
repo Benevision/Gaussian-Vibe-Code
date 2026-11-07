@@ -93,10 +93,14 @@ struct SettingsView: View {
                     Explained("Freeze exposure and white balance when recording starts, so colours stay consistent between frames (splats hate flickering brightness). Turn off if you walk between very bright and dark areas. Default: On.") {
                         Toggle("Lock exposure & white balance", isOn: s.lockExposureWhileRecording)
                     }
-                    Explained("When exposure locks, use a shutter no slower than 1/120 s and raise ISO to keep the brightness. Indoors the camera otherwise picks about 1/60 s, which blurs frames whenever you move — and blurry frames get skipped, leaving gaps. Costs a little noise in dim rooms. Default: On.") {
-                        Toggle("Fast shutter (1/120 s)", isOn: Binding(get: { s.maxShutterSeconds.wrappedValue > 0 },
-                                                                       set: { s.maxShutterSeconds.wrappedValue = $0 ? 1.0 / 120 : 0 }))
-                            .disabled(!s.lockExposureWhileRecording.wrappedValue)
+                    Explained("Fastest shutter to use when exposure locks; ISO rises to keep the brightness. Motion blur ruins splats (and blurry frames get skipped, leaving gaps), while sensor noise is random in every frame and averages out across views — so faster is usually better. At walking pace 1/60 s smears about 11 px, 1/250 s about 3 px. In very dim rooms the camera may hit its ISO limit and frames get darker. Default: 1/250 s.") {
+                        Picker("Shutter limit", selection: s.maxShutterSeconds) {
+                            Text("Auto").tag(0.0)
+                            Text("1/120 s").tag(1.0 / 120)
+                            Text("1/250 s").tag(1.0 / 250)
+                            Text("1/500 s").tag(1.0 / 500)
+                        }
+                        .disabled(!s.lockExposureWhileRecording.wrappedValue)
                     }
                     Explained("Lets the camera refocus continuously. Off fixes focus (and thus intrinsics) — only useful when the subject distance stays constant. Default: On.") {
                         Toggle("Autofocus", isOn: s.autoFocus)

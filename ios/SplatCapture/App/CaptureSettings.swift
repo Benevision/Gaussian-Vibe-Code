@@ -70,8 +70,9 @@ struct CaptureSettings: Codable, Sendable, Equatable {
 
     var lockExposureWhileRecording: Bool = true
     /// Longest shutter allowed when exposure is locked for recording (seconds; 0 = whatever auto-exposure
-    /// chose). 1/120 s halves indoor motion blur versus the usual 1/60 s, at the cost of a little noise.
-    var maxShutterSeconds: Double = 1.0 / 120
+    /// chose). Blur ruins splats while sensor noise averages out across views, so this favours a fast
+    /// shutter: at walking pace 1/60 s smears ~11 px, 1/250 s ~3 px. ISO rises to keep the brightness.
+    var maxShutterSeconds: Double = 1.0 / 250
     var autoFocus: Bool = true
     var maxFrames: Int = 1500
 

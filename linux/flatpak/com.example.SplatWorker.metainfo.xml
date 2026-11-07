@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.1.2" date="2026-11-07">
+      <description>
+        <p>Install processing models remotely from Splat Studio; edge-aware depth, needle-splat penalty, and moving-object masking that switches off for sparse captures.</p>
+      </description>
+    </release>
     <release version="1.1.1" date="2026-11-07">
       <description>
         <p>Optional processing models (COLMAP mapper, OWLv2, SAM 2) so Splat Studio can run camera solving and moving-object masking on this GPU.</p>

@@ -281,11 +281,15 @@ struct NewProjectSheet: View {
                     Text("Keep main subject (Apple Vision)").tag(MaskKind.subject)
                     Text("Remove people (Apple Vision)").tag(MaskKind.people)
                     Text("Remove sky (Models pack)").tag(MaskKind.sky)
-                    Text("SAM 2 automatic (Models pack)").tag(MaskKind.sam2)
+                    Text("Isolate one object — SAM 2 (Models pack; objects, not rooms)").tag(MaskKind.sam2)
                 }.labelsHidden().fixedSize().frame(maxWidth: 380, alignment: .trailing)
             }
             Label("Training also ignores moving objects automatically (Ignore moving objects, on by default); masks are for removing them reliably from the start.", systemImage: "info.circle")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if maskKind == .sam2 {
+                Label("Keeps only the object in the middle of the first frame and masks out everything else — for scanning a single item. For rooms and scenes use “Remove moving things”.", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
             if maskKind == .movingAI {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Objects to remove").font(.callout)
@@ -306,6 +310,34 @@ struct NewProjectSheet: View {
 
     // MARK: page 3 — training
 
+    /// splatprep models this project will ask the Linux worker for (masks + learned camera solving).
+    private var neededWorkerModels: [(id: String, name: String)] {
+        var m: [(String, String)] = []
+        switch maskKind {
+        case .movingAI: m.append(("dynamic", "moving-object masks"))
+        case .sam2: m.append(("sam2_auto", "SAM 2"))
+        case .sky: m.append(("sky", "sky masks"))
+        default: break
+        }
+        if solverKind == .learned { m.append((featureModel, featureChoices.first { $0.0 == featureModel }?.1 ?? featureModel)) }
+        return m
+    }
+
+    /// When the PC will do the preparation but lacks a model it needs, offer to install it from here.
+    @ViewBuilder private var missingWorkerModelsNotice: some View {
+        let browser = WorkerBrowser.shared
+        if model.training.placement != .thisMac,
+           let id = model.training.workerId ?? browser.workers.first?.id,
+           let info = browser.health[id]?.info, (info.capabilities ?? []).contains("process") {
+            let have = Set(info.models ?? [])
+            let missing = neededWorkerModels.filter { !have.contains($0.id) }
+            if !missing.isEmpty {
+                WorkerModelInstallView(workerId: id,
+                    reason: "\(info.name) doesn't have \(missing.map(\.name).joined(separator: " or ")) yet, so that step would run on this Mac instead.")
+            }
+        }
+    }
+
     @ViewBuilder private var trainingPage: some View {
         Text("Training").font(.title2.bold())
         Text("You can change all of this later and retrain from the same dataset.").foregroundStyle(.secondary)
@@ -313,6 +345,7 @@ struct NewProjectSheet: View {
         if trainAfter {
             TrainingPresetPicker(session: model.training)
             ComputePicker(session: model.training, prepPlacement: $options.compute)
+            missingWorkerModelsNotice
             DisclosureGroup(isExpanded: $showTrainingDetails) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Changing any value switches the preset to Custom. Every setting has an ⓘ explanation.")

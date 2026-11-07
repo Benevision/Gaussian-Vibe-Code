@@ -401,7 +401,18 @@ kernel void loss_grad(device const float* planes [[buffer(0)]], device const flo
             float dt = depthTarget[dy * depthSize.x + dx];
             if (dt > 0.0f && isfinite(dt)) {
                 float d = img[3*hw + pid];
-                g = rp.depthWeight * rp.invNumPixels * (d > dt ? 1.0f : -1.0f);
+                // Edge-aware (DN-Splatter): LiDAR is least reliable at depth / colour edges, so its pull is
+                // weighted by exp(-|∇I|) of the photo there (rp.pad = 1 enables it).
+                float ew = 1.0f;
+                if (rp.pad > 0.5f) {
+                    uint xl = p.x > 0 ? pid - 1 : pid, xr = p.x + 1 < rp.width ? pid + 1 : pid;
+                    uint yu = p.y > 0 ? pid - rp.width : pid, yd = p.y + 1 < rp.height ? pid + rp.width : pid;
+                    float4 tl = float4(target[xl]), tr = float4(target[xr]), tu = float4(target[yu]), td = float4(target[yd]);
+                    float gx = dot(tr.xyz - tl.xyz, float3(0.299f, 0.587f, 0.114f)) / 510.0f;
+                    float gy = dot(td.xyz - tu.xyz, float3(0.299f, 0.587f, 0.114f)) / 510.0f;
+                    ew = exp(-10.0f * sqrt(gx * gx + gy * gy));
+                }
+                g = ew * rp.depthWeight * rp.invNumPixels * (d > dt ? 1.0f : -1.0f);
                 dl = abs(d - dt);
             }
         }
@@ -534,7 +545,7 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
                                 device float* gOp [[buffer(12)]],
                                 device float* gSH [[buffer(13)]],
                                 device float* gradStats [[buffer(14)]],  // per gaussian: accum, count, maxRadius
-                                constant float4& reg [[buffer(15)]],     // x: opacityReg/N, y: scaleReg/(3N)
+                                constant float4& reg [[buffer(15)]],     // x: opacityReg/N, y: scaleReg/(3N), z: anisotropyReg/N, w: max axis ratio
                                 uint i [[thread_position_in_grid]]) {
     if (i >= cam.count) return;
     float o = 1.0f / (1.0f + exp(-opLogit[i]));
@@ -542,6 +553,14 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
     // Regulariser gradients apply to every gaussian.
     float gop = reg.x * o * (1.0f - o);
     float3 gls = reg.y * s;
+    // Anisotropy: penalise max(r - w, 0) with r = longest / shortest axis, so splats can't become the long
+    // needles that streak along view rays when a surface is seen from few directions.
+    if (reg.z > 0.0f) {
+        uint ia = s.x >= s.y ? (s.x >= s.z ? 0u : 2u) : (s.y >= s.z ? 1u : 2u);
+        uint ib = s.x <= s.y ? (s.x <= s.z ? 0u : 2u) : (s.y <= s.z ? 1u : 2u);
+        float r = s[ia] / max(s[ib], 1e-12f);
+        if (r > reg.w && ia != ib) { gls[ia] += reg.z * r; gls[ib] -= reg.z * r; }   // d r / d log s
+    }
     float3 gp = float3(0);
     float4 gq = float4(0);
     bool visible = tilesTouched[i] > 0;

@@ -45,6 +45,9 @@ struct TrainingConfig: Codable, Equatable {
     var transientSensitivity: Float = 3
     /// Step at which transient masking starts (residuals are meaningless before the scene forms).
     var transientStart = 1000
+    /// Moving-object masking switches itself off when photos are this far apart (median gap to the nearest
+    /// view, degrees): with few views per surface, real scenery disagrees between views and gets ignored.
+    var transientMaxViewGap: Float = 15
     /// Learn a per-photo colour correction (3×3 colour matrix + offset: exposure, white balance, tint),
     /// so photos taken with different auto-exposure don't fight each other. Seeded from recorded exposure.
     var appearanceCorrection = true
@@ -53,6 +56,12 @@ struct TrainingConfig: Codable, Equatable {
     var appearanceLR: Float = 0.02
     /// Pulls each photo's correction towards its starting value (higher = corrections stay smaller).
     var appearanceReg: Float = 0.001
+    /// Down-weight LiDAR / stereo depth at image edges, where depth sensors are least reliable.
+    var depthEdgeAware = true
+    /// Penalty on splats whose longest axis exceeds `anisotropyMaxRatio` × their shortest (needle splats
+    /// that streak along view rays in sparsely covered areas). 0 = off.
+    var anisotropyReg: Float = 0.1
+    var anisotropyMaxRatio: Float = 10
     var region: Region? = nil
     var cameraIds: [Int]? = nil
 
@@ -74,6 +83,8 @@ struct TrainingConfig: Codable, Equatable {
         d(.initialOpacity, &initialOpacity); d(.randomInitCount, &randomInitCount); d(.seed, &seed)
         d(.previewInterval, &previewInterval); d(.evalInterval, &evalInterval)
         d(.transientMasking, &transientMasking); d(.transientSensitivity, &transientSensitivity); d(.transientStart, &transientStart)
+        d(.transientMaxViewGap, &transientMaxViewGap)
+        d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)

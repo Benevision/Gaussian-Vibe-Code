@@ -438,3 +438,10 @@ def test_preview_ply_is_valid_3dgs(client, dataset_zip):
     path.write_bytes(data)
     v = read_ply_vertices(path)
     assert len(v) == 62 and len(v["x"]) == 10
+
+
+def test_runtime_endpoints(client):
+    r = client.get("/v1/runtime", headers=AUTH)
+    assert r.status_code == 200 and "installed" in r.json() and r.json()["state"] == "idle"
+    assert client.post("/v1/runtime/install", json={"component": "nope"}, headers=AUTH).status_code == 400
+    assert client.get("/v1/runtime").status_code == 401   # same auth as every other endpoint

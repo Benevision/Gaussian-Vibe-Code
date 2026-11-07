@@ -66,6 +66,11 @@ class TrainingConfig:
     transientMasking: bool = True
     transientSensitivity: float = 3.0
     transientStart: int = 1000
+    transientMaxViewGap: float = 15.0   # off for sparse captures (median nearest-view gap, degrees)
+    # Depth / shape regularisers (same as the Mac Metal trainer)
+    depthEdgeAware: bool = True
+    anisotropyReg: float = 0.1
+    anisotropyMaxRatio: float = 10.0
     # Per-photo colour correction (3×3 matrix + offset), same as the Mac Metal trainer
     appearanceCorrection: bool = True
     appearanceLR: float = 0.02

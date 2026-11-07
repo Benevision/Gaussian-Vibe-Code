@@ -12,7 +12,7 @@ struct PointSnapshot: Sendable {
 /// Voxel-downsampled, confidence-filtered, coloured point accumulation.
 /// Not thread-safe: owned and used by the capture writer queue only.
 final class PointFusion {
-    private let voxel: Float
+    private var voxel: Float
     private let minConfidence: UInt8
     private let maxDepth: Float
     private let maxVoxels: Int
@@ -44,6 +44,9 @@ final class PointFusion {
         let sx = imageSize.x / Float(depth.width), sy = imageSize.y / Float(depth.height)
         let cxs = Float(sampler.width) / imageSize.x, cys = Float(sampler.height) / imageSize.y
         let fx = intrinsics.x, fy = intrinsics.y, cx = intrinsics.z, cy = intrinsics.w
+        // Budget full: merge into voxels twice the size and keep going, so newly scanned areas still get
+        // points (previously fusion simply stopped at maxVoxels: no dots, and no training points there).
+        if sums.count >= maxVoxels { coarsen() }
         let inv = 1 / voxel
         let full = sums.count >= maxVoxels
 
@@ -60,7 +63,7 @@ final class PointFusion {
                 let ix = Int64((pw.x * inv).rounded(.down))
                 let iy = Int64((pw.y * inv).rounded(.down))
                 let iz = Int64((pw.z * inv).rounded(.down))
-                let key = ((ix & 0x1FFFFF) << 42) | ((iy & 0x1FFFFF) << 21) | (iz & 0x1FFFFF)
+                let key = Self.key(ix, iy, iz)
                 let rgb = sampler.rgb(x: Int(px * cxs), y: Int(py * cys))
                 if let slot = index[key] {
                     let s = Int(slot)
@@ -76,6 +79,30 @@ final class PointFusion {
                 }
             }
         }
+    }
+
+    /// Doubles the voxel size, merging existing voxels (sums and colour sums add up).
+    private func coarsen() {
+        voxel *= 2
+        let inv = 1 / voxel
+        var newIndex: [Int64: Int32] = [:]
+        newIndex.reserveCapacity(sums.count / 4)
+        var newSums: [SIMD4<Float>] = [], newColors: [SIMD3<Float>] = []
+        newSums.reserveCapacity(sums.count / 4); newColors.reserveCapacity(sums.count / 4)
+        for (k, s) in sums.enumerated() {
+            let c = SIMD3(s.x, s.y, s.z) / max(s.w, 1)
+            let key = Self.key(Int64((c.x * inv).rounded(.down)), Int64((c.y * inv).rounded(.down)), Int64((c.z * inv).rounded(.down)))
+            if let slot = newIndex[key] {
+                newSums[Int(slot)] += s; newColors[Int(slot)] += colorSums[k]
+            } else {
+                newIndex[key] = Int32(newSums.count); newSums.append(s); newColors.append(colorSums[k])
+            }
+        }
+        index = newIndex; sums = newSums; colorSums = newColors
+    }
+
+    private static func key(_ ix: Int64, _ iy: Int64, _ iz: Int64) -> Int64 {
+        ((ix & 0x1FFFFF) << 42) | ((iy & 0x1FFFFF) << 21) | (iz & 0x1FFFFF)
     }
 
     /// A strided subset for display.

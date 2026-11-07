@@ -383,9 +383,12 @@ struct AdvancedTrainingSettings: View {
             Text("Losses & regularisation").font(.subheadline.bold()).padding(.top, 6)
             SettingRow(id: "train.ssimWeight", showSummary: false) { NumberSlider(value: c.ssimWeight.double, range: 0...1, width: 90) }
             SettingRow(id: "train.depthWeight", showSummary: false) { NumberSlider(value: c.depthWeight.double, range: 0...1, width: 90) }
+            SettingRow(id: "train.depthEdgeAware", showSummary: false) { Toggle("", isOn: c.depthEdgeAware).labelsHidden() }
+            SettingRow(id: "train.anisotropyReg", showSummary: false) { NumberSlider(value: c.anisotropyReg.double, range: 0...1, width: 90) }
             SettingRow(id: "train.transientMasking", showSummary: false) { Toggle("", isOn: c.transientMasking).labelsHidden() }
             if session.config.transientMasking {
                 SettingRow(id: "train.transientSensitivity", showSummary: false) { NumberSlider(value: c.transientSensitivity.double, range: 2...8, width: 90) }
+                SettingRow(id: "train.transientMaxViewGap", showSummary: false) { NumberSlider(value: c.transientMaxViewGap.double, range: 5...45, width: 90) }
             }
             SettingRow(id: "train.appearanceCorrection", showSummary: false) { Toggle("", isOn: c.appearanceCorrection).labelsHidden() }
             if session.config.appearanceCorrection {

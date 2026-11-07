@@ -16,7 +16,13 @@ enum CLI {
             do {
                 let dataset = try PreparedDataset.load(URL(fileURLWithPath: ds))
                 var cfg = TrainingConfig.Preset(rawValue: value("--preset") ?? "balanced")?.config ?? TrainingConfig()
-                if let c = value("--config") { cfg = try JSONDecoder().decode(TrainingConfig.self, from: Data(contentsOf: URL(fileURLWithPath: c))) }
+                // --config: keys in the file override the preset (others keep the preset's values).
+                if let c = value("--config") {
+                    let over = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: c))) as? [String: Any] ?? [:]
+                    var base = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cfg)) as? [String: Any] ?? [:]
+                    for (k, v) in over { base[k] = v }
+                    cfg = try JSONDecoder().decode(TrainingConfig.self, from: JSONSerialization.data(withJSONObject: base))
+                }
                 if let it = value("--iterations").flatMap(Int.init) { cfg.iterations = it; cfg.densifyStop = min(cfg.densifyStop, Int(Double(it) * 0.8)) }
                 if !dataset.hasDepth { cfg.depthWeight = 0 }
                 let out = URL(fileURLWithPath: value("--out") ?? "trained.ply")

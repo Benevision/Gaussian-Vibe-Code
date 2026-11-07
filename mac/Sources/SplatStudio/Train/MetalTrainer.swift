@@ -89,6 +89,31 @@ final class MetalTrainer: @unchecked Sendable {
     private var rawImg: MTLBuffer!, apParams: MTLBuffer!, apGrad: MTLBuffer!
     private var apM1: [Float] = [], apM2: [Float] = [], apSteps: [Int] = [], apInit: [Float] = []
     private var viewIndex: [ObjectIdentifier: Int] = [:]
+    /// Moving-object masking is only trusted when every surface is seen from several nearby views.
+    private(set) var transientEnabled = false
+    /// Median over photos of the gap to the most similar other photo (degrees of view direction plus
+    /// camera offset as an angle at scene scale). ~5° = dense capture, >15° = sparse.
+    private(set) var medianViewGap: Double = 0
+
+    static func medianNearestViewGap(_ cams: [DatasetCamera], sceneExtent: Float) -> Double {
+        guard cams.count > 2 else { return 0 }
+        let pos = cams.map { $0.center }, fwd = cams.map { $0.forward }
+        let ext = max(sceneExtent, 1e-3)
+        var gaps: [Double] = []
+        // Subsample big sets (O(n²)): every k-th photo against all.
+        let stride = max(1, cams.count / 400)
+        for i in Swift.stride(from: 0, to: cams.count, by: stride) {
+            var best = Double.infinity
+            for j in cams.indices where j != i {
+                let ang = acos(Double(min(1, max(-1, simd_dot(fwd[i], fwd[j]))))) * 180 / .pi
+                let off = Double(simd_distance(pos[i], pos[j]) / ext) * 180 / .pi
+                best = min(best, ang + off)
+            }
+            gaps.append(best)
+        }
+        gaps.sort()
+        return gaps[gaps.count / 2]
+    }
     private let residHist: MTLBuffer
     private let outlierCount: MTLBuffer
     private var transientThreshold: Float = -1
@@ -148,6 +173,11 @@ final class MetalTrainer: @unchecked Sendable {
         evalViews = views.filter { $0.holdout }
         if trainViews.isEmpty { trainViews = views }
         guard !trainViews.isEmpty else { throw TrainerError.noViews }
+        medianViewGap = Self.medianNearestViewGap(trainViews.map { $0.camera }, sceneExtent: sceneExtent)
+        transientEnabled = config.transientMasking && medianViewGap <= Double(config.transientMaxViewGap)
+        if config.transientMasking && !transientEnabled {
+            progress(String(format: "Sparse coverage (photos ~%.0f° apart): not ignoring moving objects, real scenery would be mistaken for them", medianViewGap))
+        }
         maxPixels = views.map { $0.width * $0.height }.max() ?? 0
         allocPixelBuffers()
         progress("Initialising gaussians")
@@ -282,6 +312,7 @@ final class MetalTrainer: @unchecked Sendable {
         rp.ssimWeight = config.ssimWeight
         rp.depthWeight = config.depthWeight
         rp.invNumPixels = 1 / Float(v.width * v.height)
+        rp.pad = config.depthEdgeAware ? 1 : 0   // edge-aware depth flag (loss_grad)
         return rp
     }
 
@@ -506,7 +537,7 @@ final class MetalTrainer: @unchecked Sendable {
         }
         split("2 duplicate+tile sort+forward raster (M=\(tileCount))")
         encodeLoss(enc, v: v, rp: &rp)
-        let robust = optimize && config.transientMasking
+        let robust = optimize && transientEnabled
         if robust {
             memset(residHist.contents(), 0, 256 * 4)
             memset(outlierCount.contents(), 0, 4)
@@ -562,6 +593,7 @@ final class MetalTrainer: @unchecked Sendable {
             reg.x = config.opacityReg / Float(max(n, 1))
             reg.y = config.scaleReg / Float(max(3 * n, 1))
         }
+        reg.z = config.anisotropyReg / Float(max(n, 1)); reg.w = max(config.anisotropyMaxRatio, 1.5)
         for k in 0..<5 { enc.setBuffer(params[k], offset: 0, index: k) }
         enc.setBytes(&u, length: MemoryLayout<CameraUniforms>.stride, index: 5)
         enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 6)
@@ -616,7 +648,7 @@ final class MetalTrainer: @unchecked Sendable {
         let loss = (1 - config.ssimWeight) * l1 + config.ssimWeight * (1 - ssim)
         let psnr = mse > 0 ? -10 * log10(mse) : 99
         if Self.debugAppearance, !(loss.isFinite) { print("non-finite loss at step \(step): l1 \(l1) ssim \(ssim) mse \(mse) view \(apIndex ?? -1) size \(v.width)x\(v.height)") }
-        if config.transientMasking { updateTransientThreshold(pixels: v.width * v.height) }
+        if transientEnabled { updateTransientThreshold(pixels: v.width * v.height) }
         if let ai = apIndex, !v.holdout { updateAppearance(view: ai) }
         return (loss, psnr)
     }

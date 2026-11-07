@@ -1,6 +1,6 @@
 # Splat Studio — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 98 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 102 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
@@ -12,7 +12,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 98 setti
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 11 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
-- [Training — losses & regularisation](#training--losses--regularisation) — 11 settings
+- [Training — losses & regularisation](#training--losses--regularisation) — 15 settings
 - [Compute & networking](#compute--networking) — 7 settings
 - [Export](#export) — 5 settings
 
@@ -1248,6 +1248,10 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 98 setti
 | [Depth supervision](#depth-supervision) | 0.1 (when depth present) | 0–1 | Advanced |
 | [Ignore moving objects](#ignore-moving-objects) | On | – | Easy |
 | [Moving-object sensitivity](#moving-object-sensitivity) | 3× | 2–8 | Advanced |
+| [Edge-aware depth](#edge-aware-depth) | On | – | Advanced |
+| [Needle-splat penalty](#needle-splat-penalty) | 0.1 | 0–1 | Advanced |
+| [Needle ratio limit](#needle-ratio-limit) | 10 | 2–50 | Advanced |
+| [Coverage needed to ignore moving objects](#coverage-needed-to-ignore-moving-objects) | 15° | 5–45 | Advanced |
 | [Per-photo colour correction](#per-photo-colour-correction) | On | – | Easy |
 | [Colour-correction learning rate](#colour-correction-learning-rate) | 0.02 | 0.001–0.1 | Advanced |
 | [Colour-correction strength limit](#colour-correction-strength-limit) | 0.001 | 0–0.1 | Advanced |
@@ -1320,6 +1324,74 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 98 setti
 **How it works.** Lower catches subtler movers (shadows, swaying plants) but risks ignoring hard-to-learn detail; higher only catches obvious objects.
 
 - There is also a fixed minimum of 10 % colour error.
+
+### Edge-aware depth
+
+> Trusts LiDAR / stereo depth less at image edges, where depth sensors are least reliable.
+
+| | |
+|---|---|
+| **Default** | On |
+| **Mode** | Advanced |
+| **ID** | `train.depthEdgeAware` |
+
+**How it works.** Depth maps from phones are low resolution and blur across object boundaries, so their pull on splats is weighted by how flat the photo is at each pixel (DN-Splatter's exp(−|∇I|) weighting).
+
+- On our bedroom test, edge-aware depth plus the needle penalty improved held-out PSNR by about 0.3 dB.
+
+**When to change it**
+
+- Only matters when the dataset has depth.
+
+### Needle-splat penalty
+
+> Discourages splats much longer than they are wide — the streaks you see in sparsely covered areas.
+
+| | |
+|---|---|
+| **Default** | 0.1 |
+| **Range** | 0–1 |
+| **Mode** | Advanced |
+| **ID** | `train.anisotropyReg` |
+
+**How it works.** When a surface is seen from only a few directions, splats can stretch along the line of sight and still match those photos, which shows up as radial streaks from other viewpoints.
+
+- This adds a penalty when a splat's longest axis exceeds the ratio below times its shortest.
+- 0 turns it off.
+
+### Needle ratio limit
+
+> How elongated a splat may get before the needle penalty applies.
+
+| | |
+|---|---|
+| **Default** | 10 |
+| **Range** | 2–50 |
+| **Mode** | Advanced |
+| **ID** | `train.anisotropyMaxRatio` |
+
+**How it works.** Long thin splats are legitimate on hair, wires and edges, so the penalty only starts above this length-to-width ratio.
+
+**When to change it**
+
+- Lower = rounder splats everywhere (can blur thin detail).
+
+### Coverage needed to ignore moving objects
+
+> Moving-object masking switches itself off when photos are further apart than this.
+
+| | |
+|---|---|
+| **Default** | 15° |
+| **Range** | 5–45 |
+| **Mode** | Advanced |
+| **ID** | `train.transientMaxViewGap` |
+
+**How it works.** To tell a moving object from scenery, every surface must be seen from several nearby views.
+
+- The trainer measures the median gap between each photo and its most similar neighbour (view angle plus camera offset); above this many degrees it keeps moving-object masking off and says so in the log.
+- On a sparse bedroom capture (~21° apart) turning it off improved held-out PSNR by about 1 dB, because real scenery was being ignored as 'moving'.
+- Dense captures are typically 3–10°.
 
 ### Per-photo colour correction
 

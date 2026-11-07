@@ -147,6 +147,15 @@ private struct WorkerRow: View {
                 if let info = h?.info {
                     ForEach(info.gpus ?? [], id: \.self) { g in Text("\(g.name) · \(g.memoryMB.map { "\($0 / 1024) GB" } ?? "")").font(.caption) }
                     Text("\(info.backend ?? "") · \((info.capabilities ?? []).joined(separator: ", "))\(info.busy == true ? " · busy" : "")").font(.caption).foregroundStyle(.secondary)
+                    if (info.capabilities ?? []).contains("process") {
+                        let m = Set(info.models ?? [])
+                        if m.contains("dynamic") && m.contains("sam2_track") && m.contains("superpoint_lightglue") {
+                            Text("Processing models: installed (\(m.count) models)").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            WorkerModelInstallView(workerId: endpoint.id, reason: "Processing models (camera solving, moving-object masks) aren't installed on this worker yet.")
+                                .padding(.top, 4)
+                        }
+                    }
                 }
                 if case .unauthorized = h?.status {
                     HStack {
