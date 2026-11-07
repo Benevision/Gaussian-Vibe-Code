@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.3.5" date="2026-11-07">
+      <description>
+        <p>Per-photo colour correction switches off when every photo has the same exposure (iPhone captures with locked exposure), which improved held-out quality by about 1 dB on a bedroom scan.</p>
+      </description>
+    </release>
     <release version="1.3.4" date="2026-11-07">
       <description>
         <p>Set Up uses a gsplat wheel built on this PC (linux/flatpak/build-gsplat-wheel.sh) when there is one, so the gsplat 1.6 runtime no longer has to wait for the published build.</p>

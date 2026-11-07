@@ -53,7 +53,9 @@ enum TrainerError: LocalizedError {
 /// or classic ADC) runs on the CPU over the same unified-memory buffers.
 final class MetalTrainer: @unchecked Sendable {
     let ctx: MetalContext
-    let config: TrainingConfig
+    private(set) var config: TrainingConfig
+    /// Appearance correction was requested but switched off because every photo has the same exposure.
+    private(set) var appearanceAutoOff = false
     let dataset: PreparedDataset
     private(set) var views: [TrainView] = []
     private var trainViews: [TrainView] = []
@@ -87,6 +89,8 @@ final class MetalTrainer: @unchecked Sendable {
     // Per-photo appearance correction (config.appearanceCorrection): 12 floats per view (3×3 M + b),
     // the raw render it was applied to, the GPU-reduced gradient, and CPU-side Adam moments.
     private var rawImg: MTLBuffer!, apParams: MTLBuffer!, apGrad: MTLBuffer!
+    /// Correction used for views without their own (held-out views): the average learned one (see meanAppearance).
+    private var apHoldout: MTLBuffer?
     private var apM1: [Float] = [], apM2: [Float] = [], apSteps: [Int] = [], apInit: [Float] = []
     private var viewIndex: [ObjectIdentifier: Int] = [:]
     /// Moving-object masking is only trusted when every surface is seen from several nearby views.
@@ -231,11 +235,24 @@ final class MetalTrainer: @unchecked Sendable {
         resid = ctx.buffer(hw * 4, label: "resid"); weights = ctx.buffer(hw * 4, label: "weights")
         mu = ctx.buffer(hw * 15 * 4, label: "mu"); dmaps = ctx.buffer(hw * 9 * 4, label: "dmaps")
         rawImg = ctx.buffer(hw * 12, label: "rawImg"); apGrad = ctx.buffer(64, label: "apGrad")
+        if config.appearanceCorrection, Self.exposureLocked(views.map(\.camera)) {
+            // Locked exposure (Splat Capture): nothing to correct, and the extra freedom costs held-out quality
+            // (bedroom, 8k: 21.20 dB with correction, 22.21 dB without) and drifts colours too bright.
+            config.appearanceCorrection = false
+            appearanceAutoOff = true
+        }
         setupAppearance()
     }
 
     /// Identity correction per view, scaled by recorded exposure when available:
     /// photo ≈ gain · render with gain = (E_i / E_median)^(1/2.2) (sRGB-ish), clamped to [1/3, 3].
+    /// Every photo has a recorded exposure and they're all within 10 % of each other.
+    static func exposureLocked(_ cams: [DatasetCamera]) -> Bool {
+        let e = cams.map { $0.exposure ?? 0 }
+        guard !e.isEmpty, let lo = e.min(), let hi = e.max(), lo > 0 else { return false }
+        return hi / lo <= 1.1
+    }
+
     private func setupAppearance() {
         let nv = views.count
         apParams = ctx.buffer(max(nv, 1) * 48, label: "appearance")
@@ -252,6 +269,23 @@ final class MetalTrainer: @unchecked Sendable {
             p[base + 0] = gain; p[base + 4] = gain; p[base + 8] = gain
         }
         apInit = (0..<nv * 12).map { p[$0] }
+        apHoldout = ctx.buffer(48, label: "appearance holdout")
+    }
+
+    /// The average per-photo colour correction with each photo's exposure seed divided out (row-major 3×3 +
+    /// offset), or nil when appearance correction is off. Splat colours and the corrections share an overall
+    /// level that training can't pin down (brighter splats + darker corrections fit equally well); over 30k steps
+    /// that drifted the bedroom splat 10–30 levels too bright. Exports bake this average in, and held-out views
+    /// are rendered with it, so the splat looks like a typical photo of the capture.
+    func meanAppearance() -> [Float]? {
+        guard config.appearanceCorrection, let apParams, !views.isEmpty, apInit.count == views.count * 12 else { return nil }
+        let p = apParams.contents().bindMemory(to: Float.self, capacity: views.count * 12)
+        var m = [Float](repeating: 0, count: 12)
+        for i in views.indices {
+            let g = max(apInit[i * 12], 1e-3)   // exposure seed gain (diagonal)
+            for k in 0..<12 { m[k] += p[i * 12 + k] / g }
+        }
+        return m.map { $0 / Float(views.count) }
     }
 
     /// Adam on one view's 12 correction parameters, after the GPU has reduced their gradient.
@@ -695,6 +729,24 @@ final class MetalTrainer: @unchecked Sendable {
         let cb = ctx.queue.makeCommandBuffer()!
         let enc = cb.makeComputeCommandEncoder()!
         encodeRaster(enc, v: v, rp: &rp)
+        // Training views: their own colour correction. Held-out views: the average one (what exports bake in),
+        // so evaluation during training scores what the exported splat will look like. For a splat loaded from
+        // a file (--eval) the average is the identity.
+        if config.appearanceCorrection, let apParams {
+            var buf: MTLBuffer? = nil, offset = 0
+            if let ai = viewIndex[ObjectIdentifier(v)] { buf = apParams; offset = ai * 48 }
+            else if let m = meanAppearance(), let hb = apHoldout {
+                hb.contents().bindMemory(to: Float.self, capacity: 12).update(from: m, count: 12); buf = hb
+            }
+            if let buf {
+                enc.memoryBarrier(scope: .buffers)
+                enc.setBuffer(img, offset: 0, index: 0); enc.setBuffer(rawImg, offset: 0, index: 1)
+                enc.setBuffer(buf, offset: offset, index: 2)
+                enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 3)
+                dispatch2D(enc, "appearance_apply", v.width, v.height)
+                enc.memoryBarrier(scope: .buffers)
+            }
+        }
         encodeLoss(enc, v: v, rp: &rp)
         let out = ctx.buffer(v.width * v.height * 4)
         enc.setBuffer(img, offset: 0, index: 0); enc.setBuffer(out, offset: 0, index: 1)
@@ -711,13 +763,16 @@ final class MetalTrainer: @unchecked Sendable {
     /// Mean PSNR over the holdout views (or a sample of training views if there are none).
     /// Scores any splat (e.g. from another trainer) on this dataset's held-out photos with the same rasteriser
     /// and exact intrinsics, at full SH degree. Returns mean PSNR and per-view PSNR.
-    func evaluate(cloud g: GaussianCloud) throws -> (mean: Float, perView: [Float]) {
+    func evaluate(cloud g: GaussianCloud) throws -> (mean: Float, perView: [Float], names: [String], failed: [String]) {
         load(g)
         step = config.shDegreeInterval * (config.shDegree + 1)
         let set = evalViews.isEmpty ? Array(trainViews.prefix(8)) : evalViews
-        var per: [Float] = []
-        for v in set { if let r = try render(view: v) { per.append(r.mse > 0 ? -10 * log10(r.mse) : 99) } }
-        return (per.isEmpty ? 0 : per.reduce(0, +) / Float(per.count), per)
+        var per: [Float] = [], names: [String] = [], failed: [String] = []
+        for v in set {
+            if let r = try render(view: v) { per.append(r.mse > 0 ? -10 * log10(r.mse) : 99); names.append(v.camera.image) }
+            else { failed.append(v.camera.image) }   // nothing rendered (e.g. every splat behind / outside the view)
+        }
+        return (per.isEmpty ? 0 : per.reduce(0, +) / Float(per.count), per, names, failed)
     }
 
     func evaluate() throws -> Float {
@@ -740,7 +795,30 @@ final class MetalTrainer: @unchecked Sendable {
             Array(UnsafeBufferPointer(start: params[k].contents().bindMemory(to: Float.self, capacity: n * Self.widths[k]), count: n * Self.widths[k]))
         }
         g.positions = arr(0); g.scales = arr(1); g.rotations = arr(2); g.opacities = arr(3); g.sh = arr(4)
+        if let m = meanAppearance() { Self.bakeColourCorrection(m, into: &g.sh, count: n) }
         return g
+    }
+
+    /// colour' = M·colour + b applied to SH colours (colour = Σ b_k·sh_k + 0.5, sh stored [coef][rgb], 16 coefs):
+    /// every coefficient → M·sh_k, and the DC term also gets (M·0.5 + b − 0.5) / C0. Exact for each splat's
+    /// colour; for the composited image exact wherever the pixel is opaque.
+    static func bakeColourCorrection(_ m: [Float], into sh: inout [Float], count: Int) {
+        let c0: Float = 0.28209479177387814
+        var off = [Float](repeating: 0, count: 3)
+        for r in 0..<3 {
+            let rowSum: Float = m[r * 3] + m[r * 3 + 1] + m[r * 3 + 2]
+            off[r] = rowSum * 0.5 + m[9 + r] - 0.5
+        }
+        sh.withUnsafeMutableBufferPointer { s in
+            for i in 0..<count {
+                for k in 0..<16 {
+                    let b = i * 48 + k * 3
+                    let x = s[b], y = s[b + 1], z = s[b + 2]
+                    for r in 0..<3 { s[b + r] = m[r * 3] * x + m[r * 3 + 1] * y + m[r * 3 + 2] * z }
+                }
+                for r in 0..<3 { s[i * 48 + r] += off[r] / c0 }
+            }
+        }
     }
 
     /// Builds a render scene directly from the training buffers (no CPU copy).

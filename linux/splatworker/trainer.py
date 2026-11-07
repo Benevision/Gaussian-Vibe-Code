@@ -339,6 +339,12 @@ class PoseRefiner:
         self.opt.zero_grad(set_to_none=True)
 
 
+def exposure_locked(cameras) -> bool:
+    """Every photo has a recorded exposure and they're all within 10 % of each other."""
+    e = [getattr(c, "exposure", None) or 0.0 for c in cameras]
+    return bool(e) and min(e) > 0 and max(e) / min(e) <= 1.1
+
+
 class AppearanceCorrection:
     """Per-photo colour correction: corrected = M · rendered + b (3×3 + 3 per photo).
 
@@ -680,7 +686,12 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     train_start = time.time()
     last_report = 0.0
 
-    appearance = AppearanceCorrection(torch, cfg, train_views + eval_views, dev) if cfg.appearanceCorrection else None
+    use_appearance = cfg.appearanceCorrection
+    if use_appearance and exposure_locked([v.camera for v in train_views + eval_views]):
+        # locked exposure (Splat Capture): nothing to correct; the extra freedom cost 1 dB held-out on the Mac
+        use_appearance = False
+        log("exposure is the same in every photo: per-photo colour correction off")
+    appearance = AppearanceCorrection(torch, cfg, train_views + eval_views, dev) if use_appearance else None
     pose_refiner = PoseRefiner(torch, len(train_views), cfg, dev) if cfg.poseRefinement else None
 
     for step in range(cfg.iterations):

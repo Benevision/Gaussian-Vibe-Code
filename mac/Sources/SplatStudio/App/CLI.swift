@@ -171,6 +171,8 @@ enum CLI {
                 print(String(format: "eval %@: %d splats, SH %d, antialiased %@ → held-out PSNR %.2f dB over %d views (min %.2f, max %.2f)",
                              (f as NSString).lastPathComponent, g.count, cfg.shDegree, cfg.antialiased ? "yes" : "no", r.mean, r.perView.count,
                              r.perView.min() ?? 0, r.perView.max() ?? 0))
+                if !r.failed.isEmpty { print("  not rendered: " + r.failed.joined(separator: ", ")) }
+                if a.contains("--per-view") { for (n, p) in zip(r.names, r.perView) { print(String(format: "  %@ %.2f", n, p)) } }
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }
