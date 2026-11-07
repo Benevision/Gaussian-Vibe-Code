@@ -64,7 +64,9 @@ LIGHTGLUE_DEPS = ["kornia>=0.7",
 # Everything else the Mac can send here (splatprep extras sfm / masks / sam2 / loftr): the COLMAP mapper as
 # a Python package, OWLv2 + SegFormer (transformers), SAM 2 (pure-Python install: its optional CUDA
 # extension is skipped when no toolkit is present). Model weights download on first use.
-PROCESSING_DEPS = ["pycolmap>=3.10", "transformers>=4.38", "huggingface_hub>=0.20", "safetensors",
+# transformers < 4.50: newer releases need Python ≥ 3.11 / PyTorch ≥ 2.6 for their vision models, while this
+# runtime is Python 3.10 + PyTorch 2.4 (pinned for gsplat). OWLv2 has been in transformers since 4.35.
+PROCESSING_DEPS = ["pycolmap>=3.10", "transformers>=4.38,<4.50", "huggingface_hub>=0.20", "safetensors",
                    # SAM 2's own runtime deps (SAM 2 itself is installed with --no-deps, see below)
                    "hydra-core>=1.3.2", "iopath>=0.1.10", "tqdm"]
 # Installed with --no-deps: SAM 2 declares torch>=2.5.1, and letting pip resolve that silently replaced the
@@ -397,6 +399,12 @@ try:
 except Exception:
     r["torchVersion"] = None
 r["pycolmap"] = has("pycolmap")
+try:  # installed is not enough: a torchvision built for another torch fails to import
+    import torchvision as _tv  # noqa: F401
+    r["torchvisionImports"] = True
+except Exception as _e:
+    r["torchvisionImports"] = False
+    r["torchvisionError"] = str(_e)[:200]
 r["sam2"] = has("sam2")
 r["transformers"] = has("transformers")
 print("SPLATWORKER-VERIFY " + json.dumps(r), flush=True)
@@ -414,6 +422,9 @@ def verify_problems(result: dict, plan: Plan) -> List[str]:
         if prof is not None and tv and tv.split("+")[0] != prof.torch:
             problems.append(f"PyTorch {tv} is installed but this runtime needs {prof.torch} "
                             f"(gsplat's GPU kernels are built for it). Run the setup again to repair it.")
+        if plan.with_lightglue and result.get("torchvisionImports") is False:
+            problems.append("torchvision is installed but can't be loaded (it doesn't match PyTorch): "
+                            f"{result.get('torchvisionError', '')}")
         if not result.get("torch"):
             problems.append("PyTorch could not be imported.")
         elif result.get("torchError"):
