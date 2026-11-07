@@ -1067,7 +1067,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 | [Dead opacity](#dead-opacity) | 0.005 | – | Advanced |
 | [Initial opacity](#initial-opacity) | 0.1 | – | Advanced |
 | [Random init count](#random-init-count) | 100 000 | – | Advanced |
-| [Long-axis splitting](#long-axis-splitting) | On (Mac) · opt-in on the Linux worker until validated there | – | Advanced |
+| [Long-axis splitting](#long-axis-splitting) | On (Mac and Linux worker) | – | Advanced |
 
 ### Densification strategy
 
@@ -1225,7 +1225,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 
 | | |
 |---|---|
-| **Default** | On (Mac) · opt-in on the Linux worker until validated there |
+| **Default** | On (Mac and Linux worker) |
 | **Mode** | Advanced |
 | **ID** | `train.longAxisSplit` |
 

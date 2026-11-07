@@ -492,10 +492,50 @@ final class MetalTrainer: @unchecked Sendable {
     }
 
     /// Runs one optimisation step. Returns (loss, psnr) of this step's view.
+    /// Coarse-to-fine (config.progressiveResolution): ¼ resolution for the first sixth of the densification
+    /// window, ½ for the next sixth, then full — early steps only need coarse structure and run several times faster.
+    private func progressiveFactor() -> Int {
+        guard config.progressiveResolution else { return 1 }
+        let half = max(config.densifyStop, 1) / 2
+        return step < half / 3 ? 4 : (step < 2 * half / 3 ? 2 : 1)
+    }
+
+    /// The view at 1/`factor` resolution (built once: box-filtered photo and mask, scaled intrinsics, same depth).
+    private func level(_ v: TrainView, _ factor: Int) -> TrainView {
+        guard factor > 1 else { return v }
+        if let c = v.levels[factor] { return c }
+        let w = max(8, v.width / factor), h = max(8, v.height / factor)
+        let src = v.target.contents().bindMemory(to: UInt8.self, capacity: v.width * v.height * 4)
+        let buf = ctx.buffer(w * h * 4, label: "target/\(factor)")
+        let dst = buf.contents().bindMemory(to: UInt8.self, capacity: w * h * 4)
+        for y in 0..<h {
+            for x in 0..<w {
+                var acc = SIMD4<UInt32>(repeating: 0)
+                for dy in 0..<factor {
+                    let row = (y * factor + dy) * v.width
+                    for dx in 0..<factor {
+                        let o = (row + x * factor + dx) * 4
+                        acc &+= SIMD4(UInt32(src[o]), UInt32(src[o + 1]), UInt32(src[o + 2]), UInt32(src[o + 3]))
+                    }
+                }
+                let d = (y * w + x) * 4, nn = UInt32(factor * factor)
+                dst[d] = UInt8(acc.x / nn); dst[d + 1] = UInt8(acc.y / nn); dst[d + 2] = UInt8(acc.z / nn); dst[d + 3] = UInt8(acc.w / nn)
+            }
+        }
+        var c = v.camera
+        let sx = Float(w) / Float(v.width), sy = Float(h) / Float(v.height)
+        c.fx *= sx; c.fy *= sy; c.cx = (c.cx + 0.5) * sx - 0.5; c.cy = (c.cy + 0.5) * sy - 0.5
+        c.width = w; c.height = h
+        let child = TrainView(camera: c, width: w, height: h, target: buf, depth: v.depth, depthSize: v.depthSize, holdout: v.holdout)
+        if let i = viewIndex[ObjectIdentifier(v)] { viewIndex[ObjectIdentifier(child)] = i }   // same colour correction
+        v.levels[factor] = child
+        return child
+    }
+
     @discardableResult
     func trainStep() throws -> (Float, Float) {
         paramLock.lock(); defer { paramLock.unlock() }
-        let v = nextView()
+        let v = level(nextView(), progressiveFactor())
         let bg: SIMD3<Float>
         switch config.background {
         case .black: bg = .zero

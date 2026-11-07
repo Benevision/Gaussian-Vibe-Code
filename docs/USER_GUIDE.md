@@ -172,7 +172,7 @@ Speeds, smoothing and what a two-finger trackpad drag does are under **View → 
 
 **Training cameras.** *Show training cameras* draws the solved cameras as frustums. They should follow the path you walked. Double-click a camera in the Cameras list to look through it. Opening a splat from a project's `outputs/` folder loads that project's cameras. When a dataset is open, the viewer starts at a training camera, because splats look best from where they were captured.
 
-**Up direction and level.** Splat files don't record which way is up. Use the toolbar's **Orientation** menu (or View → Orientation) to flip upside down, pick an axis, or rotate until level and choose **Level to current view**. The choice is remembered per file, and Export can bake it in. Datasets built in Splat Studio are levelled automatically: iPhone captures use ARKit gravity, GPS drone sets come out Z-up, and worker results record their up direction in the PLY.
+**Up direction and level.** Splat files don't record which way is up. Use the toolbar's **Orientation** menu (or View → Orientation) to flip upside down, pick an axis, or rotate until level and choose **Level to current view**. The choice is remembered per file, and Export can bake it in. Datasets built in Splat Studio are levelled automatically: iPhone captures use ARKit gravity, drone sets with GPS use the GPS vertical, and PC-trained results record their up direction in the PLY.
 
 ## 6. Editing
 

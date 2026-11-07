@@ -14,6 +14,8 @@ final class TrainView {
     let depthSize: SIMD2<UInt32>
     let worldToCam: simd_float4x4
     let holdout: Bool
+    /// Lower-resolution copies for coarse-to-fine training (factor → view), built on first use.
+    var levels: [Int: TrainView] = [:]
 
     init(camera: DatasetCamera, width: Int, height: Int, target: MTLBuffer, depth: MTLBuffer?, depthSize: SIMD2<UInt32>, holdout: Bool) {
         self.camera = camera; self.width = width; self.height = height
