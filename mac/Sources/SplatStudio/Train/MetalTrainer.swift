@@ -241,7 +241,80 @@ final class MetalTrainer: @unchecked Sendable {
             config.appearanceCorrection = false
             appearanceAutoOff = true
         }
+        // Local colour correction replaces the global per-photo one (it can express everything that does).
+        if config.bilateralGrid { config.appearanceCorrection = false }
         setupAppearance()
+        if config.bilateralGrid { setupBilagrid() }
+    }
+
+    // MARK: local colour correction (bilateral grid) — same model as the Linux worker
+
+    static let bgSize = 12 * 8 * 16 * 16
+    private var bgGrid: MTLBuffer?, bgGrad: MTLBuffer?
+    private var bgM1: [Float] = [], bgM2: [Float] = [], bgSteps: [Int] = []
+    private var bgUpdates = 0
+
+    private func setupBilagrid() {
+        let nv = views.count, G = Self.bgSize, cell = 8 * 16 * 16
+        let buf = ctx.buffer(max(nv, 1) * G * 4, label: "bilagrid")
+        let p = buf.contents().bindMemory(to: Float.self, capacity: nv * G)
+        memset(buf.contents(), 0, nv * G * 4)
+        for v in 0..<nv { for k in [0, 5, 10] { for c in 0..<cell { p[v * G + k * cell + c] = 1 } } }   // A = I, b = 0
+        bgGrid = buf
+        bgGrad = ctx.buffer(G * 4, label: "bilagrid grad")
+        bgM1 = [Float](repeating: 0, count: nv * G); bgM2 = bgM1; bgSteps = [Int](repeating: 0, count: nv)
+    }
+
+    /// Adam on one photo's grid (lr 2e-3, as on the worker) with a total-variation smoothness term (weight 10),
+    /// after the GPU summed its gradient. Every 50 updates the average grid over all photos is reset to "no change",
+    /// so the splats keep the average lighting and exports need nothing baked in.
+    private func updateBilagrid(view vi: Int) {
+        guard let bgGrid, let bgGrad else { return }
+        let G = Self.bgSize, W = 16, H = 16, D = 8
+        let g = bgGrad.contents().bindMemory(to: Float.self, capacity: G)
+        let p = bgGrid.contents().bindMemory(to: Float.self, capacity: views.count * G).advanced(by: vi * G)
+        var grad = [Float](repeating: 0, count: G)
+        for i in 0..<G { grad[i] = g[i].isFinite ? g[i] : 0 }
+        // TV: weight · Σ_dims mean((g[i+1] − g[i])²)
+        let tvW: Float = 10
+        for (stride, len) in [(1, W), (W, H), (W * H, D)] {
+            let pairs = Float(G / len * (len - 1))
+            let s = 2 * tvW / pairs
+            for i in 0..<G {
+                let pos = (i / stride) % len
+                guard pos + 1 < len else { continue }
+                let d = p[i + stride] - p[i]
+                grad[i + stride] += s * d; grad[i] -= s * d
+            }
+        }
+        bgSteps[vi] += 1
+        let t = Float(bgSteps[vi]), lr: Float = 2e-3
+        let bc1 = 1 - pow(Float(0.9), t), bc2 = 1 - pow(Float(0.999), t)
+        let base = vi * G
+        for i in 0..<G {
+            let gi = grad[i]
+            bgM1[base + i] = 0.9 * bgM1[base + i] + 0.1 * gi
+            bgM2[base + i] = 0.999 * bgM2[base + i] + 0.001 * gi * gi
+            p[i] -= lr * (bgM1[base + i] / bc1) / (sqrt(bgM2[base + i] / bc2) + 1e-15)
+        }
+        bgUpdates += 1
+        if bgUpdates % 50 == 0 { pinBilagridMean() }
+    }
+
+    private func pinBilagridMean() {
+        guard let bgGrid else { return }
+        let G = Self.bgSize, cell = 8 * 16 * 16
+        let train = views.indices.filter { !views[$0].holdout }
+        guard !train.isEmpty else { return }
+        let p = bgGrid.contents().bindMemory(to: Float.self, capacity: views.count * G)
+        var mean = [Float](repeating: 0, count: G)
+        for v in train { for i in 0..<G { mean[i] += p[v * G + i] } }
+        let inv = 1 / Float(train.count)
+        for i in 0..<G {
+            let ident: Float = [0, 5, 10].contains(i / cell) ? 1 : 0
+            mean[i] = mean[i] * inv - ident
+        }
+        for v in train { for i in 0..<G { p[v * G + i] -= mean[i] } }
     }
 
     /// Identity correction per view, scaled by recorded exposure when available:
@@ -603,6 +676,14 @@ final class MetalTrainer: @unchecked Sendable {
         }
         encodeRaster(enc, v: v, rp: &rp)
         let apIndex = config.appearanceCorrection ? viewIndex[ObjectIdentifier(v)] : nil
+        let bgIndex = (config.bilateralGrid && optimize && !v.holdout) ? viewIndex[ObjectIdentifier(v)] : nil
+        if let bi = bgIndex, let bgGrid {
+            enc.setBuffer(img, offset: 0, index: 0); enc.setBuffer(rawImg, offset: 0, index: 1)
+            enc.setBuffer(bgGrid, offset: bi * Self.bgSize * 4, index: 2)
+            enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 3)
+            dispatch2D(enc, "bilagrid_apply", v.width, v.height)
+            enc.memoryBarrier(scope: .buffers)
+        }
         if let ai = apIndex {
             enc.setBuffer(img, offset: 0, index: 0); enc.setBuffer(rawImg, offset: 0, index: 1)
             enc.setBuffer(apParams, offset: ai * 48, index: 2)
@@ -636,6 +717,15 @@ final class MetalTrainer: @unchecked Sendable {
             enc.setBuffer(gradImg, offset: 0, index: 0); enc.setBuffer(weights, offset: 0, index: 1)
             enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 2)
             dispatch2D(enc, "apply_weights", v.width, v.height)
+            enc.memoryBarrier(scope: .buffers)
+        }
+        if let bi = bgIndex, let bgGrid, let bgGrad {
+            memset(bgGrad.contents(), 0, Self.bgSize * 4)
+            enc.setBuffer(gradImg, offset: 0, index: 0); enc.setBuffer(rawImg, offset: 0, index: 1)
+            enc.setBuffer(bgGrid, offset: bi * Self.bgSize * 4, index: 2)
+            enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 3)
+            enc.setBuffer(bgGrad, offset: 0, index: 4)
+            dispatch2D(enc, "bilagrid_backward", v.width, v.height)
             enc.memoryBarrier(scope: .buffers)
         }
         if let ai = apIndex, optimize {
@@ -727,6 +817,7 @@ final class MetalTrainer: @unchecked Sendable {
         if Self.debugAppearance, !(loss.isFinite) { print("non-finite loss at step \(step): l1 \(l1) ssim \(ssim) mse \(mse) view \(apIndex ?? -1) size \(v.width)x\(v.height)") }
         if transientEnabled { updateTransientThreshold(pixels: v.width * v.height) }
         if let ai = apIndex, !v.holdout { updateAppearance(view: ai) }
+        if let bi = bgIndex { updateBilagrid(view: bi) }
         return (loss, psnr)
     }
 

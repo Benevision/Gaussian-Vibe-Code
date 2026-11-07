@@ -572,6 +572,77 @@ kernel void appearance_backward(device float* gradImg [[buffer(0)]], device cons
     }
 }
 
+// ---------------------------------------------------------------- local colour correction (bilateral grid)
+// Per training photo a 16×16 (image x, y) × 8 (luminance) grid of 3×4 colour transforms; each pixel gets the
+// trilinear blend at (x, y, its rendered luminance). Lets one photo have its own shadows / lighting without the
+// splats baking them in. Layout: ((k·8 + z)·16 + y)·16 + x, k = row·4 + col of [A | b].
+constant int BG_W = 16, BG_H = 16, BG_D = 8;
+inline int bg_index(int k, int z, int y, int x) { return ((k * BG_D + z) * BG_H + y) * BG_W + x; }
+inline void bg_coords(uint2 p, uint W, uint H, float lum, thread int3& i0, thread float3& f) {
+    float3 g = float3((float(p.x) + 0.5f) / float(W) * float(BG_W - 1),
+                      (float(p.y) + 0.5f) / float(H) * float(BG_H - 1),
+                      clamp(lum, 0.0f, 1.0f) * float(BG_D - 1));
+    i0 = clamp(int3(floor(g)), int3(0), int3(BG_W - 2, BG_H - 2, BG_D - 2));
+    f = clamp(g - float3(i0), 0.0f, 1.0f);
+}
+
+kernel void bilagrid_apply(device float* img [[buffer(0)]], device float* raw [[buffer(1)]],
+                           device const float* grid [[buffer(2)]], constant RasterParams& rp [[buffer(3)]],
+                           uint2 p [[thread_position_in_grid]]) {
+    if (p.x >= rp.width || p.y >= rp.height) return;
+    uint hw = rp.width * rp.height, pid = p.y * rp.width + p.x;
+    float3 x = float3(img[pid], img[hw + pid], img[2*hw + pid]);
+    raw[pid] = x.x; raw[hw + pid] = x.y; raw[2*hw + pid] = x.z;
+    int3 i0; float3 f;
+    bg_coords(p, rp.width, rp.height, dot(x, float3(0.299f, 0.587f, 0.114f)), i0, f);
+    float c[12];
+    for (int k = 0; k < 12; k++) {
+        float v = 0;
+        for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+            float w = (dx ? f.x : 1 - f.x) * (dy ? f.y : 1 - f.y) * (dz ? f.z : 1 - f.z);
+            v += w * grid[bg_index(k, i0.z + dz, i0.y + dy, i0.x + dx)];
+        }
+        c[k] = v;
+    }
+    for (int r = 0; r < 3; r++) img[r*hw + pid] = c[r*4] * x.x + c[r*4+1] * x.y + c[r*4+2] * x.z + c[r*4+3];
+}
+
+// Gradients: to the raw render (Aᵀ g, written back into gradImg for every pixel — luminance guidance is treated
+// as constant) and to the grid. The grid is coarse (a cell spans ~100 × 75 px at 1600 px), so its gradient is
+// estimated from every 4th pixel in x and y, scaled by 16 — 16× fewer device atomics.
+kernel void bilagrid_backward(device float* gradImg [[buffer(0)]], device const float* raw [[buffer(1)]],
+                              device const float* grid [[buffer(2)]], constant RasterParams& rp [[buffer(3)]],
+                              device atomic_float* gridGrad [[buffer(4)]],
+                              uint2 p [[thread_position_in_grid]]) {
+    if (p.x >= rp.width || p.y >= rp.height) return;
+    uint hw = rp.width * rp.height, pid = p.y * rp.width + p.x;
+    float3 g = float3(gradImg[pid], gradImg[hw + pid], gradImg[2*hw + pid]);
+    float3 x = float3(raw[pid], raw[hw + pid], raw[2*hw + pid]);
+    int3 i0; float3 f;
+    bg_coords(p, rp.width, rp.height, dot(x, float3(0.299f, 0.587f, 0.114f)), i0, f);
+    float c[12];
+    for (int k = 0; k < 12; k++) {
+        float v = 0;
+        for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+            float w = (dx ? f.x : 1 - f.x) * (dy ? f.y : 1 - f.y) * (dz ? f.z : 1 - f.z);
+            v += w * grid[bg_index(k, i0.z + dz, i0.y + dy, i0.x + dx)];
+        }
+        c[k] = v;
+    }
+    for (int col = 0; col < 3; col++) gradImg[col*hw + pid] = c[col] * g.x + c[4 + col] * g.y + c[8 + col] * g.z;
+    if ((p.x & 3) != 0 || (p.y & 3) != 0) return;
+    float xin[4] = { x.x, x.y, x.z, 1.0f };
+    for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+        float w = 16.0f * (dx ? f.x : 1 - f.x) * (dy ? f.y : 1 - f.y) * (dz ? f.z : 1 - f.z);
+        if (w == 0.0f) continue;
+        for (int r = 0; r < 3; r++) {
+            if (g[r] == 0.0f) continue;
+            for (int col = 0; col < 4; col++)
+                atomic_fetch_add_explicit(&gridGrad[bg_index(r * 4 + col, i0.z + dz, i0.y + dy, i0.x + dx)], w * g[r] * xin[col], memory_order_relaxed);
+        }
+    }
+}
+
 // ---------------------------------------------------------------- transient (moving-object) robustness
 // RobustNeRF / SpotLessSplats style: pixels whose error is far above what the rest of the image
 // achieves, *in spatially coherent regions*, are treated as transient and removed from the loss.
