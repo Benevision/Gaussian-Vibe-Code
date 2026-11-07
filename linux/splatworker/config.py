@@ -71,7 +71,10 @@ class TrainingConfig:
     depthEdgeAware: bool = True
     anisotropyReg: float = 0.1
     anisotropyMaxRatio: float = 10.0
-    longAxisSplit: bool = False   # spread MCMC clones along the long axis (ImprovedGS / IGS+), as on the Mac
+    # Spread MCMC clones along the long axis (ImprovedGS / IGS+), as on the Mac. On by default: without it the
+    # 30k schedule collapsed on large scenes once the splat budget filled (1,258-photo drone set: 16.3 dB at
+    # step 1.4k → 12.5 dB at 9k; with it 16.5–16.9 dB and rising at 9k).
+    longAxisSplit: bool = True
     # Per-photo camera pose refinement (experimental until measured)
     poseRefinement: bool = False
     poseRefinementLR: float = 1e-4

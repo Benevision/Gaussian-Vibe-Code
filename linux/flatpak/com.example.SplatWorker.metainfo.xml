@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.3.3" date="2026-11-07">
+      <description>
+        <p>Long-axis splitting is on by default: training no longer collapses on large scenes once the splat budget fills. iPhone capture poses are refined (look-at pairs, pose-only bundle adjustment with pycolmap) instead of re-solved, and GPS-tagged photo sets are checked against GPS and put in metres with Z up.</p>
+      </description>
+    </release>
     <release version="1.3.2" date="2026-11-07">
       <description>
         <p>Set Up only picks a GPU runtime whose packages are actually published (the gsplat 1.6 build is checked first), and builds the new runtime next to the old one, swapping it in only after it passes its check — a failed or cancelled setup no longer breaks a working worker.</p>
