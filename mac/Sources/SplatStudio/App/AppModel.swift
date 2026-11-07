@@ -260,7 +260,15 @@ final class AppModel {
     /// Camera to return to with Reset (R). Set whenever a scene or dataset is first shown.
     var homeCamera: ViewerCamera? = nil
 
+    /// F / "Frame all". With a project open: the most central capture viewpoint — framing the bounding box
+    /// from outside shows the haze of splats beyond the walls that no photo constrained (indoor captures),
+    /// while every capture viewpoint shows the scene as photographed. Without a project: the bounding box.
     func frameScene() {
+        if let ds = dataset, let cam = Self.centralCamera(ds) {
+            worldUp = SIMD3(ds.manifest.upVector[0], ds.manifest.upVector[1], ds.manifest.upVector[2])
+            lookThrough(cam)
+            return
+        }
         guard let sc = scene else { return }
         var c = renderer.camera
         c.up = worldUp
@@ -276,7 +284,7 @@ final class AppModel {
         guard let ds = dataset else { return }
         let u = ds.manifest.upVector
         worldUp = SIMD3(u[0], u[1], u[2])
-        if let cam = ds.manifest.cameras.first(where: { $0.holdout != true }) ?? ds.manifest.cameras.first {
+        if let cam = Self.centralCamera(ds) {
             lookThrough(cam)
         } else {
             var c = renderer.camera
@@ -286,6 +294,14 @@ final class AppModel {
             renderer.camera = c
         }
         homeCamera = renderer.camera
+    }
+
+    /// The training camera nearest the middle of the capture path (ties: the earlier one).
+    static func centralCamera(_ ds: PreparedDataset) -> DatasetCamera? {
+        let cams = ds.manifest.cameras.filter { $0.holdout != true }
+        guard !cams.isEmpty else { return ds.manifest.cameras.first }
+        let mid = cams.map(\.center).reduce(SIMD3<Float>(repeating: 0), +) / Float(cams.count)
+        return cams.min { simd_distance($0.center, mid) < simd_distance($1.center, mid) }
     }
 
     func lookThrough(_ cam: DatasetCamera) {

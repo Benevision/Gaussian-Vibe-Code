@@ -87,7 +87,7 @@ struct ViewPanel: View {
         PanelSection(title: "Navigation", systemImage: "move.3d") {
             HStack {
                 Button { model.resetCamera() } label: { Label("Reset view", systemImage: "arrow.counterclockwise") }.help("R")
-                Button("Frame all") { model.frameScene() }.help("F")
+                Button("Frame all") { model.frameScene() }.help("F — with a project open, jumps to the most central capture viewpoint; otherwise frames the whole splat")
                 Menu("Views") {
                     Button("Front") { model.setView("front") }; Button("Back") { model.setView("back") }
                     Button("Left") { model.setView("left") }; Button("Right") { model.setView("right") }; Button("Top") { model.setView("top") }
