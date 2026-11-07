@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "splatprep"
+version = "0.1.0"
+description = "Feature matching, SfM, masking and benchmarking toolkit for Splat Studio / Splat Worker"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT (splatprep code only; models have their own licences, see splatprep/model_cards.json)" }
+dependencies = [
+  "numpy>=1.22",
+  "pillow>=9.0",
+  "opencv-python-headless>=4.7",
+]
+
+[project.optional-dependencies]
+# SfM mapper as a Python package (alternative to `brew install colmap glomap`)
+sfm = ["pycolmap>=3.10"]
+# SIFT / SuperPoint / DISK / ALIKED + LightGlue
+lightglue = [
+  "torch>=2.1",
+  "torchvision>=0.16",
+  "kornia>=0.7",
+  "lightglue @ git+https://github.com/cvg/LightGlue.git",
+]
+loftr = ["torch>=2.1", "kornia>=0.7"]
+# person (torchvision) + sky (SegFormer via transformers) masks
+masks = ["torch>=2.1", "torchvision>=0.16", "transformers>=4.38"]
+sam2 = [
+  "torch>=2.3.1",
+  "torchvision>=0.18",
+  "huggingface_hub>=0.20",
+  "SAM-2 @ git+https://github.com/facebookresearch/sam2.git",
+]
+# MASt3R itself is not pip-installable: clone it (see README / install.sh --mast3r).
+mast3r = [
+  "torch>=2.1",
+  "torchvision>=0.16",
+  "roma",
+  "einops",
+  "trimesh",
+  "scipy",
+  "tqdm",
+  "huggingface_hub>=0.20",
+  "safetensors",
+  "matplotlib",
+]
+vggt = [
+  "torch>=2.3",
+  "torchvision>=0.18",
+  "huggingface_hub>=0.20",
+  "vggt @ git+https://github.com/facebookresearch/vggt.git",
+]
+# NetVLAD retrieval via hloc (else a built-in thumbnail descriptor is used)
+retrieval = ["hloc @ git+https://github.com/cvg/Hierarchical-Localization.git", "h5py"]
+test = ["pytest>=7", "scipy"]
+
+[project.scripts]
+splatprep = "splatprep.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["splatprep*"]
+
+[tool.setuptools.package-data]
+splatprep = ["model_cards.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

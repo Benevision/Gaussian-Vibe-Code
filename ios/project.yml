@@ -1,0 +1,61 @@
+name: SplatCapture
+options:
+  bundleIdPrefix: com.gunntower
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Set your Apple Developer Team ID here (or pick it in Xcode > Signing & Capabilities).
+    DEVELOPMENT_TEAM: "Ben Gunn"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  SplatCapture:
+    type: application
+    platform: iOS
+    sources:
+      - path: SplatCapture
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.splatcapture
+        PRODUCT_NAME: SplatCapture
+        TARGETED_DEVICE_FAMILY: "1"          # iPhone only
+        ARCHS: arm64
+        # The simulator is kept as a supported platform only so the code can be
+        # compile-checked; ARKit world tracking does not run there.
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: SplatCapture/Resources/Info.plist
+    info:
+      path: SplatCapture/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Splat Capture
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UIRequiredDeviceCapabilities: [arm64, arkit]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIStatusBarHidden: false
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: "Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
+        NSLocalNetworkUsageDescription: "Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac."
+        NSBonjourServices: [_splatcapture._tcp]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true

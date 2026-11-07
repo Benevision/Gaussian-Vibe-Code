@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.example.SplatWorker</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Splat Worker</name>
+  <summary>Train Gaussian splats for your Mac on this NVIDIA GPU</summary>
+  <developer id="com.example">
+    <name>Splat Studio</name>
+  </developer>
+  <description>
+    <p>
+      Splat Worker turns a Linux computer with an NVIDIA graphics card into a training server for
+      Splat Studio on macOS. The Mac finds it automatically on the local network and sends it
+      Gaussian-splat training and dataset processing jobs.
+    </p>
+    <ul>
+      <li>One switch to start and stop the server</li>
+      <li>Guided setup that downloads the right PyTorch and gsplat build for your driver</li>
+      <li>Live GPU memory, temperature and utilisation</li>
+      <li>Job list with progress, PSNR, splat count and time remaining</li>
+      <li>Access token, Bonjour discovery and step-by-step help for connecting the Mac</li>
+    </ul>
+    <p>
+      Training requires an NVIDIA GPU (8 GB of video memory or more recommended) with a recent
+      proprietary driver. The first-run setup downloads about 3 GB.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.example.SplatWorker.desktop</launchable>
+  <url type="homepage">https://example.com/splat-studio</url>
+  <url type="bugtracker">https://example.com/splat-studio/issues</url>
+  <screenshots>
+    <!-- TODO: replace with real screenshots (1280x800 PNG) once the UI has been captured. -->
+    <screenshot type="default">
+      <image>https://example.com/splat-studio/screenshots/worker-status.png</image>
+      <caption>Server status with the GPU card and connection details</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://example.com/splat-studio/screenshots/worker-jobs.png</image>
+      <caption>Training jobs with live progress</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://example.com/splat-studio/screenshots/worker-setup.png</image>
+      <caption>First-run setup of the GPU runtime</caption>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Graphics</category>
+    <category>3DGraphics</category>
+  </categories>
+  <keywords>
+    <keyword>gaussian splatting</keyword>
+    <keyword>3dgs</keyword>
+    <keyword>cuda</keyword>
+    <keyword>gpu</keyword>
+  </keywords>
+  <provides>
+    <binary>splatworker-app</binary>
+    <binary>splatworker</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+    <internet>always</internet>
+  </supports>
+  <branding>
+    <color type="primary" scheme_preference="light">#a7f3d0</color>
+    <color type="primary" scheme_preference="dark">#134e4a</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.1.0" date="2026-11-07">
+      <description>
+        <p>Per-photo colour correction, live previews for Splat Studio, update notifications, and a fix for block-parallel training.</p>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-11-07">
+      <description>
+        <p>First Flatpak release with a desktop interface and guided GPU setup.</p>
+      </description>
+    </release>
+  </releases>
+</component>

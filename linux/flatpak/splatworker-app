@@ -1,0 +1,12 @@
+#!/usr/bin/python3
+# Flatpak entry point: GUI by default, `--headless` for the plain server (see
+# splatworker/gui/launcher.py). The worker's code lives in /app/share/splatworker/lib
+# so the GPU runtime's separate Python 3.10 can import the very same files.
+import sys
+
+sys.path.insert(0, "/app/share/splatworker/lib")
+
+from splatworker.gui.launcher import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())

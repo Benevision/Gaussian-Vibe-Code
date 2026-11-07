@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Splat Worker
+GenericName=GPU Training Server
+Comment=Train Gaussian splats for Splat Studio on this computer's NVIDIA GPU
+Exec=splatworker-app
+Icon=com.example.SplatWorker
+Terminal=false
+Categories=Graphics;3DGraphics;Network;
+Keywords=gaussian;splat;3dgs;cuda;nvidia;gpu;training;server;
+StartupNotify=true
+SingleMainWindow=true

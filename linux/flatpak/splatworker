@@ -1,0 +1,5 @@
+#!/bin/sh
+# `splatworker <command> ...` inside the Flatpak, using the installed GPU runtime:
+#   flatpak run --command=splatworker com.example.SplatWorker info
+#   flatpak run --command=splatworker com.example.SplatWorker serve --port 7878 --token-file ...
+exec /app/bin/splatworker-app --cli "$@"

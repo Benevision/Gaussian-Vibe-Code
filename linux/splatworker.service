@@ -1,0 +1,46 @@
+# Splat Worker systemd unit.
+# Installed by `./install.sh --system`, or manually:
+#   sudo cp splatworker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now splatworker
+# Logs: journalctl -u splatworker -f
+[Unit]
+Description=Splat Worker (CUDA Gaussian splat training server for Splat Studio)
+Wants=network-online.target
+After=network-online.target nvidia-persistenced.service
+
+[Service]
+Type=simple
+User=splatworker
+Group=splatworker
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=HOME=/var/lib/splatworker
+Environment=TORCH_EXTENSIONS_DIR=/var/lib/splatworker/torch_extensions
+Environment=PYTHONUNBUFFERED=1
+# Optional: restrict GPUs / set the advertised name
+# Environment=SPLATWORKER_GPUS=0,1
+# Environment=SPLATWORKER_NAME=Render Box
+ExecStart=/opt/splatworker/venv/bin/splatworker serve \
+    --port 7878 \
+    --data-dir /var/lib/splatworker \
+    --token-file /etc/splatworker/token
+Restart=on-failure
+RestartSec=5
+# Give a running job time to stop cleanly on shutdown
+TimeoutStopSec=60
+KillMode=mixed
+
+# Hardening (GPU device nodes must stay accessible: no PrivateDevices)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/splatworker
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

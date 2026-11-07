@@ -1,0 +1,121 @@
+# Builds the Splat Worker Flatpak on every push that touches the worker (linux/, tools/) and
+# publishes it as a Flatpak repository on GitHub Pages, so PCs that added the remote get updates
+# through GNOME Software / Discover / `flatpak update` (see linux/README.md "Updates").
+#
+# One-time setup in the GitHub repo:
+#   Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# Optional signing (recommended): Settings → Secrets and variables → Actions →
+#   FLATPAK_GPG_PRIVATE_KEY = output of `gpg --armor --export-secret-keys <KEYID>` (a key without a
+#   passphrase, used only for this repo). Without it the repo is published unsigned and the remote
+#   must be added with --no-gpg-verify (fine on a home network; HTTPS still protects the download).
+name: Splat Worker Flatpak
+
+on:
+  push:
+    branches: [main]
+    paths: ["linux/**", "tools/**", ".github/workflows/splat-worker-flatpak.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: splat-worker-pages
+  cancel-in-progress: true
+
+env:
+  APP_ID: com.example.SplatWorker
+  BRANCH: stable
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder ostree
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Import signing key (optional)
+        id: gpg
+        env:
+          KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "$KEY" | gpg --batch --import
+            KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5; exit}')
+            echo "keyid=$KEYID" >> "$GITHUB_OUTPUT"
+            gpg --export "$KEYID" | base64 -w0 > pubkey.b64
+          fi
+
+      - name: Cache flatpak-builder state
+        uses: actions/cache@v4
+        with:
+          path: linux/flatpak/.flatpak-builder
+          key: fpb-${{ hashFiles('linux/flatpak/*.yml', 'linux/flatpak/python3-deps.json') }}-${{ github.sha }}
+          restore-keys: fpb-${{ hashFiles('linux/flatpak/*.yml', 'linux/flatpak/python3-deps.json') }}-
+
+      - name: Build into an OSTree repo
+        run: |
+          SIGN=()
+          if [ -n "${{ steps.gpg.outputs.keyid }}" ]; then SIGN=(--gpg-sign="${{ steps.gpg.outputs.keyid }}"); fi
+          cd linux/flatpak
+          flatpak-builder --user --install-deps-from=flathub --force-clean --disable-rofiles-fuse \
+            --state-dir=.flatpak-builder --repo=../../site/flatpak/repo --default-branch="$BRANCH" \
+            "${SIGN[@]}" build-dir "$APP_ID.yml"
+          flatpak build-update-repo --generate-static-deltas --prune --prune-depth=5 \
+            --title="Splat Worker" "${SIGN[@]}" ../../site/flatpak/repo
+
+      - name: Write .flatpakrepo, .flatpakref and version.json
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"; REPO="${GITHUB_REPOSITORY#*/}"
+          BASE="https://$OWNER.github.io/$REPO/flatpak"
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' linux/splatworker/__init__.py)
+          GPGLINE=""; [ -f pubkey.b64 ] && GPGLINE="GPGKey=$(cat pubkey.b64)"
+          cat > site/flatpak/splatworker.flatpakrepo <<REPO
+          [Flatpak Repo]
+          Title=Splat Worker
+          Url=$BASE/repo/
+          Homepage=https://github.com/$GITHUB_REPOSITORY
+          Comment=Splat Studio's Linux GPU worker
+          $GPGLINE
+          REPO
+          cat > site/flatpak/splatworker.flatpakref <<REF
+          [Flatpak Ref]
+          Name=$APP_ID
+          Branch=$BRANCH
+          Title=Splat Worker
+          Url=$BASE/repo/
+          RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          IsRuntime=false
+          $GPGLINE
+          REF
+          sed -i 's/^ *//' site/flatpak/splatworker.flatpakrepo site/flatpak/splatworker.flatpakref
+          printf '{"version": "%s", "commit": "%s", "date": "%s"}\n' "$VERSION" "$GITHUB_SHA" "$(date -u +%FT%TZ)" > site/flatpak/version.json
+          cat > site/index.html <<HTML
+          <!doctype html><meta charset="utf-8"><title>Splat Worker</title>
+          <h1>Splat Worker $VERSION</h1>
+          <p>Install on Linux: <code>flatpak install --user $BASE/splatworker.flatpakref</code></p>
+          <p>Updates then arrive through GNOME Software / Discover or <code>flatpak update</code>.</p>
+          HTML
+          touch site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

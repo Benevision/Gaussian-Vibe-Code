@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2e3440"/>
+      <stop offset="1" stop-color="#1b1f27"/>
+    </linearGradient>
+    <radialGradient id="s1"><stop offset="0" stop-color="#ff6b6b" stop-opacity=".95"/><stop offset="1" stop-color="#ff6b6b" stop-opacity="0"/></radialGradient>
+    <radialGradient id="s2"><stop offset="0" stop-color="#ffd166" stop-opacity=".95"/><stop offset="1" stop-color="#ffd166" stop-opacity="0"/></radialGradient>
+    <radialGradient id="s3"><stop offset="0" stop-color="#4cc9f0" stop-opacity=".95"/><stop offset="1" stop-color="#4cc9f0" stop-opacity="0"/></radialGradient>
+    <radialGradient id="s4"><stop offset="0" stop-color="#76e4a6" stop-opacity=".95"/><stop offset="1" stop-color="#76e4a6" stop-opacity="0"/></radialGradient>
+  </defs>
+  <!-- GPU card: bracket, PCB, gold contacts -->
+  <rect x="10" y="22" width="6" height="76" rx="2" fill="#9aa4b2"/>
+  <rect x="16" y="26" width="104" height="66" rx="10" fill="url(#card)"/>
+  <rect x="40" y="92" width="58" height="8" rx="2" fill="#d4a017"/>
+  <g stroke="#b8860b" stroke-width="2">
+    <path d="M46 92v8M52 92v8M58 92v8M64 92v8M70 92v8M76 92v8M82 92v8M88 92v8M94 92v8"/>
+  </g>
+  <!-- fan ring -->
+  <circle cx="68" cy="59" r="27" fill="#11141a" stroke="#4c566a" stroke-width="2.5"/>
+  <!-- splats: overlapping anisotropic gaussians inside the fan -->
+  <g>
+    <ellipse cx="58" cy="52" rx="16" ry="9" transform="rotate(-25 58 52)" fill="url(#s1)"/>
+    <ellipse cx="78" cy="54" rx="13" ry="8" transform="rotate(30 78 54)" fill="url(#s2)"/>
+    <ellipse cx="66" cy="69" rx="17" ry="8" transform="rotate(8 66 69)" fill="url(#s3)"/>
+    <ellipse cx="70" cy="47" rx="8" ry="5" transform="rotate(-60 70 47)" fill="url(#s4)"/>
+  </g>
+  <circle cx="68" cy="59" r="3" fill="#e5e9f0"/>
+  <!-- status LED -->
+  <circle cx="106" cy="36" r="4" fill="#76e4a6"/>
+</svg>

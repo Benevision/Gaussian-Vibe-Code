@@ -1,0 +1,92 @@
+# Splat Worker desktop app (GTK 4 + libadwaita) with the CUDA training server.
+#
+#   ./build.sh          build and install for the current user
+#   ./make-bundle.sh    single-file SplatWorker-<version>-x86_64.flatpak for sharing
+#
+# What is NOT in here, on purpose:
+#  * NVIDIA driver libraries (libcuda.so.1, libnvidia-ml.so.1): they come from the
+#    org.freedesktop.Platform.GL.nvidia-<host driver version> extension, which Flatpak
+#    installs automatically on `flatpak update` and must match the host driver exactly.
+#  * PyTorch / gsplat / the CUDA runtime (~3 GB): the first-run setup assistant downloads
+#    PyTorch's CUDA wheels (they bundle the CUDA runtime) and prebuilt gsplat into
+#    $XDG_DATA_HOME/splatworker (= ~/.var/app/com.example.SplatWorker/data/splatworker).
+#    See splatworker/gui/runtime_plan.py for the driver -> wheel mapping.
+#
+# Network: --share=network shares the host network namespace, so the server listens on
+# the host's TCP port (7878 by default) and python-zeroconf sends/receives mDNS multicast
+# on UDP 5353 directly (alongside avahi-daemon, using SO_REUSEPORT). No port mapping or
+# proxy is involved; host firewall rules apply as for a native program.
+app-id: com.example.SplatWorker
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: splatworker-app
+
+finish-args:
+  - --share=network           # HTTP API for the Mac + downloads during setup
+  - --share=ipc               # X11 shared memory (fallback-x11)
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=all              # /dev/nvidia*, /dev/nvidia-uvm, /dev/nvidiactl for CUDA
+  - --talk-name=org.freedesktop.Avahi   # see README "Network behaviour" (zeroconf does the mDNS itself)
+  - --filesystem=xdg-download # exporting results (the file chooser portal covers other folders)
+  - --env=CUDA_DEVICE_ORDER=PCI_BUS_ID  # torch GPU indices = nvidia-smi / NVML indices
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - '*.a'
+
+modules:
+  # fastapi, uvicorn, zeroconf, pydantic, numpy, pillow, httpx, nvidia-ml-py, qrcode ...
+  # for the app's own Python 3.14 (regenerate with ./generate-deps.sh).
+  - python3-deps.json
+
+  # splatprep (../../tools/splatprep): dataset processing jobs (PROTOCOL.md §6). Shipped as
+  # source; its OpenCV / LightGlue dependencies are installed by the setup assistant.
+  - name: splatprep
+    buildsystem: simple
+    build-commands:
+      - install -d ${FLATPAK_DEST}/share/splatworker/splatprep
+      - cp -r splatprep ${FLATPAK_DEST}/share/splatworker/splatprep/
+      - find ${FLATPAK_DEST}/share/splatworker/splatprep -name __pycache__ -prune -exec rm -rf {} +
+      - install -Dm644 README.md ${FLATPAK_DEST}/share/splatworker/splatprep/README.md
+    sources:
+      - type: dir
+        path: ../../tools
+        skip:
+          - build
+          - splatprep.egg-info
+          - tests
+          - venv
+          - .venv
+
+  # The worker itself + the GUI. Installed as plain source under /app/share/splatworker/lib
+  # (not into the Python 3.14 site-packages) so the GPU runtime's Python 3.10 can import it too.
+  - name: splatworker
+    buildsystem: simple
+    build-commands:
+      - install -d ${FLATPAK_DEST}/share/splatworker/lib
+      - cp -r splatworker ${FLATPAK_DEST}/share/splatworker/lib/
+      - find ${FLATPAK_DEST}/share/splatworker/lib -name __pycache__ -prune -exec rm -rf {} +
+      - python3 -m compileall -q ${FLATPAK_DEST}/share/splatworker/lib/splatworker/gui
+      - install -Dm644 README.md ${FLATPAK_DEST}/share/splatworker/README.md
+      - install -Dm755 flatpak/splatworker-app ${FLATPAK_DEST}/bin/splatworker-app
+      - install -Dm755 flatpak/splatworker ${FLATPAK_DEST}/bin/splatworker
+      - install -Dm644 flatpak/com.example.SplatWorker.desktop ${FLATPAK_DEST}/share/applications/com.example.SplatWorker.desktop
+      - install -Dm644 flatpak/com.example.SplatWorker.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.example.SplatWorker.metainfo.xml
+      - install -Dm644 flatpak/icons/com.example.SplatWorker.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/com.example.SplatWorker.svg
+      - install -Dm644 flatpak/icons/com.example.SplatWorker-symbolic.svg ${FLATPAK_DEST}/share/icons/hicolor/symbolic/apps/com.example.SplatWorker-symbolic.svg
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - venv
+          - .venv
+          - tests
+          - .pytest_cache
+          - flatpak/.flatpak-builder
+          - flatpak/.flatpak-pip-generator
+          - flatpak/build-dir
+          - flatpak/repo
+          - flatpak/dist

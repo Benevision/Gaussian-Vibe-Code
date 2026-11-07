@@ -1,0 +1,24 @@
+# Server / API (enough to run the tests; no GPU needed)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+zeroconf>=0.131
+numpy>=1.24
+pillow>=10.0
+
+# Training backend. torch must match your CUDA driver; install it from the
+# PyTorch index first, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# (install.sh does this for you)
+torch>=2.1
+gsplat>=1.4,<2
+scipy>=1.10          # fast KNN for initial gaussian scales
+nvidia-ml-py>=12.0   # GPU memory reporting without creating a CUDA context
+
+# Optional
+# fused-ssim @ git+https://github.com/rahul-goel/fused-ssim   (faster SSIM; falls back to torch)
+# pillow-heif>=0.16                                           (HEIC images)
+# -e ../tools/splatprep                                       (processing jobs, PROTOCOL.md §6)
+
+# Tests
+pytest>=7
+httpx>=0.27

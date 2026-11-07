@@ -1,0 +1,11 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+flatpak/.flatpak-builder/
+flatpak/.flatpak-pip-generator
+flatpak/build-dir/
+flatpak/repo/
+flatpak/dist/

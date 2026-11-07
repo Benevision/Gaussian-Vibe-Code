@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "splatworker"
+version = "1.1.0"
+description = "Splat Worker: LAN CUDA Gaussian-splat training server for Splat Studio"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "zeroconf>=0.131",
+  "numpy>=1.24",
+  "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+# torch must come from the PyTorch CUDA index; install.sh handles that.
+train = [
+  "torch>=2.1",
+  "gsplat>=1.4,<2",
+  "scipy>=1.10",
+  "nvidia-ml-py>=12.0",
+]
+heic = ["pillow-heif>=0.16"]
+test = ["pytest>=7", "httpx>=0.27"]
+
+[project.scripts]
+splatworker = "splatworker.cli:main"
+# Desktop app (needs PyGObject + GTK 4 + libadwaita from the distribution; the Flatpak
+# bundles them). `splatworker-gui --headless` works without them.
+splatworker-gui = "splatworker.gui.launcher:main"
+
+[tool.setuptools.packages.find]
+include = ["splatworker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

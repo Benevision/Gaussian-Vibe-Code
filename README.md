@@ -1,0 +1,40 @@
+# Splat Studio
+
+A Gaussian-splatting suite for Apple silicon: view, create, edit and export 3D Gaussian splats, with a native Metal renderer and trainer, an iPhone LiDAR capture companion, and an optional Linux CUDA worker.
+
+| Folder | What | Status |
+|---|---|---|
+| [`mac/`](mac/) | **Splat Studio** — macOS app (SwiftUI + Metal). Viewer, editor, dataset preparation, Metal training, remote/“Both” compute, iPhone receiver | Builds (`swift build`), trainer gradient-checked, end-to-end training verified on synthetic data |
+| [`ios/`](ios/) | **Splat Capture** — iPhone app (ARKit + LiDAR), TestFlight-ready | Builds clean for device and simulator (iOS 27.2 SDK); not yet run on a phone |
+| [`linux/`](linux/) | **Splat Worker** — CUDA training/processing server (FastAPI + gsplat) with a GTK 4 / libadwaita GUI, packaged as a Flatpak | 134 tests pass; the CUDA path, GUI rendering and Flatpak build have not been run on Linux yet |
+| [`tools/`](tools/) | **splatprep** — learned feature matching/SfM, moving-object masking (OWLv2 + SAM 2 tracking, click-to-mask server) and benchmark harness (Mac MPS or Linux CUDA) | 77 tests pass; models installed and running on this Mac; benchmark in progress |
+| [`docs/`](docs/) | [User guide](docs/USER_GUIDE.md) · [Settings reference](docs/SETTINGS.md) · [Architecture](docs/ARCHITECTURE.md) · [Protocols & formats](docs/PROTOCOL.md) | |
+
+## Quick start (Mac)
+
+```bash
+cd mac && ./scripts/build_app.sh && open "build/Splat Studio.app"
+```
+
+Drop a `.ply`/`.spz`/`.splat`, a folder of photos, a video, a 360° video, stereo footage or an iPhone capture onto the window.
+
+Headless use:
+
+```bash
+mac/.build/release/SplatStudio --prepare path/to/photos-or-video --out MyProject [--solver objectcapture] [--mask people|dynamic]
+mac/.build/release/SplatStudio --train MyProject/dataset --preset high --out scene.ply
+mac/.build/release/SplatStudio --convert scene.ply scene.spz
+mac/.build/release/SplatStudio --render scene.ply preview.png
+mac/.build/release/SplatStudio --dump-settings > docs/SETTINGS.md
+```
+
+## What's inside (highlights)
+
+- **Metal renderer**: GPU projection + stable radix sort (16-bit log-depth or 32-bit) + hardware-blended instanced quads; lazy re-sort when idle; 5 display modes (colour, depth, centres, ellipses, opacity).
+- **Metal trainer**: full differentiable tile rasteriser with analytic backward pass (gradient-checked), fused L1 + D-SSIM + depth loss, Adam, **3DGS-MCMC** densification (relocation, budget, SGLD noise) and classic **adaptive density control** with **AbsGS** gradients, **Mip-Splatting style anti-aliasing** with opacity compensation, tight ellipse tile bounds, SH degree warm-up, LiDAR/stereo depth supervision, masks, holdout evaluation.
+- **Sources**: photos (blur/duplicate rejection), video (sharpest-frame selection, scene-cut/static skipping), 360° equirectangular (virtual pinhole rigs, nadir handling), stereo (SBS/TB/dual files/MV-HEVC spatial video/Arcturus Vision; metric scale from baseline; stereo depth), iPhone LiDAR captures, COLMAP, Nerfstudio. HDR tone-mapping.
+- **Camera solving**: Apple Object Capture (built in), COLMAP/GLOMAP with SIFT, SuperPoint/DISK/ALIKED + LightGlue, LoFTR, MASt3R, VGGT (via the optional Models pack), or capture poses.
+- **Moving objects**: robust training that ignores transient regions (on by default, Mac + worker), Apple Vision people & pets masks, open-vocabulary detection + SAM 2 tracking, and a mask editor with click-to-select and track.
+- **Compute**: This Mac / Linux worker / Both (stage placement + block-parallel training merged automatically).
+- **Formats**: PLY (lossless), SPZ v2/v3 (read) / v2 (write), `.splat`.
+- **UX**: Easy / Advanced modes; every setting has inline help and a full reference (Help → Settings Reference); guided New Project flow; live training dashboard with charts and live preview; undoable editing (brush selection, crop box, opacity/size/outlier cleanup); turntable video and 4K screenshots.

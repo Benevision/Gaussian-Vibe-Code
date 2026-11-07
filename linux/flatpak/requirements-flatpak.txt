@@ -1,0 +1,14 @@
+# Lightweight Python dependencies bundled inside the Flatpak (for the app's own Python,
+# org.gnome.Platform//51 = CPython 3.14). They let the GUI talk NVML / draw QR codes and
+# let the worker start (info / processing-less) before the GPU runtime is installed.
+# torch / gsplat are NOT here: the setup assistant installs them at runtime into
+# $XDG_DATA_HOME/splatworker/venv (see splatworker/gui/runtime_plan.py).
+# Regenerate python3-deps.json with ./generate-deps.sh after editing.
+fastapi>=0.110
+uvicorn>=0.27
+zeroconf>=0.131
+numpy>=1.24
+pillow>=10.0
+httpx>=0.27
+nvidia-ml-py>=12.0
+qrcode>=7.4
