@@ -207,16 +207,26 @@ class FeatureMatchBackend(Backend):
         prior_c2w = {i: ctx.priors[n].c2w for i, n in enumerate(ctx.names) if n in ctx.priors}
         has_ts = bool(ctx.priors) and all(ctx.priors.get(n) is not None and ctx.priors[n].timestamp is not None for n in ctx.names)
         ctx.progress.update("pairs", 0.0, "selecting image pairs")
-        pairs, pinfo = select_pairs(
-            ctx.names,
-            ctx.paths,
-            ctx.opt("matching", "auto"),
-            int(ctx.opt("sequentialOverlap", 10)),
-            int(ctx.opt("retrievalTopK", 30)),
-            prior_c2w or None,
-            has_ts,
-            ctx.work_dir,
-        )
+        from ..prior_refine import lookat_pairs, refine_poses, use_prior_refine
+
+        refine = use_prior_refine(ctx.names, ctx.priors, ctx.request)
+        if refine:
+            # Known poses (iPhone capture): refine them instead of solving — fewer pairs, no mapper, and every
+            # frame keeps its own capture intrinsics (pinhole, per-frame).
+            ctx.request = {**ctx.request, "singleCamera": False, "cameraModel": "pinhole"}
+            pairs = lookat_pairs(prior_c2w, k=int(ctx.opt("refineNeighbors", 10)), window=int(ctx.opt("refineWindow", 4)))
+            pinfo = {"strategy": "lookat", "resolved": "lookat", "numPairs": len(pairs)}
+        else:
+            pairs, pinfo = select_pairs(
+                ctx.names,
+                ctx.paths,
+                ctx.opt("matching", "auto"),
+                int(ctx.opt("sequentialOverlap", 10)),
+                int(ctx.opt("retrievalTopK", 30)),
+                prior_c2w or None,
+                has_ts,
+                ctx.work_dir,
+            )
         info["pairs"] = pinfo
         ctx.progress.update("pairs", 1.0, f"{len(pairs)} pairs ({pinfo['resolved']})")
         self.setup(ctx)
@@ -261,6 +271,16 @@ class FeatureMatchBackend(Backend):
         db_path = ctx.work_dir / "database.db"
         write_database(db_path, ctx, kps_colmap, sizes, raw, inliers, Fs)
         write_pairs_txt(ctx.work_dir / "pairs.txt", ctx.names, pairs)
+        if refine:
+            from ..mapper import find_executable
+
+            import os
+
+            cli = None if os.environ.get("SPLATPREP_REFINE_ENGINE") == "pycolmap" else find_executable("colmap")
+            rec, rinfo = refine_poses(cli, db_path, ctx.image_dir, ctx.priors,
+                                      ctx.work_dir / "refine", ctx.log_path, ctx.progress.sub("mapping"))
+            info.update({"mapper": "prior-refine", "priorRefine": rinfo})
+            return SfMOutput(rec, matching, info)
         rec, mapper = run_mapper(
             db_path,
             ctx.image_dir,

@@ -3,6 +3,7 @@
 * records every invocation (JSON line) in $FAKE_COLMAP_LOG,
 * ``feature_extractor`` creates a database with the listed images,
 * matchers are no-ops,
+* ``point_triangulator`` / ``bundle_adjuster`` copy the input model (poses unchanged),
 * ``mapper`` checks the database (needs >= 1 verified two-view geometry unless
   $FAKE_COLMAP_NO_CHECK) and writes the ground-truth poses from $FAKE_COLMAP_GT
   (a dataset.json) as a text model in <output_path>/0, using the DB image ids.
@@ -23,6 +24,8 @@ OPTIONS = {
     "sequential_matcher": "--database_path --SequentialMatching.overlap --FeatureMatching.use_gpu",
     "matches_importer": "--database_path --match_list_path --match_type --FeatureMatching.use_gpu",
     "mapper": "--database_path --image_path --output_path",
+    "point_triangulator": "--database_path --image_path --input_path --output_path --clear_points",
+    "bundle_adjuster": "--input_path --output_path --BundleAdjustment.refine_focal_length",
 }
 
 
@@ -77,6 +80,16 @@ def main():
                 rec.images[ids[name]] = im
                 print(f"Registering image #{ids[name]}")
         write_text_model(rec, Path(opt(args, "output_path")) / "0")
+        return 0
+    if cmd in ("point_triangulator", "bundle_adjuster"):
+        # poses pass through unchanged (prior refinement of exact priors is a no-op)
+        import shutil
+
+        src, dst = Path(opt(args, "input_path")), Path(opt(args, "output_path"))
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in src.iterdir():
+            if f.is_file():
+                shutil.copy(f, dst / f.name)
         return 0
     print(f"unknown command {cmd}", file=sys.stderr)
     return 1

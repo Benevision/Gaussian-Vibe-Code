@@ -72,7 +72,22 @@ def test_colmap_sift_with_priors_uses_pair_list(fake_colmap, tmp_path, synth_sma
         work,
     )
     assert stats["status"] == "ok" and stats["priorAlignment"]["rmse"] < 1e-6
-    assert any(c[0] == "matches_importer" for c in _calls(fake_colmap))
+    calls = _calls(fake_colmap)
+    assert any(c[0] == "matches_importer" for c in calls)
+    # known poses are refined, not re-solved: triangulate + bundle-adjust, no mapper
+    assert stats["mapper"] == "prior-refine" and not any(c[0] == "mapper" for c in calls)
+    assert sum(c[0] == "bundle_adjuster" for c in calls) == 2
+    assert stats["priorRefine"]["accepted"] and stats["priorRefine"]["medianRotationChangeDeg"] < 1e-3
+
+
+def test_prior_mode_solve_still_runs_the_mapper(fake_colmap, tmp_path, synth_small, monkeypatch):
+    monkeypatch.setenv("FAKE_COLMAP_NO_CHECK", "1")
+    stats = run_request(
+        {"task": "sfm", "features": "colmap_sift", "imagesDir": "images", "outputDir": "out", "mapper": "colmap",
+         "priorPoses": str(synth_small / "dataset.json"), "priorMode": "solve", "exportImages": False},
+        tmp_path / "work",
+    )
+    assert stats["status"] == "ok" and stats["mapper"] != "prior-refine"
 
 
 def test_opencv_sift_full_sfm_via_colmap_mapper(fake_colmap, tmp_path, monkeypatch):

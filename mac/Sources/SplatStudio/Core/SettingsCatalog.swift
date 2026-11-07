@@ -242,8 +242,8 @@ enum SettingsCatalog {
               defaultValue: "4096", range: "512–16384"),
         .init(id: "sfm.refineCapturePoses", group: .cameras, title: "Refine capture poses",
               summary: "Uses iPhone/headset poses as a starting point and polishes them with SfM.",
-              detail: "ARKit poses drift by a few centimetres over a long capture; refining removes the drift while keeping metric scale. Adds a few minutes.",
-              defaultValue: "Off"),
+              detail: "ARKit tracks tilt well (gravity) but its compass heading drifts — about 1° over a room scan, which at 1600 px is a 20-pixel disagreement between views of the same wall, so training blurs fine detail. Refinement keeps the capture's poses, per-frame lens values and scale, matches frames that look at the same place (revisits are what correct drift), builds 3D points from the capture poses and adjusts only the camera poses. On a 649-frame bedroom scan: 3.6 min instead of 28 for a full re-solve, all frames kept, +2.1 dB held-out PSNR (a full re-solve gave +2.5 dB). Runs on the Linux worker when one is in use. If it can't run (no Models pack, worker offline) or its corrections look implausible, the capture poses are used as recorded.",
+              defaultValue: "On"),
     ]
 
     // MARK: Masking

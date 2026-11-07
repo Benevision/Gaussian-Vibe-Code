@@ -234,6 +234,10 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
   "maxKeypoints": 4096,
   "resizeMax": 1600,
   "priorPoses": "priors.json",           // optional: ARKit / known poses used as priors
+  "priorMode": "auto" | "refine" | "solve", // auto: refine when ≥ 90 % of images have prior poses + intrinsics —
+                                         // look-at pairs, triangulate with the priors, pose-only BA ×2 (no mapper,
+                                         // capture intrinsics kept; falls back to the priors if implausible);
+                                         // solve: full SfM, priors only for pairs + Sim3 alignment
   "maskModel": "sam2_auto" | "sky" | "person",   // task = masks
   "maskPrompt": { "points": [[x,y,label]], "boxes": [[x0,y0,x1,y1]] },   // optional, first image coords
   "invertMask": false

@@ -96,6 +96,28 @@ class ColmapSiftBackend(Backend):
 
         strategy = (ctx.opt("matching", "auto") or "auto").lower()
         prior_c2w = {i: ctx.priors[nm].c2w for i, nm in enumerate(ctx.names) if nm in ctx.priors}
+        from ..prior_refine import lookat_pairs, refine_poses, set_prior_cameras, use_prior_refine
+
+        if use_prior_refine(ctx.names, ctx.priors, ctx.request):
+            # Known poses (iPhone capture): refine them rather than solve from scratch — far fewer pairs,
+            # no mapper. See prior_refine.py.
+            ncam = set_prior_cameras(db, ctx.names, ctx.priors)
+            pairs = lookat_pairs(prior_c2w, k=int(ctx.opt("refineNeighbors", 10)), window=int(ctx.opt("refineWindow", 4)))
+            pairs_txt = ctx.work_dir / "pairs.txt"
+            write_pairs_txt(pairs_txt, ctx.names, pairs)
+            ctx.progress.update("pairs", 1.0, f"{len(pairs)} pairs from the capture poses ({ncam} cameras with capture intrinsics)")
+            mcmd = [colmap, "matches_importer", "--database_path", str(db), "--match_list_path", str(pairs_txt), "--match_type", "pairs"]
+            g = opt("matches_importer", "FeatureMatching.use_gpu", "SiftMatching.use_gpu")
+            if g:
+                mcmd += [f"--{g}", use_gpu]
+            ctx.progress.update("matching", 0.05, "COLMAP matches_importer")
+            run_logged(mcmd, ctx.log_path)
+            ctx.progress.update("matching", 1.0, "matching done")
+            ctx.progress.update("verification", 1.0, "verified by COLMAP")
+            rec, info = refine_poses(colmap, db, ctx.image_dir, ctx.priors, ctx.work_dir / "refine", ctx.log_path,
+                                     ctx.progress.sub("mapping"))
+            return SfMOutput(rec, None, {"backend": self.id, "mapper": "prior-refine", "matcher": "matches_importer",
+                                         "pairs": {"strategy": "lookat", "numPairs": len(pairs)}, "priorRefine": info})
         has_ts = bool(ctx.priors) and all(ctx.priors.get(nm) is not None and ctx.priors[nm].timestamp is not None for nm in ctx.names)
         vocab = os.environ.get("SPLATPREP_VOCAB_TREE")
         gpu_opt = lambda c: opt(c, "FeatureMatching.use_gpu", "SiftMatching.use_gpu")

@@ -269,7 +269,7 @@ struct NewProjectSheet: View {
             }
             if source?.hasPoses == true && solverKind == .fromCapture {
                 SettingRow(id: "sfm.refineCapturePoses") {
-                    Toggle("", isOn: Binding(get: { false }, set: { if $0 { solverKind = .learned } })).labelsHidden()
+                    Toggle("", isOn: $options.refineCapturePoses).labelsHidden()
                 }
             }
         }
