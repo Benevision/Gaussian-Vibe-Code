@@ -364,8 +364,9 @@ def test_process_progress_mapping(client, fake_splatprep):
         wait_state(client, j, "completed")
     finally:
         processing.run_processing = original
-    assert seen[0] == {"message": "features", "totalSteps": 1000, "step": 167}
-    assert seen[-1] == {"message": "mapping", "totalSteps": 1000, "step": 1000}
+    # "stage: detail" so the Mac can show what is happening (worker ≥ 1.1.2)
+    assert seen[0] == {"message": "features: 000.jpg", "totalSteps": 1000, "step": 167, "state": "running"}
+    assert seen[-1]["message"].startswith("mapping") and seen[-1]["step"] == 1000 and seen[-1]["state"] == "running"
 
 
 def test_process_model_unavailable_fails_cleanly(client, fake_splatprep):

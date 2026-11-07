@@ -285,14 +285,26 @@ final class WorkerClient: @unchecked Sendable {
     /// `masks/`), waits, and unzips the output into `outputDirectory`.
     func runProcessing(directory: URL, request: ProcessingRequest, outputDirectory: URL,
                        progress: PipelineProgressHandler? = nil) async throws {
-        progress?(PipelineProgress(stage: "Uploading", fraction: 0, message: baseURL.host ?? ""))
-        let did = try await uploadDataset(directory: directory) { f in progress?(PipelineProgress(stage: "Uploading", fraction: f, message: "")) }
+        // Phases on the overall bar: upload 0–15 %, remote work 15–95 %, download 95–100 %.
+        let host = baseURL.host ?? "worker"
+        let task = request.task.rawValue
+        progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0, message: "preparing \(task) job"))
+        let did = try await uploadDataset(directory: directory) { f in
+            progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0.15 * f, message: String(format: "%.0f %%", f * 100)))
+        }
         let jid = try await process(datasetId: did, request: request)
         let final = try await waitForJob(jid) { s in
-            progress?(PipelineProgress(stage: s.message ?? "processing", fraction: s.fraction, message: "remote \(s.state)"))
+            // Worker ≥ 1.1.2 reports "stage: detail" (e.g. "masks: SAM 2 forward: frame 120/649").
+            let msg = s.message ?? ""
+            let parts = msg.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            let stage = parts.first.map { $0.isEmpty ? task : $0 } ?? task
+            let detail = parts.count > 1 ? parts[1] : (s.state == .queued ? "waiting for the GPU" : s.state == .loading ? "starting" : "")
+            progress?(PipelineProgress(stage: "On \(host): \(stage)", fraction: 0.15 + 0.8 * s.fraction, message: detail))
         }
         guard final.state == .completed else { throw PipelineError.processFailed("remote processing \(final.state): \(final.message ?? "")") }
+        progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95, message: "results of \(task)"))
         try await downloadProcessOutput(jid, into: outputDirectory)
+        progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 1, message: "done"))
     }
 }
 

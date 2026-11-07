@@ -144,7 +144,11 @@ def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
             return
         stage = str(evt.get("stage", "processing"))
         frac = evt.get("progress")
-        fields: Dict[str, Any] = {"message": stage, "totalSteps": PROGRESS_SCALE}
+        detail = str(evt.get("message") or "").strip()
+        # "stage: detail" (e.g. "masks: SAM 2 forward: frame 120/649") so the Mac can show what is
+        # actually happening; state "running" once splatprep reports (not "loading" for the whole job).
+        fields: Dict[str, Any] = {"message": f"{stage}: {detail}" if detail else stage,
+                                  "totalSteps": PROGRESS_SCALE, "state": "running"}
         if isinstance(frac, (int, float)) and not isinstance(frac, bool):
             fields["step"] = int(round(max(0.0, min(1.0, float(frac))) * PROGRESS_SCALE))
         progress_cb(**fields)

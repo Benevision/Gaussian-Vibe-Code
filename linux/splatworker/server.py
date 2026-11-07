@@ -324,7 +324,7 @@ class JobManager:
 
         def status(**fields):
             fields.pop("elapsedSeconds", None)  # server measures wall time itself
-            if fields.get("state") not in (None, "loading", "training"):
+            if fields.get("state") not in (None, "loading", "training", "running"):
                 fields.pop("state")
             if job.cancel_event.is_set():
                 fields.pop("message", None)
