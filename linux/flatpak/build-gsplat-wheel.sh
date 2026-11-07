@@ -70,6 +70,11 @@ START=$(date +%s)
     git clone -q --recursive https://github.com/nerfstudio-project/gsplat.git /src
     cd /src; git checkout -q "$COMMIT"; git submodule update -q --init --recursive
     sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" gsplat/version.py
+    # Upstream bug at this dev commit: Utils.cpp (built by g++, not nvcc) calls the two-argument
+    # cudaEventCreate overload, which only exists for nvcc. The C API equivalent works everywhere.
+    sed -i -E "s/cudaEventCreate\(([^,()]+), *cudaEventDisableTiming\)/cudaEventCreateWithFlags(\1, cudaEventDisableTiming)/g" gsplat/cuda/csrc/*.cpp
+    grep -c cudaEventCreateWithFlags gsplat/cuda/csrc/Utils.cpp | sed "s/^/patched cudaEventCreate calls: /"
+    echo "compiling ~50 CUDA/C++ files with $MAX_JOBS jobs (quiet until done; the last few big files run on one core)"
     tail -1 gsplat/version.py
     nvcc --version | tail -1
     pip wheel --no-deps --no-build-isolation -w /tmp/w .

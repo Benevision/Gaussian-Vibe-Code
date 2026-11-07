@@ -95,6 +95,8 @@ jobs:
           TAG="pt$(echo ${{ steps.pin.outputs.TORCH_VERSION }} | cut -d. -f1,2 | tr -d .)${{ steps.pin.outputs.CUDA_TAG }}"
           sed -i "s/^__version__ = .*/__version__ = \"${{ steps.pin.outputs.GSPLAT_VERSION }}+${TAG}\"/" gsplat/version.py
           cat gsplat/version.py | tail -1
+          # upstream bug at this commit: g++-built Utils.cpp uses nvcc's two-argument cudaEventCreate overload
+          sed -i -E 's/cudaEventCreate\(([^,()]+), *cudaEventDisableTiming\)/cudaEventCreateWithFlags(\1, cudaEventDisableTiming)/g' gsplat/cuda/csrc/*.cpp
           python -m pip wheel --no-deps --no-build-isolation -w ../wheels .
           ls -la ../wheels
       - uses: actions/upload-artifact@v4
