@@ -27,7 +27,42 @@ final class AppModel {
     // MARK: rendering
     let renderer: SplatRenderer
     var viewer = ViewerSettings() { didSet { renderer.settings = viewer } }
-    var cameraMode: ViewerCamera.Mode = .orbit { didSet { var c = renderer.camera; c.mode = cameraMode; renderer.camera = c } }
+    var cameraMode: ViewerCamera.Mode = .orbit {
+        didSet {
+            var c = renderer.camera
+            c.mode = cameraMode
+            // Fly → orbit: pivot on the surface in the middle of the view (as double-click does), not on a point
+            // floating a fixed distance ahead. Orbit → fly keeps the distance, so fly speed carries over.
+            if oldValue == .fly, cameraMode == .orbit, let p = surfaceAtViewCentre(c) {
+                let e = c.eye
+                c.target = p
+                c.distance = max(simd_distance(e, p), 0.01)
+                let d = simd_normalize(e - p), up = simd_normalize(c.up)
+                let ref: SIMD3<Float> = abs(up.z) < 0.9 ? SIMD3(0, 0, 1) : SIMD3(1, 0, 0)
+                let right = simd_normalize(simd_cross(ref, up)), fwd = simd_cross(up, right)
+                c.pitch = asin(min(max(simd_dot(d, up), -1), 1))
+                c.yaw = atan2(simd_dot(d, right), simd_dot(d, fwd))
+            }
+            renderer.camera = c
+        }
+    }
+
+    /// Nearest reasonably opaque splat within ~0.6° of the view's centre line.
+    func surfaceAtViewCentre(_ cam: ViewerCamera) -> SIMD3<Float>? {
+        guard let sc = scene else { return nil }
+        let m = cam.worldToCamera
+        let pos = sc.positionsPointer, fl = sc.flagsPointer
+        var bestZ: Float = .infinity
+        var best: SIMD3<Float>?
+        let tol: Float = 0.01 * 0.01
+        for i in stride(from: 0, to: sc.count, by: max(1, sc.count / 600_000)) where fl[i] & 1 == 0 && pos[i].w > 0.3 {
+            let t = m * SIMD4(pos[i].x, pos[i].y, pos[i].z, 1)
+            guard t.z > cam.near else { continue }
+            let u = t.x / t.z, v = t.y / t.z
+            if u * u + v * v < tol && t.z < bestZ { bestZ = t.z; best = SIMD3(pos[i].x, pos[i].y, pos[i].z) }
+        }
+        return best
+    }
     var navigation = NavigationSettings.load() {
         didSet { navigation.save(); renderer.smoothing = navigation.smoothing ? 0.08 : 0 }
     }

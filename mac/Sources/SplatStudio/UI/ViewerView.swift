@@ -81,9 +81,9 @@ final class SplatMTKView: MTKView {
             model?.brushSelect(at: p, radius: brushRadius, viewSize: bounds.size, deselect: e.modifierFlags.contains(.option), beginStroke: false)
             return
         }
-        let n = nav
+        let n = nav, r = sceneRadius
         goal { c in
-            if e.modifierFlags.contains(.shift) { c.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height), speed: n.panSpeed) }
+            if e.modifierFlags.contains(.shift) { c.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height), speed: n.panSpeed, sceneRadius: r) }
             else if c.mode == .fly { c.look(dx: dx, dy: dy * vSign, speed: n.rotateSpeed) }
             else { c.orbit(dx: dx, dy: dy * vSign, speed: n.rotateSpeed) }
         }
@@ -93,8 +93,8 @@ final class SplatMTKView: MTKView {
     override func rightMouseDragged(with e: NSEvent) {
         let p = viewPoint(e)
         let dx = Float(p.x - lastDrag.x), dy = Float(p.y - lastDrag.y); lastDrag = p
-        let n = nav
-        goal { $0.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height), speed: n.panSpeed) }
+        let n = nav, r = sceneRadius
+        goal { $0.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height), speed: n.panSpeed, sceneRadius: r) }
     }
     override func otherMouseDown(with e: NSEvent) { lastDrag = viewPoint(e) }
     override func otherMouseDragged(with e: NSEvent) { rightMouseDragged(with: e) }
@@ -107,13 +107,14 @@ final class SplatMTKView: MTKView {
             let fx = Float(e.scrollingDeltaX * flip), fy = Float(e.scrollingDeltaY * flip)
             var mode = n.trackpadTwoFinger
             if e.modifierFlags.contains(.shift) { mode = mode == .orbit ? .pan : .orbit }
+            let r = sceneRadius
             goal { c in
                 if e.modifierFlags.contains(.command) {
                     c.zoom(exp(fy * 0.006 * n.zoomSpeed))
                 } else if c.mode == .fly {
                     c.look(dx: fx * 0.8, dy: fy * 0.8 * vSign, speed: n.rotateSpeed)
                 } else if mode == .pan {
-                    c.pan(dx: fx, dy: fy, viewHeight: Float(bounds.height), speed: n.panSpeed)
+                    c.pan(dx: fx, dy: fy, viewHeight: Float(bounds.height), speed: n.panSpeed, sceneRadius: r)
                 } else {
                     c.orbit(dx: fx * 0.8, dy: fy * 0.8 * vSign, speed: n.rotateSpeed)
                 }
@@ -121,6 +122,7 @@ final class SplatMTKView: MTKView {
         } else {
             // Mouse wheel: one notch ≈ 8 % zoom (fly mode: move forward/back).
             let notches = Float(e.scrollingDeltaY)
+            probeFlyDistance()
             let step = flyStep  // read before goal{}: flyStep takes the renderer lock that goal{} holds
             goal { c in
                 if c.mode == .fly { c.fly(SIMD3(0, 0, notches), speed: step * 0.15) }
@@ -132,6 +134,7 @@ final class SplatMTKView: MTKView {
     @objc func onPinch(_ g: NSMagnificationGestureRecognizer) {
         let m = Float(g.magnification); g.magnification = 0
         let n = nav
+        probeFlyDistance()
         let step = flyStep  // read before goal{} (see scrollWheel)
         goal { c in
             if c.mode == .fly { c.fly(SIMD3(0, 0, m * 4), speed: step) } else { c.zoom(exp(-m * n.zoomSpeed)) }
@@ -143,10 +146,30 @@ final class SplatMTKView: MTKView {
         goal { $0.orbit(dx: -r * 57, dy: 0, speed: n.rotateSpeed) }
     }
 
-    /// Distance travelled per second at fly speed 1: a quarter of the scene size.
+    private var sceneRadius: Float? { renderer?.scene?.radius }
+    private var lastDepthProbe = Date.distantPast
+
+    /// Fly mode: re-measure the working distance (to the surface straight ahead) a few times a second, so
+    /// speed drops as you approach something and rises again in open space.
+    private func probeFlyDistance() {
+        guard Date().timeIntervalSince(lastDepthProbe) > 0.25, let model, let r = renderer else { return }
+        lastDepthProbe = Date()
+        let cam = r.goalCamera
+        guard cam.mode == .fly, let p = model.surfaceAtViewCentre(cam) else { return }
+        let d = max(simd_distance(cam.eye, p), 0.005)
+        goal { c in
+            let e = c.eye
+            c.distance = d
+            c.target = e - c.offsetDir * d     // same eye, same view direction
+        }
+    }
+
+    /// Distance travelled per second at fly speed 1: a quarter of the working distance (how far away what
+    /// you're looking at is), so flying is slow up close and fast across a big scene — the same feel as orbit
+    /// zoom, which is relative too. From the framed overview this equals the old quarter-scene-per-second.
     private var flyStep: Float {
-        let r = renderer?.scene?.radius ?? 1
-        return max(r * 0.25, 0.05) * nav.flySpeed
+        let cam = renderer?.goalCamera ?? ViewerCamera()
+        return cam.workingDistance(sceneRadius: sceneRadius) * 0.25 * nav.flySpeed
     }
 
     /// Double-click: orbit around the splat under the cursor.
@@ -219,6 +242,7 @@ final class SplatMTKView: MTKView {
         var mult: Float = 1
         if modifiers.contains(.shift) { mult *= 4 }
         if modifiers.contains(.option) { mult *= 0.25 }
+        probeFlyDistance()
         let step = flyStep * Float(min(dt, 0.1)) * mult
         goal { $0.fly(simd_normalize(v), speed: step) }
     }

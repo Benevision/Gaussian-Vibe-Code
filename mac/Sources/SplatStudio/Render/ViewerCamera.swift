@@ -102,11 +102,20 @@ struct ViewerCamera: Equatable {
             && abs(distance - g.distance) < 1e-5 * distance && abs(fovY - g.fovY) < 1e-6 && up == g.up && mode == g.mode
     }
 
-    mutating func pan(dx: Float, dy: Float, viewHeight: Float, speed: Float = 1) {
+    /// The distance navigation is measured against: how far away the thing you're looking at is (the orbit
+    /// pivot, or in fly mode the surface picked when entering/re-aiming). Clamped to the scene's scale so a
+    /// stale or extreme value can't make panning or flying absurdly fast or slow.
+    func workingDistance(sceneRadius r: Float?) -> Float {
+        guard let r, r > 0 else { return max(distance, 0.005) }
+        return min(max(distance, r * 0.005, 0.005), r * 1.0)
+    }
+
+    /// Drag the scene with the cursor: a point at the working distance follows the pointer.
+    mutating func pan(dx: Float, dy: Float, viewHeight: Float, speed: Float = 1, sceneRadius: Float? = nil) {
         let m = worldToCamera
         let right = SIMD3(m[0][0], m[1][0], m[2][0])
         let down = SIMD3(m[0][1], m[1][1], m[2][1])
-        let s = distance * 2 * tan(fovY / 2) / max(viewHeight, 1) * speed
+        let s = workingDistance(sceneRadius: sceneRadius) * 2 * tan(fovY / 2) / max(viewHeight, 1) * speed
         target += (-right * dx - down * dy) * s
     }
 
