@@ -193,7 +193,37 @@ final class MetalTrainer: @unchecked Sendable {
             let c = dataset.manifest.sceneCenter
             cloud = GaussianInitializer.random(count: config.randomInitCount, center: SIMD3(c[0], c[1], c[2]), extent: sceneExtent, config: config)
         }
-        load(cloud)
+        load(config.backgroundShell > 0 ? addBackgroundShell(cloud, count: config.backgroundShell) : cloud)
+    }
+
+    /// Far-field shell (config.backgroundShell): splats spread evenly over a sphere 3 scene sizes out, coloured
+    /// like the average of the scene. Distant land and sky seen past the edge of the capture get somewhere to
+    /// live, instead of being faked by huge hazy splats at the edge or floaters in front of the cameras.
+    private func addBackgroundShell(_ g0: GaussianCloud, count n: Int) -> GaussianCloud {
+        var g = g0
+        let cams = trainViews.map { $0.camera.center }
+        let centre = cams.isEmpty ? SIMD3<Float>(dataset.manifest.sceneCenter[0], dataset.manifest.sceneCenter[1], dataset.manifest.sceneCenter[2])
+            : cams.reduce(SIMD3<Float>(repeating: 0), +) / Float(cams.count)
+        let r = 3 * sceneExtent
+        var dc = [Float](repeating: 0, count: 3)
+        let m = max(g0.count, 1)
+        for i in 0..<g0.count { for c in 0..<3 { dc[c] += g0.sh[i * GaussianCloud.shStride + c] } }
+        dc = dc.map { $0 / Float(m) }
+        let spacing = sqrt(4 * Float.pi * r * r / Float(n))
+        let ls = log(spacing * 0.6)
+        let golden = Float.pi * (3 - sqrt(5))
+        for k in 0..<n {
+            let y = 1 - 2 * (Float(k) + 0.5) / Float(n), rad = sqrt(max(0, 1 - y * y)), th = golden * Float(k)
+            let p = centre + r * SIMD3(rad * cos(th), y, rad * sin(th))
+            g.positions += [p.x, p.y, p.z]
+            g.scales += [ls, ls, ls]
+            g.rotations += [1, 0, 0, 0]
+            g.opacities += [0]                                   // 0.5
+            var sh = [Float](repeating: 0, count: GaussianCloud.shStride)
+            sh[0] = dc[0]; sh[1] = dc[1]; sh[2] = dc[2]
+            g.sh += sh
+        }
+        return g
     }
 
     /// Replaces all parameters (also used to resume from a checkpoint).
