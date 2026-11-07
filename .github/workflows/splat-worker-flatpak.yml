@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install flatpak-builder
         run: |
@@ -65,6 +65,7 @@ jobs:
         run: |
           SIGN=()
           if [ -n "${{ steps.gpg.outputs.keyid }}" ]; then SIGN=(--gpg-sign="${{ steps.gpg.outputs.keyid }}"); fi
+          mkdir -p site/flatpak   # flatpak-builder creates the repo dir itself, but not its parents
           cd linux/flatpak
           flatpak-builder --user --install-deps-from=flathub --force-clean --disable-rofiles-fuse \
             --state-dir=.flatpak-builder --repo=../../site/flatpak/repo --default-branch="$BRANCH" \
