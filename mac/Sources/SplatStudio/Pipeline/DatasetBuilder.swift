@@ -324,9 +324,11 @@ enum DatasetBuilder {
             if o.compute != .thisMac, let worker {
                 sol = try await RemoteSplatPrepPoseSolver(client: worker, local: sp).solve(frames, progress: progress)
             } else {
+                try await FrameMasker.waitForFrames(frames.root, progress: progress)
                 sol = try await sp.solve(frames, progress: progress)
             }
         default:
+            try await FrameMasker.waitForFrames(frames.root, progress: progress)
             let oc = ObjectCapturePoseSolver(sensitivity: o.objectCaptureHighSensitivity ? .high : .normal, sequentialOrdering: sequential)
             sol = try await oc.solve(frames, progress: progress)
         }

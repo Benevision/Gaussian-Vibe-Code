@@ -106,6 +106,17 @@ enum CLI {
                     }
                     try ds.normalizeOrientation()
                     print(String(format: "Dataset ready: %d cameras in %.0f s → %@", ds.manifest.cameras.count, Date().timeIntervalSince(start), ds.root.path))
+                    if RemoteStore.load(ds.root) != nil {
+                        // frames left on the worker: wait for the background download (the app keeps running; the CLI must not exit)
+                        try await RemoteImageFetch.shared.ensure(ds.root)
+                        print(String(format: "Frames downloaded in the background, complete at %.0f s", Date().timeIntervalSince(start)))
+                        if let w = worker, a.contains("--upload-test") {
+                            // what remote training sends: only the files the worker doesn't already have
+                            let t0 = Date()
+                            let id = try await w.uploadReusing(RemoteStore.usable(at: ds.root, by: w), directory: ds.root)
+                            print(String(format: "Training dataset on the worker: %@ (%.1f s)", id, Date().timeIntervalSince(t0)))
+                        }
+                    }
                 } catch { fputs("error: \(error.localizedDescription)\n", stderr); exitCode = 1 }
                 sem.signal()
             }

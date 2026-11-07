@@ -255,9 +255,19 @@ Feature/matcher ids: `colmap_sift`, `sift_lightglue`, `superpoint_lightglue`, `d
 |---|---|---|
 | `POST /v1/process` | `{"datasetId":"…","request":{ProcessingRequest}}` (dataset zip contains `images/` and optional `priors.json`) | `{"jobId":"p1"}` |
 | `GET /v1/jobs/{id}` | – | `JobStatus` with `"kind":"process"`, `step/totalSteps` = progress ×1000, `message` = stage |
-| `GET /v1/jobs/{id}/output.zip` | – | zip of `outputDir` when completed |
+| `GET /v1/jobs/{id}/output.zip[?skip=a,b][&only=c]` | – | zip of `outputDir` when completed (built on request from the output dataset; `skip`/`only` = top-level folders) |
+| `POST /v1/datasets/compose` | `{"layers":[{"datasetId":"A"},{"datasetId":"B","prefix":"sub"}]}` | `{"datasetId":"…","hasDatasetJson":bool,"bytes":n}` — union of the layers' files (hard links, later layers win) |
+| `GET /v1/datasets/{id}/archive.zip[?only=…][&skip=…]` | – | the dataset's files as a zip |
 
 `GET /v1/info` adds `"capabilities": ["train","process"]` and `"models": ["superpoint_lightglue", …]` (those actually importable).
+
+**Chaining (worker ≥ 1.3.8, capability `chain`).** A completed processing job keeps its output on the worker as a
+dataset of its own, `JobStatus.outputDatasetId`, which the next request can use directly (`/v1/process` or, with a
+`dataset.json`, `/v1/jobs`). The Mac uses this so a video split on the worker (`task: frames`) is masked, solved and
+trained there without its frames crossing the network again: it downloads the output without `images/`, records
+`.remote-store.json` (`{"worker","datasetId","dirs":["images"],"local"}`) in the project, sends later steps only what
+changed (masks, priors, `dataset.json`) and composes them over the stored images, and fetches the images in the
+background (`archive.zip?only=images`) for anything that needs them on the Mac.
 
 ## 7. Shared compute ("Both" mode)
 

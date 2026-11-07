@@ -33,6 +33,7 @@ from typing import Any, Deque, Dict, List, Optional
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -50,7 +51,7 @@ ACTIVE_STATES = ("loading", "training", "running")
 FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
-               "datasetId", "createdAt", "gpu")
+               "datasetId", "createdAt", "gpu", "outputDatasetId")
 
 
 class ApiError(Exception):
@@ -361,9 +362,17 @@ class JobManager:
             extra = {k: stats[k] for k in ("numGaussians", "psnr", "loss") if stats.get(k) is not None}
             job.update(step=job.status.get("totalSteps"), **extra)
         else:
-            if not (job.dir / "output.zip").is_file():
-                self._finish(job, "failed", "processing finished without output.zip")
+            out = job.dir / "output"
+            if not out.is_dir():
+                self._finish(job, "failed", "processing finished without output")
                 return
+            try:
+                out_id = _adopt_output_as_dataset(self.settings, out, job)
+            except Exception as e:  # pragma: no cover - disk trouble
+                self._finish(job, "failed", f"couldn't keep the output: {e}")
+                return
+            job.status["outputDatasetId"] = out_id
+            job.log(f"output kept as dataset {out_id}")
             job.update(step=job.status.get("totalSteps"))
         self._finish(job, "completed", "completed")
 
@@ -400,6 +409,70 @@ def dataset_root(settings: ServerSettings, dataset_id: str) -> Optional[Path]:
     return root
 
 
+def _new_dataset_id() -> str:
+    return "d" + uuid.uuid4().hex[:11]
+
+
+def _describe_dataset(root: Path, info: Dict[str, Any]) -> None:
+    info["hasDatasetJson"] = (root / "dataset.json").is_file()
+    if info["hasDatasetJson"]:
+        ds = parse_dataset(root, check_files=True)
+        info["cameras"] = len(ds.cameras)
+        info["hasDepth"] = any(c.depth for c in ds.cameras)
+        info["name"] = ds.raw.get("name")
+
+
+def _dir_bytes(root: Path) -> int:
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
+def _adopt_output_as_dataset(settings: ServerSettings, out_dir: Path, job: "Job") -> str:
+    """A processing job's output (already hard links under the job dir) becomes a dataset: moved, not copied,
+    so the next step (masks → poses → training) can use it without a round trip through the client."""
+    dataset_id = _new_dataset_id()
+    partial = settings.datasets_dir / f".{dataset_id}.partial"
+    partial.mkdir(parents=True)
+    try:
+        os.replace(out_dir, partial / "files")
+        info: Dict[str, Any] = {"datasetId": dataset_id, "createdAt": _now_iso(),
+                                "bytes": _dir_bytes(partial / "files"), "fromJob": job.id, "root": "files"}
+        try:
+            _describe_dataset(partial / "files", info)
+        except DatasetError:
+            info["hasDatasetJson"] = False
+        _write_json_atomic(partial / "meta.json", info)
+        os.replace(partial, settings.datasets_dir / dataset_id)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    return dataset_id
+
+
+def _compose_dataset(settings: ServerSettings, layers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """New dataset = union of existing datasets' files (hard links; later layers win; optional ``prefix``
+    puts a layer under a sub-folder)."""
+    from .processing import link_tree
+
+    dataset_id = _new_dataset_id()
+    partial = settings.datasets_dir / f".{dataset_id}.partial"
+    files = partial / "files"
+    files.mkdir(parents=True)
+    try:
+        for layer in layers:
+            root = dataset_root(settings, layer["datasetId"])
+            dst = files / layer["prefix"] if layer["prefix"] else files
+            link_tree(root, dst, [root])
+        info: Dict[str, Any] = {"datasetId": dataset_id, "createdAt": _now_iso(), "bytes": _dir_bytes(files),
+                                "composedOf": [l["datasetId"] for l in layers], "root": "files"}
+        _describe_dataset(files, info)
+        _write_json_atomic(partial / "meta.json", info)
+        os.replace(partial, settings.datasets_dir / dataset_id)
+        return info
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+
+
 def _ingest_dataset(settings: ServerSettings, zip_path: Path, dataset_id: str) -> Dict[str, Any]:
     final_dir = settings.datasets_dir / dataset_id
     partial = settings.datasets_dir / f".{dataset_id}.partial"
@@ -411,10 +484,16 @@ def _ingest_dataset(settings: ServerSettings, zip_path: Path, dataset_id: str) -
         info: Dict[str, Any] = {"datasetId": dataset_id, "createdAt": _now_iso(),
                                 "bytes": size, "hasDatasetJson": (root / "dataset.json").is_file()}
         if info["hasDatasetJson"]:
-            ds = parse_dataset(root, check_files=True)
-            info["cameras"] = len(ds.cameras)
-            info["hasDepth"] = any(c.depth for c in ds.cameras)
-            info["name"] = ds.raw.get("name")
+            ds = parse_dataset(root, check_files=False)        # malformed → rejected
+            missing = [c.image for c in ds.cameras if not ds.resolve(c.image).is_file()]
+            if missing:
+                # images the worker already has elsewhere (a layer for /v1/datasets/compose): can't train on its own
+                info["hasDatasetJson"] = False
+                info["partial"] = True
+            else:
+                info["cameras"] = len(ds.cameras)
+                info["hasDepth"] = any(c.depth for c in ds.cameras)
+                info["name"] = ds.raw.get("name")
         info["root"] = str(root.relative_to(partial))
         _write_json_atomic(partial / "meta.json", info)
         os.replace(partial, final_dir)
@@ -528,6 +607,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             caps = backend.capabilities()
         except Exception:
             caps = []
+        if "process" in caps or "frames" in caps:
+            caps = caps + ["chain"]       # outputDatasetId, /v1/datasets/compose, /v1/datasets/{id}/archive.zip
         try:
             models = backend.models() if "process" in caps else []
         except Exception:
@@ -638,6 +719,37 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         log.info("file dataset %s uploaded (%s, %d bytes)", dataset_id, name, received)
         return {"datasetId": dataset_id}
 
+    @app.post("/v1/datasets/compose")
+    async def compose_dataset(request: Request):
+        """``{"layers": [{"datasetId": A}, {"datasetId": B, "prefix": "sub"}]}`` → a new dataset holding the union
+        of the layers' files (hard links, later layers win). Lets a client send only what changed (dataset.json,
+        masks) and reuse the images already here."""
+        body = await json_body(request)
+        raw = body.get("layers")
+        if not isinstance(raw, list) or not raw or len(raw) > 16:
+            raise ApiError(400, "layers must be a list of 1–16 {datasetId, prefix?}")
+        layers = []
+        for l in raw:
+            if not isinstance(l, dict):
+                raise ApiError(400, "each layer must be an object")
+            did = l.get("datasetId")
+            if not isinstance(did, str) or dataset_root(settings, did) is None:
+                raise ApiError(404, f"dataset {did} not found")
+            prefix = l.get("prefix") or ""
+            if prefix:
+                from .processing import ProcessingError, _safe_rel
+                try:
+                    prefix = _safe_rel(prefix, "prefix")
+                except ProcessingError as e:
+                    raise ApiError(400, str(e))
+            layers.append({"datasetId": did, "prefix": prefix})
+        try:
+            info = await run_in_threadpool(_compose_dataset, settings, layers)
+        except DatasetError as e:
+            raise ApiError(400, f"invalid dataset: {e}")
+        log.info("dataset %s composed from %s", info["datasetId"], [l["datasetId"] for l in layers])
+        return {"datasetId": info["datasetId"], "hasDatasetJson": info["hasDatasetJson"], "bytes": info["bytes"]}
+
     @app.get("/v1/datasets")
     def list_datasets():
         out = []
@@ -688,6 +800,10 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         dataset_id, root = _require_dataset(body)
         if not (root / "dataset.json").is_file():
             raise ApiError(400, "dataset has no dataset.json; it can only be used for /v1/process")
+        try:
+            parse_dataset(root, check_files=True)
+        except DatasetError as e:
+            raise ApiError(400, f"invalid dataset: {e}")
         try:
             cfg = TrainingConfig.from_dict(body.get("config"))
         except ConfigError as e:
@@ -779,13 +895,46 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             raise ApiError(404, f"result not available (job is {job.state})")
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}.ply")
 
+    def _zip_filter(only: Optional[str], skip: Optional[str]):
+        """``only=images,masks`` / ``skip=images``: top-level folders (or files) to include / leave out."""
+        def names(v):
+            return {x.strip().strip("/") for x in (v or "").split(",") if x.strip().strip("/")}
+        o, k = names(only), names(skip)
+        if not o and not k:
+            return None
+        return lambda rel: (not o or rel.split("/", 1)[0] in o) and rel.split("/", 1)[0] not in k
+
+    async def _serve_zip(root: Path, name: str, keep, cache: Optional[Path] = None):
+        from .processing import zip_output
+
+        if cache is not None and keep is None and cache.is_file():
+            return FileResponse(cache, media_type="application/zip", filename=name)
+        target = cache if (cache is not None and keep is None) else settings.tmp_dir / f"{uuid.uuid4().hex}.zip"
+        await run_in_threadpool(zip_output, root, target, [root], keep)
+        cleanup = None if target == cache else BackgroundTask(target.unlink, missing_ok=True)
+        return FileResponse(target, media_type="application/zip", filename=name, background=cleanup)
+
     @app.get("/v1/jobs/{job_id}/output.zip")
-    def get_output(job_id: str):
+    async def get_output(job_id: str, only: Optional[str] = None, skip: Optional[str] = None):
         job = manager.get(job_id)
-        path = job.dir / "output.zip"
-        if job.state != "completed" or not path.is_file():
+        legacy = job.dir / "output.zip"           # jobs from workers before 1.3.8
+        out_id = job.status.get("outputDatasetId")
+        root = dataset_root(settings, out_id) if out_id else None
+        if job.state != "completed" or (root is None and not legacy.is_file()):
             raise ApiError(404, f"output not available (job is {job.state})")
-        return FileResponse(path, media_type="application/zip", filename=f"{job_id}-output.zip")
+        if root is None:
+            return FileResponse(legacy, media_type="application/zip", filename=f"{job_id}-output.zip")
+        return await _serve_zip(root, f"{job_id}-output.zip", _zip_filter(only, skip), cache=legacy)
+
+    @app.get("/v1/datasets/{dataset_id}/archive.zip")
+    async def get_dataset_archive(dataset_id: str, only: Optional[str] = None, skip: Optional[str] = None):
+        """A dataset's files as a zip (``only`` / ``skip`` top-level folders) — e.g. a video's extracted frames
+        fetched in the background while the next steps already run here."""
+        _check_id(dataset_id, "dataset")
+        root = dataset_root(settings, dataset_id)
+        if root is None:
+            raise ApiError(404, "dataset not found")
+        return await _serve_zip(root, f"{dataset_id}.zip", _zip_filter(only, skip))
 
     @app.get("/v1/jobs/{job_id}/log")
     def get_log(job_id: str):

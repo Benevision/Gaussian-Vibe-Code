@@ -7,7 +7,8 @@ import simd
 struct MetalTrainingRunner: LocalTrainingRunner {
     func train(dataset: PreparedDataset, config: TrainingConfig,
                progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud {
-        try await Task.detached(priority: .userInitiated) {
+        try await RemoteImageFetch.shared.ensure(dataset.root)
+        return try await Task.detached(priority: .userInitiated) {
             let t = MetalTrainer(dataset: dataset, config: config)
             try t.prepare { _ in }
             return try t.run(previewEvery: 0, onStatus: { s in
@@ -78,6 +79,10 @@ final class TrainingSession {
         let preview = livePreview ? previewInterval : 0
         task = Task.detached(priority: .userInitiated) { [weak self] in
             do {
+                if let st = RemoteStore.load(dataset.root), !st.local {
+                    await MainActor.run { self?.state = .preparing("Downloading the frames from the worker") }
+                    try await RemoteImageFetch.shared.ensure(dataset.root)
+                }
                 try t.prepare { msg in Task { @MainActor in self?.state = .preparing(msg) } }
                 await MainActor.run { self?.state = .training; if let s = self { s.app?.setScene(cloud: nil, scene: t.makeScene(), frame: false) } }
                 let result = try t.run(previewEvery: preview, onStatus: { s in

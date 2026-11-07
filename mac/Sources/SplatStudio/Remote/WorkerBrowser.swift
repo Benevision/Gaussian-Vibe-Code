@@ -197,6 +197,12 @@ final class WorkerBrowser {
         return WorkerClient(endpoint: w, token: token(for: id))
     }
 
+    /// A client for the worker at this base URL (as recorded in a project's `RemoteStore`).
+    func client(forBaseURL url: String) -> WorkerClient? {
+        guard let w = workers.first(where: { $0.baseURL.absoluteString == url }) else { return nil }
+        return WorkerClient(endpoint: w, token: token(for: w.id))
+    }
+
     /// Workers that answered the last health check.
     var onlineWorkers: [WorkerEndpoint] { workers.filter { if case .online = health[$0.id]?.status { return true }; return false } }
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import traceback
+import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
@@ -92,8 +93,8 @@ def _inside(path: Path, roots: List[Path]) -> bool:
     return any(path == r or r in path.parents for r in roots)
 
 
-def zip_output(out_dir: Path, zip_path: Path, allowed_roots: List[Path]) -> int:
-    """Zip ``out_dir`` with its contents at the archive root.
+def zip_output(out_dir: Path, zip_path: Path, allowed_roots: List[Path], keep=None) -> int:
+    """Zip ``out_dir`` with its contents at the archive root (``keep(rel_posix_path)`` filters files).
 
     Symlinks (e.g. images linked back to the upload) are followed only when
     they resolve inside ``allowed_roots``; directory cycles are skipped.
@@ -117,6 +118,8 @@ def zip_output(out_dir: Path, zip_path: Path, allowed_roots: List[Path]) -> int:
                 if not _inside(target, roots) or not target.is_file():
                     continue
                 arc = str(PurePosixPath(*(rel_dir / fn).parts))
+                if keep is not None and not keep(arc):
+                    continue
                 stored = fn.lower().endswith((".jpg", ".jpeg", ".png", ".heic", ".zip"))
                 zf.write(target, arcname=arc,
                          compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED)
@@ -125,9 +128,44 @@ def zip_output(out_dir: Path, zip_path: Path, allowed_roots: List[Path]) -> int:
     return count
 
 
+def link_tree(src_dir: Path, dst_dir: Path, allowed_roots: List[Path]) -> int:
+    """Recreate ``src_dir`` at ``dst_dir`` with hard links (copies across filesystems).
+
+    Symlinks (e.g. images linked back to the upload) are followed only when they resolve inside
+    ``allowed_roots``; directory cycles are skipped. Hard links make this cheap for multi-GB outputs:
+    no data is copied and the files stay valid when the job directory is deleted.
+    Returns the number of files.
+    """
+    src_dir = Path(src_dir)
+    roots = [Path(r).resolve() for r in allowed_roots]
+    count = 0
+    seen_dirs = set()
+    for dirpath, dirnames, filenames in os.walk(src_dir, followlinks=True):
+        real = Path(dirpath).resolve()
+        if real in seen_dirs or not _inside(real, roots):
+            dirnames[:] = []
+            continue
+        seen_dirs.add(real)
+        rel_dir = Path(dirpath).relative_to(src_dir)
+        for fn in filenames:
+            target = (Path(dirpath) / fn).resolve()
+            if not _inside(target, roots) or not target.is_file():
+                continue
+            dst = Path(dst_dir) / rel_dir / fn
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                dst.unlink()
+            try:
+                os.link(target, dst)
+            except OSError:
+                shutil.copy2(target, dst)
+            count += 1
+    return count
+
+
 def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
                    progress_cb, log, should_stop) -> Dict[str, Any]:
-    """Run ``splatprep.runner.run_request`` and zip its output directory."""
+    """Run ``splatprep.runner.run_request`` and keep its output directory as ``job_dir/output``."""
     req = validate_request(request)
     if not splatprep_available():
         raise ProcessingError("splatprep is not installed on this worker "
@@ -175,8 +213,11 @@ def run_processing(upload_root: Path, request: Dict[str, Any], job_dir: Path,
     out_dir = workdir / req["outputDir"]
     if not out_dir.is_dir():
         raise ProcessingError(f"splatprep produced no output directory '{req['outputDir']}'")
-    n = zip_output(out_dir, job_dir / "output.zip", [workdir, Path(upload_root)])
-    log(f"output.zip written ({n} files)")
+    # The output is kept as files (hard links) and becomes a dataset of its own when the job completes, so
+    # the next step can run on it here without a round trip through the client; output.zip is built on
+    # request (protocol: outputDatasetId).
+    n = link_tree(out_dir, job_dir / "output", [workdir, Path(upload_root)])
+    log(f"output kept ({n} files)")
     stats = result.get("stats") if isinstance(result, dict) else None
     return {"files": n, "stats": stats}
 

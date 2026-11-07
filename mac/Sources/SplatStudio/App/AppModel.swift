@@ -217,6 +217,7 @@ final class AppModel {
             let ds = try PreparedDataset.load(root)
             remoteWatch.stop()   // the viewer now shows this project; a watched job's cameras would be another scene
             dataset = ds
+            Task { await RemoteImageFetch.shared.resumeIfNeeded(ds.root) }   // frames left on a worker
             // A worker job that was still running when this project was last open: pick it back up.
             training.resumePendingRemote(dataset: ds, outputsDir: ds.root.deletingLastPathComponent().appendingPathComponent("outputs", isDirectory: true))
             updateCameraLines()
@@ -538,6 +539,10 @@ final class AppModel {
         autoCleanInfo = "Loading the project's photos…"
         Task.detached(priority: .userInitiated) { [weak self] in
             let fewViews = await MainActor.run { self?.autoCleanFewViews ?? true }
+            do { try await RemoteImageFetch.shared.ensure(ds.root) } catch {
+                await MainActor.run { self?.autoCleanBusy = false; self?.autoCleanInfo = error.localizedDescription }
+                return
+            }
             let r = Result { () -> AutoClean.Plan in
                 var cfg = TrainingConfig()
                 cfg.shDegree = g.shDegree; cfg.antialiased = g.antialiased

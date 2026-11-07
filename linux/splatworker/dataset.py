@@ -93,7 +93,7 @@ def find_upload_root(directory: Path) -> Path:
     Accepts the bundle contents at the archive root, or a single top-level
     folder (Finder-style zips; ``__MACOSX`` and dot-folders are ignored). A
     root is a directory containing ``dataset.json`` (training) or ``images/``
-    (processing uploads, PROTOCOL.md §6).
+    (processing uploads, PROTOCOL.md §6); anything else is kept as a partial upload for composing.
     """
     directory = Path(directory)
     if _is_root(directory):
@@ -103,8 +103,14 @@ def find_upload_root(directory: Path) -> Path:
     candidates = [d for d in subdirs if _is_root(d)]
     if len(candidates) == 1:
         return candidates[0]
-    raise DatasetError("archive must contain dataset.json or images/ at its root "
-                       "or inside a single top-level folder")
+    # A partial upload (e.g. just masks/ and priors.json) meant to be composed over files the worker already
+    # has (POST /v1/datasets/compose): the single top-level folder, or the archive root.
+    visible = [p for p in directory.iterdir() if not p.name.startswith(".") and p.name != "__MACOSX"]
+    if len(visible) == 1 and visible[0].is_dir():
+        return visible[0]
+    if visible:
+        return directory
+    raise DatasetError("archive is empty")
 
 
 def find_dataset_root(directory: Path) -> Path:

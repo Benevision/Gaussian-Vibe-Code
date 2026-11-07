@@ -76,7 +76,7 @@ def test_info(client):
     assert isinstance(info["gpus"], list)
     assert info["backend"].startswith("gsplat")
     assert info["busy"] is False and info["queueLength"] == 0
-    assert info["capabilities"] == ["train", "process"]
+    assert info["capabilities"] == ["train", "process", "chain"]
     assert info["models"] == ["superpoint_lightglue"]
 
 
@@ -478,3 +478,74 @@ def test_runtime_endpoints(client):
     assert r.status_code == 200 and "installed" in r.json() and r.json()["state"] == "idle"
     assert client.post("/v1/runtime/install", json={"component": "nope"}, headers=AUTH).status_code == 400
     assert client.get("/v1/runtime").status_code == 401   # same auth as every other endpoint
+
+
+def test_chain_outputs_compose_and_archives(client, fake_splatprep, dataset_zip):
+    """Processing output stays on the worker as a dataset; the next step composes on it (no round trip)."""
+    assert "chain" in client.get("/v1/info", headers=AUTH).json()["capabilities"]
+    ds = upload(client, _images_zip()).json()["datasetId"]
+    j = client.post("/v1/process", headers=AUTH, json={
+        "datasetId": ds, "request": {"task": "sfm", "imagesDir": "images", "outputDir": "out"}}).json()["jobId"]
+    s = wait_state(client, j, ("completed", "failed"))
+    assert s["state"] == "completed", client.get(f"/v1/jobs/{j}/log", headers=AUTH).text
+    out_id = s["outputDatasetId"]
+    assert out_id and out_id in [d["datasetId"] for d in client.get("/v1/datasets", headers=AUTH).json()]
+
+    # light download: everything except images; and the images on their own
+    def names(r):
+        assert r.status_code == 200, r.text
+        return sorted(zipfile.ZipFile(io.BytesIO(r.content)).namelist())
+    assert names(client.get(f"/v1/datasets/{out_id}/archive.zip?skip=images", headers=AUTH)) == ["dataset.json"]
+    assert names(client.get(f"/v1/datasets/{out_id}/archive.zip?only=images", headers=AUTH)) == \
+        ["images/000.jpg", "images/001.jpg", "images/002.jpg"]
+    assert names(client.get(f"/v1/jobs/{j}/output.zip?skip=images", headers=AUTH)) == ["dataset.json"]
+    assert len(names(client.get(f"/v1/jobs/{j}/output.zip", headers=AUTH))) == 4   # old clients: full zip
+
+    # a later step chains on it without re-sending images
+    j2 = client.post("/v1/process", headers=AUTH, json={
+        "datasetId": out_id, "request": {"task": "sfm", "imagesDir": "images", "outputDir": "out2"}}).json()["jobId"]
+    assert wait_state(client, j2, ("completed", "failed"))["state"] == "completed"
+
+    # compose: the uploaded training dataset's files over the images, under a prefix too
+    small = upload(client, dataset_zip).json()["datasetId"]
+    r = client.post("/v1/datasets/compose", headers=AUTH, json={"layers": [
+        {"datasetId": out_id, "prefix": "extra"}, {"datasetId": small}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["hasDatasetJson"] is True
+    comp = r.json()["datasetId"]
+    root = client.app.state.settings.datasets_dir / comp
+    assert any(p.name == "000.jpg" and "extra" in p.parts for p in root.rglob("*"))
+    jt = client.post("/v1/jobs", headers=AUTH, json={"datasetId": comp, "config": {"iterations": 5}})
+    assert jt.status_code == 200, jt.text
+    # bad layers
+    assert client.post("/v1/datasets/compose", headers=AUTH, json={"layers": [{"datasetId": "nope"}]}).status_code == 404
+    assert client.post("/v1/datasets/compose", headers=AUTH, json={"layers": [
+        {"datasetId": small, "prefix": "../x"}]}).status_code == 400
+    assert client.post("/v1/datasets/compose", headers=AUTH, json={"layers": []}).status_code == 400
+
+
+def test_dataset_json_layer_without_images(client, dataset_dir, tmp_path):
+    """A training upload that leaves out images the worker already has: accepted as a layer, trainable once composed."""
+    import shutil
+    imgs_only = tmp_path / "imgs"
+    for sub in dataset_dir.iterdir():                      # everything but dataset.json (images, depth, …)
+        if sub.is_dir():
+            shutil.copytree(sub, imgs_only / sub.name)
+    light = tmp_path / "light"
+    light.mkdir()
+    for f in dataset_dir.iterdir():                        # dataset.json, points3d.ply — what the Mac sends
+        if f.is_file():
+            shutil.copy(f, light / f.name)
+    from conftest import zip_dir
+    a = upload(client, zip_dir(imgs_only)).json()["datasetId"]
+    r = upload(client, zip_dir(light))
+    assert r.status_code == 200, r.text
+    b = r.json()["datasetId"]
+    # on its own it can't be trained (images missing)…
+    r = client.post("/v1/jobs", headers=AUTH, json={"datasetId": b, "config": {"iterations": 5}})
+    assert r.status_code == 400
+    # …composed over the images it can
+    c = client.post("/v1/datasets/compose", headers=AUTH, json={"layers": [{"datasetId": a}, {"datasetId": b}]}).json()
+    assert c.get("hasDatasetJson") is True, c
+    r = client.post("/v1/jobs", headers=AUTH, json={"datasetId": c["datasetId"], "config": {"iterations": 5}})
+    assert r.status_code == 200, r.text

@@ -57,6 +57,7 @@ enum FrameMasker {
 
     static func applyVision(_ options: MaskingOptions, to frames: inout FrameSet, progress: PipelineProgressHandler?) async throws {
         let stage = "Masking (Apple Vision)"
+        try await waitForFrames(frames.root, progress: progress)
         let root = frames.root
         try FileManager.default.ensureDirectory(root.appendingPathComponent("masks"))
         let list = frames.frames
@@ -101,7 +102,10 @@ enum FrameMasker {
                                            message: "worker couldn't run \(modelId) (\(error.localizedDescription)) — masking on this Mac"))
             }
         }
-        if !ranRemotely { try await runner.run(r, workDir: frames.root, progress: progress) }
+        if !ranRemotely {
+            try await waitForFrames(frames.root, progress: progress)
+            try await runner.run(r, workDir: frames.root, progress: progress)
+        }
         let dir = frames.root.appendingPathComponent("splatprep-masks/masks")
         try FileManager.default.ensureDirectory(frames.root.appendingPathComponent("masks"))
         // A mask that keeps (almost) nothing means the model lost its object (or failed): applying it would
@@ -138,9 +142,31 @@ enum FrameMasker {
         }
     }
 
-    /// Uploads `images/` to the worker, runs the masks request there and unpacks `splatprep-masks/` here.
+    /// Waits for frames still downloading from the worker that split the video (see `RemoteStore`).
+    static func waitForFrames(_ root: URL, progress: PipelineProgressHandler?) async throws {
+        guard let s = RemoteStore.load(root), !s.local else { return }
+        progress?(PipelineProgress(stage: "Preparing images", fraction: -1, message: "waiting for the frames to finish downloading from the worker"))
+        try await RemoteImageFetch.shared.ensure(root)
+    }
+
+    /// Runs the masks request on the worker and unpacks `splatprep-masks/` here. The images are uploaded —
+    /// unless the worker already has them (it split the video: `RemoteStore`), then nothing is.
     static func runRemote(_ r: ProcessingRequest, frames: FrameSet, worker: WorkerClient, progress: PipelineProgressHandler?) async throws {
         let fm = FileManager.default
+        if let store = RemoteStore.usable(at: frames.root, by: worker), store.dirs.contains("images") {
+            let unpack = frames.root.appendingPathComponent(".remote-output")
+            try? fm.removeItem(at: unpack)
+            defer { try? fm.removeItem(at: unpack) }
+            try await worker.runProcessing(upload: { _ in store.datasetId }, request: r, outputDirectory: unpack,
+                                           skip: ["images"], progress: progress)
+            let inner = [unpack.appendingPathComponent(r.outputDir), unpack].first { fm.fileExists(atPath: $0.appendingPathComponent("masks").path) }
+            guard let inner else { throw PipelineError.processFailed("remote masking returned no masks/") }
+            let outDir = frames.root.appendingPathComponent(r.outputDir)
+            try? fm.removeItem(at: outDir)
+            try fm.moveItem(at: inner, to: outDir)
+            return
+        }
+        try await waitForFrames(frames.root, progress: progress)
         let staging = frames.root.appendingPathComponent(".remote-upload/dataset")
         try? fm.removeItem(at: staging.deletingLastPathComponent())
         try fm.ensureDirectory(staging)

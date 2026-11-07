@@ -20,6 +20,9 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     var canProcess: Bool { capabilities?.contains("process") ?? false }
     /// Worker ≥ 1.3 with PyAV: splits videos (incl. 360°) itself (`task: frames`).
     var canExtractFrames: Bool { capabilities?.contains("frames") ?? false }
+    /// Worker ≥ 1.3.8: processing outputs stay on the worker as datasets (`outputDatasetId`), datasets can be
+    /// composed (`/v1/datasets/compose`) and fetched selectively (`archive.zip?only=/skip=`).
+    var canChain: Bool { capabilities?.contains("chain") ?? false }
 }
 
 /// Job state (tolerant: unknown values are preserved).
@@ -54,6 +57,8 @@ struct JobStatus: Codable, Hashable, Sendable, Identifiable {
     var etaSeconds: Double?
     var previewStep: Int?
     var message: String?
+    /// Processing jobs on workers ≥ 1.3.8: the output, kept on the worker as a dataset for the next step.
+    var outputDatasetId: String?
     var id: String { jobId }
 
     var fraction: Double {
@@ -215,8 +220,13 @@ final class WorkerClient: @unchecked Sendable {
 
     /// Downloads a job file to `destination`. Returns false on 404.
     @discardableResult
-    func download(_ path: String, to destination: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> Bool {
+    func download(_ path: String, query: [URLQueryItem] = [], to destination: URL,
+                  progress: (@Sendable (Double) -> Void)? = nil) async throws -> Bool {
         var r = request(path)
+        if !query.isEmpty, let u = r.url, var comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
+            comps.queryItems = query
+            r.url = comps.url
+        }
         r.timeoutInterval = 3600
         let (tmp, resp) = try await session.download(for: r, delegate: DownloadProgressDelegate(progress))
         if let h = resp as? HTTPURLResponse, h.statusCode == 404 { try? FileManager.default.removeItem(at: tmp); return false }
@@ -265,12 +275,59 @@ final class WorkerClient: @unchecked Sendable {
         return id
     }
 
-    /// `GET /v1/jobs/{id}/output.zip`, unzipped into `directory`.
-    func downloadProcessOutput(_ id: String, into directory: URL) async throws {
+    /// `GET /v1/jobs/{id}/output.zip` (optionally without some top-level folders), unzipped into `directory`.
+    func downloadProcessOutput(_ id: String, into directory: URL, skip: [String] = [],
+                               progress: (@Sendable (Double) -> Void)? = nil) async throws {
         let zip = FileManager.default.temporaryDirectory.appendingPathComponent("output-\(id)-\(UUID().uuidString.prefix(6)).zip")
         defer { try? FileManager.default.removeItem(at: zip) }
-        guard try await download("v1/jobs/\(id)/output.zip", to: zip) else { throw WorkerError(status: 404, message: "output not available") }
+        let q = skip.isEmpty ? [] : [URLQueryItem(name: "skip", value: skip.joined(separator: ","))]
+        guard try await download("v1/jobs/\(id)/output.zip", query: q, to: zip, progress: progress) else {
+            throw WorkerError(status: 404, message: "output not available")
+        }
         try await ZipUtil.unzip(zip, to: directory)
+    }
+
+    /// `GET /v1/datasets/{id}/archive.zip?only=…` (worker ≥ 1.3.8), unzipped into `directory`.
+    func downloadDatasetFiles(_ datasetId: String, only: [String], into directory: URL,
+                              progress: (@Sendable (Double) -> Void)? = nil) async throws {
+        let zip = FileManager.default.temporaryDirectory.appendingPathComponent("dataset-\(datasetId)-\(UUID().uuidString.prefix(6)).zip")
+        defer { try? FileManager.default.removeItem(at: zip) }
+        guard try await download("v1/datasets/\(datasetId)/archive.zip", query: [URLQueryItem(name: "only", value: only.joined(separator: ","))],
+                                 to: zip, progress: progress) else {
+            throw WorkerError(status: 404, message: "dataset \(datasetId) is no longer on the worker")
+        }
+        try await ZipUtil.unzip(zip, to: directory)
+    }
+
+    struct ComposeLayer: Encodable { var datasetId: String; var prefix: String? = nil }
+    private struct ComposeBody: Encodable { var layers: [ComposeLayer] }
+    private struct ComposeReply: Decodable { var datasetId: String }
+    /// `POST /v1/datasets/compose` (worker ≥ 1.3.8): a new dataset from existing ones (later layers win).
+    func compose(_ layers: [ComposeLayer]) async throws -> String {
+        let r: ComposeReply = try await json(jsonBody("v1/datasets/compose", ComposeBody(layers: layers)))
+        return r.datasetId
+    }
+
+    /// Uploads `directory` without the folders a worker already has (`store`), then composes the two there.
+    /// Falls back to a full upload when the store isn't usable (other worker, or gone from it).
+    func uploadReusing(_ store: RemoteStore?, directory: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws -> String {
+        if let store, store.worker == baseURL.absoluteString {
+            let staging = FileManager.default.temporaryDirectory.appendingPathComponent("splat-delta-\(UUID().uuidString.prefix(8))/dataset")
+            defer { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()) }
+            try FileManager.default.ensureDirectory(staging)
+            for c in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+            where !store.dirs.contains(c.lastPathComponent) {
+                try FileManager.default.linkOrCopyTree(c, to: staging.appendingPathComponent(c.lastPathComponent))
+            }
+            do {
+                let delta = try await uploadDataset(directory: staging, progress: progress)
+                return try await compose([ComposeLayer(datasetId: store.datasetId), ComposeLayer(datasetId: delta)])
+            } catch let e as WorkerError where e.status == 404 {
+                // the worker no longer has the images: send everything (needs them here)
+                try await RemoteImageFetch.shared.ensure(directory)
+            }
+        }
+        return try await uploadDataset(directory: directory, progress: progress)
     }
 
     // MARK: High level
@@ -352,7 +409,8 @@ final class WorkerClient: @unchecked Sendable {
                onJobCreated: (@Sendable (_ jobId: String, _ datasetId: String) -> Void)? = nil,
                onOffline: (@Sendable (TimeInterval) -> Void)? = nil) async throws -> GaussianCloud {
         let did: String
-        if let existing { did = existing } else { did = try await uploadDataset(directory: dataset.root, progress: uploadProgress) }
+        if let existing { did = existing }
+        else { did = try await uploadReusing(RemoteStore.usable(at: dataset.root, by: self), directory: dataset.root, progress: uploadProgress) }
         let jid = try await createJob(datasetId: did, name: name, config: config)
         onJobCreated?(jid, did)
         return try await finishJob(jid, progress: progress, onOffline: onOffline)
@@ -378,9 +436,12 @@ final class WorkerClient: @unchecked Sendable {
                                 request: request, outputDirectory: outputDirectory, progress: progress)
     }
 
-    /// Same as `runProcessing(directory:…)` with a caller-chosen upload (e.g. `uploadFile` for a video).
+    /// Same as `runProcessing(directory:…)` with a caller-chosen upload (e.g. `uploadFile` for a video, or an
+    /// existing worker dataset). `skip`: top-level output folders not to download (they stay on the worker,
+    /// in the returned status's `outputDatasetId`).
+    @discardableResult
     func runProcessing(upload: (@escaping @Sendable (Double) -> Void) async throws -> String, request: ProcessingRequest,
-                       outputDirectory: URL, progress: PipelineProgressHandler? = nil) async throws {
+                       outputDirectory: URL, skip: [String] = [], progress: PipelineProgressHandler? = nil) async throws -> JobStatus {
         // Phases on the overall bar: upload 0–15 %, remote work 15–95 %, download 95–100 %.
         let host = baseURL.host ?? "worker"
         let task = request.task.rawValue
@@ -399,8 +460,12 @@ final class WorkerClient: @unchecked Sendable {
         }
         guard final.state == .completed else { throw PipelineError.processFailed("remote processing \(final.state): \(final.message ?? "")") }
         progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95, message: "results of \(task)"))
-        try await downloadProcessOutput(jid, into: outputDirectory)
+        try await downloadProcessOutput(jid, into: outputDirectory, skip: skip) { f in
+            progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95 + 0.05 * f,
+                                       message: String(format: "results of %@ — %.0f %%", task, f * 100)))
+        }
         progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 1, message: "done"))
+        return final
     }
 }
 
@@ -411,8 +476,11 @@ struct RemoteSplatPrepPoseSolver: PoseSolver {
 
     func solve(_ frames: FrameSet, progress: PipelineProgressHandler?) async throws -> PoseSolution {
         let req = local.request(for: frames)
-        // Upload only what the worker needs: images/, masks/, priors.
+        // Upload only what the worker needs: images/, masks/, priors — and not the images when the worker
+        // already has them (it split the video: `RemoteStore`).
         let fm = FileManager.default
+        let store = RemoteStore.usable(at: frames.root, by: client)
+        if store == nil { try await FrameMasker.waitForFrames(frames.root, progress: progress) }
         let staging = frames.root.appendingPathComponent(".remote-upload/dataset")
         try? fm.removeItem(at: staging.deletingLastPathComponent())
         try fm.ensureDirectory(staging)
@@ -425,7 +493,11 @@ struct RemoteSplatPrepPoseSolver: PoseSolver {
         try? fm.removeItem(at: outDir)
         let unpack = frames.root.appendingPathComponent(".remote-output")
         try? fm.removeItem(at: unpack)
-        try await client.runProcessing(directory: staging, request: req, outputDirectory: unpack, progress: progress)
+        // Undistorted output images (non-pinhole models) replace the originals, so they're needed here.
+        let keepImagesRemote = store != nil && local.cameraModel == "pinhole"
+        try await client.runProcessing(upload: { cb in try await client.uploadReusing(store, directory: staging, progress: cb) },
+                                       request: req, outputDirectory: unpack, skip: keepImagesRemote ? ["images"] : [],
+                                       progress: progress)
         // The zip may contain outputDir itself or its contents.
         let inner = [unpack.appendingPathComponent(req.outputDir), unpack].first { fm.fileExists(atPath: $0.appendingPathComponent("dataset.json").path) }
         guard let inner else { throw PipelineError.processFailed("remote output has no dataset.json") }

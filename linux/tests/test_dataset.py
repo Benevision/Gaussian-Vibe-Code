@@ -230,3 +230,14 @@ def test_ply_records_scene_up(tmp_path):
     head = p.read_bytes()[:300].decode("ascii", "replace")
     assert "comment splatstudio_up 0 0 1\n" in head
     assert head.index("comment splatstudio_up") < head.index("element vertex")
+
+
+def test_upload_root_accepts_partial_layers(tmp_path):
+    (tmp_path / "up" / "dataset" / "masks").mkdir(parents=True)
+    assert find_upload_root(tmp_path / "up") == tmp_path / "up" / "dataset"
+    (tmp_path / "flat" / "masks").mkdir(parents=True)
+    (tmp_path / "flat" / "priors.json").write_text("{}")
+    assert find_upload_root(tmp_path / "flat") == tmp_path / "flat"
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(DatasetError):
+        find_upload_root(tmp_path / "empty")
