@@ -76,6 +76,7 @@
     <release version="1.3.9" date="2026-11-08">
       <description>
         <p>Experimental training options: coarse-to-fine image resolution (progressiveResolution) and decoupled SSIM for per-photo colour correction (decoupledSSIM).</p>
+        <p>Fix: camera solving with SuperPoint/ALIKED/DISK + LightGlue failed after matching with "no SfM mapper available" on workers without the COLMAP program, although pycolmap was installed. A missing mapper is now reported before matching starts.</p>
       </description>
     </release>
     <release version="1.3.8" date="2026-11-08">

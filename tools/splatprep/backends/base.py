@@ -122,6 +122,11 @@ class Backend:
         missing = [m for m in self.python_modules if not has_module(m)]
         if missing:
             return Availability(False, False, f"missing python packages: {', '.join(missing)}" + (f" — {self.install_hint}" if self.install_hint else ""))
+        # Matching-only backends still need a mapper for a full solve: say so before hours of matching, not after.
+        from ..mapper import any_mapper_available, unavailable_message
+
+        if not any_mapper_available():
+            return Availability(True, False, unavailable_message())
         return Availability(True, True)
 
     def require(self, ctx: Optional[SfMContext] = None) -> Availability:

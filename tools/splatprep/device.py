@@ -18,6 +18,27 @@ def has_module(name: str) -> bool:
         return False
 
 
+def module_installed(name: str) -> bool:
+    """Installed for this interpreter, ignoring the in-process pycolmap blocker (isolation.py).
+
+    For modules that only ever run in a child interpreter (the pycolmap mapper and pose refinement): the
+    LightGlue backends block pycolmap imports in their own process, which made ``has_module("pycolmap")``
+    false and every LightGlue solve on a COLMAP-less worker fail after matching with "no SfM mapper".
+    """
+    import sys
+
+    from .isolation import _Blocker
+
+    saved = list(sys.meta_path)
+    try:
+        sys.meta_path[:] = [f for f in saved if not isinstance(f, _Blocker)]
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+    finally:
+        sys.meta_path[:] = saved
+
+
 def select_device(preferred: str | None = None) -> str:
     """Return "cuda", "mps" or "cpu".  Never imports torch if it is absent."""
     pref = (preferred or os.environ.get("SPLATPREP_DEVICE") or "auto").lower()

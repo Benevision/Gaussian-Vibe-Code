@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .colmap_model import Reconstruction, find_models, read_model, read_largest_model
-from .device import has_module
+from .device import module_installed
 from .errors import MapperUnavailable, SplatPrepError
 
 _EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
@@ -135,12 +135,24 @@ def available_mappers() -> Dict[str, bool]:
     return {
         "glomap": bool(find_executable("glomap")) or bool(colmap and "global_mapper" in colmap_commands(colmap)),
         "colmap": bool(colmap),
-        "pycolmap": has_module("pycolmap"),
+        "pycolmap": module_installed("pycolmap"),  # runs in a child process (isolation.py)
     }
 
 
 def any_mapper_available() -> bool:
     return any(available_mappers().values())
+
+
+def mapper_diagnostics() -> str:
+    """Why no mapper was found: the interpreter searched and what each lookup returned (for remote logs)."""
+    pc = "installed" if module_installed("pycolmap") else "not installed"
+    return (f"python {sys.executable} ({sys.version.split()[0]}); pycolmap {pc}; "
+            f"colmap {find_executable('colmap') or 'not on PATH'}; glomap {find_executable('glomap') or 'not on PATH'}")
+
+
+def unavailable_message() -> str:
+    return ("no SfM mapper available: install pycolmap (pip install pycolmap) or COLMAP/GLOMAP (brew install colmap glomap)"
+            f" [{mapper_diagnostics()}]")
 
 
 def run_logged(cmd: Sequence[str], log_path: Optional[Path], on_line: Optional[Callable[[str], None]] = None, cwd=None) -> None:
@@ -246,7 +258,7 @@ def _run_single(
     }.get(preference, ["glomap", "colmap", "pycolmap"])
     chosen = next((m for m in order if avail.get(m)), None)
     if chosen is None:
-        raise MapperUnavailable("no SfM mapper available: install pycolmap (pip install pycolmap) or COLMAP/GLOMAP (brew install colmap glomap)")
+        raise MapperUnavailable(unavailable_message())
     progress = progress or (lambda f, m="": None)
     registered = [0]
     fix_focal = _prior_focal_fraction(database, default=0.0) >= FIX_FOCAL_MIN_PRIOR
