@@ -72,3 +72,38 @@ def test_auto_runs_both_mappers_and_keeps_longer_tracks(tmp_path, monkeypatch):
     runs.clear(); monkeypatch.setattr(mapper, "_run_single", fake_single)
     mapper.run_mapper(tmp_path / "db", tmp_path, tmp_path / "s", "auto", num_images=mapper.AUTO_BOTH_MAX + 1)
     assert runs == ["auto"]
+
+
+def _model_with_focal(path: Path, f: float):
+    from splatprep.colmap_model import Camera, Reconstruction, write_text_model
+    rec = Reconstruction()
+    rec.cameras[1] = Camera(1, "SIMPLE_RADIAL", 4032, 3024, np.array([f, 2016.0, 1512.0, 0.0]))
+    path.mkdir(parents=True, exist_ok=True)
+    write_text_model(rec, path)
+
+
+def _fake_ba(new_f):
+    def run(cmd, log_path, on_line):
+        dst = Path(cmd[cmd.index("--output_path") + 1])
+        _model_with_focal(dst, new_f)
+    return run
+
+
+def test_focal_refinement_rejected_when_it_collapses(tmp_path, monkeypatch):
+    # nadir drone survey: freeing focal shrank 2795 px to 581 px
+    out = tmp_path / "incremental"
+    _model_with_focal(out / "0", 2795.0)
+    monkeypatch.setattr(mapper, "run_logged", _fake_ba(581.0))
+    note = mapper._refine_focal("colmap", out, None, lambda f, m="": None)
+    assert "kept EXIF focal" in note
+    assert abs(mapper.read_model(out / "0").cameras[1].params[0] - 2795.0) < 1e-6
+    assert not (tmp_path / "incremental_focal_refined").exists()
+
+
+def test_focal_refinement_kept_when_small(tmp_path, monkeypatch):
+    out = tmp_path / "incremental"
+    _model_with_focal(out / "0", 2795.0)
+    monkeypatch.setattr(mapper, "run_logged", _fake_ba(2740.0))
+    note = mapper._refine_focal("colmap", out, None, lambda f, m="": None)
+    assert note.startswith("focal refined")
+    assert abs(mapper.read_model(out / "0").cameras[1].params[0] - 2740.0) < 1e-6

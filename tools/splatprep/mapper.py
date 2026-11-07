@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from .colmap_model import Reconstruction, read_largest_model
+from .colmap_model import Reconstruction, find_models, read_model, read_largest_model
 from .device import has_module
 from .errors import MapperUnavailable, SplatPrepError
 
@@ -26,18 +26,64 @@ _EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
 AUTO_GLOBAL_MIN_IMAGES = 300
 #: With ``mapper: auto`` and at most this many images, both mappers run and the better result is kept.
 AUTO_BOTH_MAX = 1000
+#: Cameras flagged with a prior focal length (EXIF / ARKit) keep it fixed while mapping when at least this
+#: fraction of them has one. Free focal lengths collapse on flat scenes — a nadir drone survey shrank a
+#: 2795 px EXIF focal to 573 px and registered 33/120 photos — because depth and focal trade off there.
+FIX_FOCAL_MIN_PRIOR = 0.9
+#: After mapping with fixed focal lengths, one bundle adjustment frees them; it is kept only if no focal
+#: moves by more than this fraction (EXIF values are usually within a few percent).
+FOCAL_REFINE_MAX_DRIFT = 0.08
 
 
-def _prior_focal_fraction(database) -> float:
-    """Fraction of cameras in a COLMAP database flagged with a prior focal length (1.0 if unreadable)."""
+def _largest_model_dir(sparse_root: Path) -> Optional[Path]:
+    best, n = None, -1
+    for p in find_models(sparse_root):
+        k = len(read_model(p).images)
+        if k > n:
+            best, n = p, k
+    return best
+
+
+def _refine_focal(colmap: str, out_dir: Path, log_path, progress) -> Optional[str]:
+    """Free focal lengths in a final bundle adjustment; keep it only if they stay near the priors."""
+    src = _largest_model_dir(out_dir)
+    if src is None:
+        return None
+    before = read_model(src)
+    dst = out_dir.parent / (out_dir.name + "_focal_refined")
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    progress(0.96, "refining focal length")
+    try:
+        run_logged([colmap, "bundle_adjuster", "--input_path", src, "--output_path", dst,
+                    "--BundleAdjustment.refine_focal_length", "1", "--BundleAdjustment.refine_extra_params", "1"],
+                   log_path, None)
+        after = read_model(dst)
+    except Exception as e:  # noqa: BLE001 — keep the fixed-focal model
+        return f"focal refinement failed ({e}); kept EXIF focal"
+    drift = max((abs(after.cameras[c].params[0] / before.cameras[c].params[0] - 1)
+                 for c in before.cameras if c in after.cameras), default=1.0)
+    if drift > FOCAL_REFINE_MAX_DRIFT:
+        shutil.rmtree(dst, ignore_errors=True)
+        return f"focal refinement moved focal {drift:.0%}; kept EXIF focal"
+    for f in src.iterdir():
+        f.unlink()
+    for f in dst.iterdir():
+        shutil.move(str(f), src / f.name)
+    dst.rmdir()
+    return f"focal refined ({drift:.1%} from EXIF)"
+
+
+def _prior_focal_fraction(database, default: float = 1.0) -> float:
+    """Fraction of cameras in a COLMAP database flagged with a prior focal length (``default`` if unreadable)."""
     import sqlite3
 
     try:
         with sqlite3.connect(str(database)) as c:
             rows = c.execute("SELECT prior_focal_length FROM cameras").fetchall()
-        return sum(1 for (p,) in rows if p) / len(rows) if rows else 1.0
+        return sum(1 for (p,) in rows if p) / len(rows) if rows else default
     except Exception:
-        return 1.0
+        return default
 
 
 def find_executable(name: str) -> Optional[str]:
@@ -203,6 +249,8 @@ def _run_single(
         raise MapperUnavailable("no SfM mapper available: install pycolmap (pip install pycolmap) or COLMAP/GLOMAP (brew install colmap glomap)")
     progress = progress or (lambda f, m="": None)
     registered = [0]
+    fix_focal = _prior_focal_fraction(database, default=0.0) >= FIX_FOCAL_MIN_PRIOR
+    note = None
 
     def on_line(line: str):
         m = re.search(r"Registering image #(\d+)", line) or re.search(r"Registered (\d+) images", line)
@@ -226,29 +274,42 @@ def _run_single(
                     run_logged([colmap, "view_graph_calibrator", "--database_path", database], log_path, None)
                 except SplatPrepError:
                     pass  # fall through: global mapper still runs with the initial guess
+        if fix_focal and not glomap:
+            cmd += ["--GlobalMapper.ba_refine_focal_length", "0"]
         progress(0.05, "global mapping (GLOMAP)")
         run_logged(cmd, log_path, on_line)
+        if fix_focal and not glomap:
+            note = _refine_focal(cmd[0], out_dir, log_path, progress)
     elif chosen == "colmap":
         progress(0.05, "incremental mapping (COLMAP)")
-        run_logged(
-            [find_executable("colmap"), "mapper", "--database_path", database, "--image_path", image_dir, "--output_path", out_dir],
-            log_path,
-            on_line,
-        )
+        colmap = find_executable("colmap")
+        cmd = [colmap, "mapper", "--database_path", database, "--image_path", image_dir, "--output_path", out_dir]
+        if fix_focal:
+            cmd += ["--Mapper.ba_refine_focal_length", "0"]
+        run_logged(cmd, log_path, on_line)
+        if fix_focal:
+            note = _refine_focal(colmap, out_dir, log_path, progress)
     else:
         progress(0.05, "incremental mapping (pycolmap)")
-        run_pycolmap_subprocess(database, image_dir, out_dir, log_path)
+        run_pycolmap_subprocess(database, image_dir, out_dir, log_path, fix_focal)
     rec = read_largest_model(out_dir)
     if rec is None or not rec.images:
         raise SplatPrepError("mapper produced no reconstruction (too few matches / images could not be registered)")
-    progress(1.0, f"registered {len(rec.images)} images")
+    if note:
+        if log_path:
+            with open(log_path, "a") as fh:
+                fh.write(note + "\n")
+    progress(1.0, f"registered {len(rec.images)} images" + (f"; {note}" if note else ""))
     return rec, chosen
 
 
 _PYCOLMAP_SCRIPT = r"""
 import sys, pathlib, pycolmap
-db, img, out = sys.argv[1:4]
-maps = pycolmap.incremental_mapping(database_path=db, image_path=img, output_path=out)
+db, img, out, fix = sys.argv[1:5]
+opts = pycolmap.IncrementalPipelineOptions()
+if fix == "1":
+    opts.ba_refine_focal_length = False
+maps = pycolmap.incremental_mapping(database_path=db, image_path=img, output_path=out, options=opts)
 for idx, rec in maps.items():
     d = pathlib.Path(out) / str(idx)
     d.mkdir(parents=True, exist_ok=True)
@@ -257,8 +318,8 @@ print(f"Registered {max((len(r.images) for r in maps.values()), default=0)} imag
 """
 
 
-def run_pycolmap_subprocess(database, image_dir, out_dir, log_path) -> None:
+def run_pycolmap_subprocess(database, image_dir, out_dir, log_path, fix_focal: bool = False) -> None:
     """pycolmap mapping in a child interpreter, so its libomp never meets torch's (see isolation.py)."""
     import subprocess
-    cmd = [sys.executable, "-c", _PYCOLMAP_SCRIPT, str(database), str(image_dir), str(out_dir)]
+    cmd = [sys.executable, "-c", _PYCOLMAP_SCRIPT, str(database), str(image_dir), str(out_dir), "1" if fix_focal else "0"]
     run_logged(cmd, log_path, lambda line: None)

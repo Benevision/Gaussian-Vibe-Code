@@ -228,7 +228,7 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
   "matching": "sequential" | "exhaustive" | "retrieval" | "auto",
   "retrievalTopK": 30,
   "sequentialOverlap": 10,
-  "mapper": "glomap" | "colmap" | "auto",   // auto: ≤ 1000 images run both and keep more-registered / longer-track result; above: global (view-graph focal calibration when EXIF focal is missing)
+  "mapper": "glomap" | "colmap" | "auto",   // auto: ≤ 1000 images run both and keep more-registered / longer-track result; above: global (view-graph focal calibration when EXIF focal is missing); EXIF/ARKit focal lengths are held fixed while mapping, then freed in one final BA kept only if focal moves < 8 %
   "cameraModel": "auto" | "pinhole" | "opencv" | "fisheye",
   "singleCamera": true,
   "maxKeypoints": 4096,
