@@ -45,14 +45,22 @@ fi
 ENGINE=$(command -v podman || command -v docker || true)
 [[ -n "$ENGINE" ]] || { echo "Needs podman or docker:  sudo pacman -S podman" >&2; exit 1; }
 
-# nvcc needs ~2-3 GB per parallel job: cap the jobs by memory as well as by cores.
+# Parallelism. ninja compiles many files at once (JOBS), but each nvcc builds a file's GPU targets one after
+# another — with 6 architectures the last few big files run 6-7x longer on a single core. nvcc --threads
+# compiles those targets in parallel (passed through NVCC_APPEND_FLAGS, which nvcc reads itself). Each thread
+# is another compiler instance (~2 GB), so fewer files at once when there are several targets.
 CORES=$(nproc)
 MEM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
-JOBS=$(( MEM_GB / 3 )); (( JOBS > CORES )) && JOBS=$CORES; (( JOBS < 1 )) && JOBS=1
+TARGETS=$(echo "$ARCH" | tr ';' '\n' | grep -c .)
+[[ "$ARCH" == *"+PTX"* ]] && TARGETS=$(( TARGETS + 1 ))        # the PTX fallback is one more target
+NVCC_THREADS=1; (( TARGETS > 1 )) && NVCC_THREADS=$TARGETS
+JOBS=$(( MEM_GB / (2 * NVCC_THREADS + 1) ))
+(( NVCC_THREADS > 1 )) && (( JOBS > (CORES * 2) / NVCC_THREADS + 2 )) && JOBS=$(( (CORES * 2) / NVCC_THREADS + 2 ))
+(( JOBS > CORES )) && JOBS=$CORES; (( JOBS < 1 )) && JOBS=1
 
 OUT="$HERE/wheels"; mkdir -p "$OUT"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/splatworker-gsplat-build"; mkdir -p "$CACHE/pip"
-echo "gsplat $VERSION+$TAG @ ${COMMIT:0:10} for compute capability $ARCH — $JOBS parallel jobs ($CORES cores, ${MEM_GB} GB)"
+echo "gsplat $VERSION+$TAG @ ${COMMIT:0:10} for compute capability $ARCH — $JOBS files at once × $NVCC_THREADS GPU targets in parallel ($CORES cores, ${MEM_GB} GB)"
 echo "container: $IMAGE (first run downloads ~5 GB)"
 START=$(date +%s)
 
@@ -60,6 +68,7 @@ START=$(date +%s)
   -v "$OUT:/out:Z" -v "$CACHE/pip:/root/.cache/pip:Z" \
   -e COMMIT="$COMMIT" -e VERSION="$VERSION+$TAG" -e TORCH="$TORCH" -e CUDA_TAG="$CUDA_TAG" \
   -e TORCH_CUDA_ARCH_LIST="$ARCH" -e MAX_JOBS="$JOBS" -e BUILD_EXPERIMENTAL=0 \
+  -e NVCC_APPEND_FLAGS="$( (( NVCC_THREADS > 1 )) && echo "--threads $NVCC_THREADS" )" \
   "$IMAGE" bash -euo pipefail -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
