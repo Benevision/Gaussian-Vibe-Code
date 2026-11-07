@@ -69,6 +69,9 @@ struct CaptureSettings: Codable, Sendable, Equatable {
     var maxDepth: Float = 4.0
 
     var lockExposureWhileRecording: Bool = true
+    /// Longest shutter allowed when exposure is locked for recording (seconds; 0 = whatever auto-exposure
+    /// chose). 1/120 s halves indoor motion blur versus the usual 1/60 s, at the cost of a little noise.
+    var maxShutterSeconds: Double = 1.0 / 120
     var autoFocus: Bool = true
     var maxFrames: Int = 1500
 

@@ -93,6 +93,11 @@ struct SettingsView: View {
                     Explained("Freeze exposure and white balance when recording starts, so colours stay consistent between frames (splats hate flickering brightness). Turn off if you walk between very bright and dark areas. Default: On.") {
                         Toggle("Lock exposure & white balance", isOn: s.lockExposureWhileRecording)
                     }
+                    Explained("When exposure locks, use a shutter no slower than 1/120 s and raise ISO to keep the brightness. Indoors the camera otherwise picks about 1/60 s, which blurs frames whenever you move — and blurry frames get skipped, leaving gaps. Costs a little noise in dim rooms. Default: On.") {
+                        Toggle("Fast shutter (1/120 s)", isOn: Binding(get: { s.maxShutterSeconds.wrappedValue > 0 },
+                                                                       set: { s.maxShutterSeconds.wrappedValue = $0 ? 1.0 / 120 : 0 }))
+                            .disabled(!s.lockExposureWhileRecording.wrappedValue)
+                    }
                     Explained("Lets the camera refocus continuously. Off fixes focus (and thus intrinsics) — only useful when the subject distance stays constant. Default: On.") {
                         Toggle("Autofocus", isOn: s.autoFocus)
                     }

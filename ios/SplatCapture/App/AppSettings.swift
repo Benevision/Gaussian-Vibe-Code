@@ -20,7 +20,7 @@ final class AppSettings {
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.key),
-           let decoded = try? JSONDecoder().decode(CaptureSettings.self, from: data) {
+           let decoded = Self.decodeTolerant(data) {
             capture = decoded
         } else {
             capture = CaptureSettings()
@@ -30,6 +30,18 @@ final class AppSettings {
         if !DeviceInfo.hasLiDAR {
             capture.recordDepth = false
         }
+    }
+
+    /// Saved settings laid over the current defaults, so adding a setting in an app update keeps every
+    /// value the user already chose (plain decoding fails on the missing key and would reset them all).
+    static func decodeTolerant(_ data: Data) -> CaptureSettings? {
+        if let d = try? JSONDecoder().decode(CaptureSettings.self, from: data) { return d }
+        guard let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let defData = try? JSONEncoder().encode(CaptureSettings()),
+              var merged = try? JSONSerialization.jsonObject(with: defData) as? [String: Any] else { return nil }
+        for (k, v) in saved where merged[k] != nil { merged[k] = v }
+        guard let m = try? JSONSerialization.data(withJSONObject: merged) else { return nil }
+        return try? JSONDecoder().decode(CaptureSettings.self, from: m)
     }
 
     func resetToDefaults() {

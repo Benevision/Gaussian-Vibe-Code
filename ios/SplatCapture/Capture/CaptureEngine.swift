@@ -209,7 +209,17 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
             if locked {
-                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+                // Cap the shutter (default 1/120 s) before locking: auto-exposure picks ~1/60 s indoors, which
+                // blurs most frames while walking. Raise ISO to keep the same brightness (a bit more grain).
+                let cap = settings.maxShutterSeconds
+                let cur = device.exposureDuration.seconds
+                if cap > 0, cur.isFinite, cur > cap * 1.05, device.isExposureModeSupported(.custom) {
+                    let fmt = device.activeFormat
+                    let iso = min(fmt.maxISO, max(fmt.minISO, device.iso * Float(cur / cap)))
+                    let minD = fmt.minExposureDuration.seconds, maxD = fmt.maxExposureDuration.seconds
+                    let d = min(max(cap, minD), maxD)
+                    device.setExposureModeCustom(duration: CMTime(seconds: d, preferredTimescale: 1_000_000), iso: iso, completionHandler: nil)
+                } else if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
                 if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
             } else {
                 if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
@@ -287,7 +297,8 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
         let distance = max(0.3, centerDepth ?? 1.5)
         let blurPx = Float(exposure) * fx * (angularSpeed + linearSpeed / distance)
         let lv = PixelBufferTools.laplacianVariance(frame.capturedImage)
-        let verdict = gate.evaluate(laplacianVariance: lv, motionBlurPixels: blurPx, settings: settings)
+        let overdue = selector.overdue(transform: transform, time: now)
+        let verdict = gate.evaluate(laplacianVariance: lv, motionBlurPixels: blurPx, settings: settings, overdue: overdue)
         guard verdict.accept else {
             rejectedBlurry += 1
             lastBlurReject = now
