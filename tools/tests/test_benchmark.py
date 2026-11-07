@@ -88,3 +88,16 @@ def test_load_splatcapture(tmp_path):
         assert ds.gt_source == "arkit" and len(ds.gt_c2w) == 3
         assert ds.names == ["000000.jpg", "000001.jpg", "000002.jpg"]
         assert np.allclose(ds.gt_c2w["000002.jpg"][:3, 3], [2, 0, 0])
+
+
+def test_merge_reports_replaces_rows_and_resummarises():
+    from splatprep.benchmark import merge_reports
+
+    def row(model, ds, auc):
+        return {"model": model, "dataset": ds, "status": "ok",
+                "metrics": {"registeredPct": 100.0, "wallTimeSec": 1.0, "pose": {"aucAt5": auc, "aucAt10": auc}}}
+    a = {"datasets": [{"name": "orbit"}], "models": ["m1", "m2"], "results": [row("m1", "orbit", 0.1), row("m2", "orbit", 0.2)]}
+    b = {"datasets": [{"name": "orbit"}], "models": ["m2"], "results": [row("m2", "orbit", 0.9)]}
+    m = merge_reports([a, b])
+    assert [r["metrics"]["pose"]["aucAt5"] for r in m["results"]] == [0.1, 0.9]
+    assert m["mergedFrom"] == 2 and set(m["summary"]) == {"m1", "m2"}

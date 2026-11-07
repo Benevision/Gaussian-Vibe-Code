@@ -86,7 +86,9 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     private var vals: MTLBuffer?
     private let args: MTLBuffer
     private var capacity = 0
-    private let lock = NSLock()
+    /// Recursive so that a closure run under the lock (e.g. mutateGoal) can still read `scene` & co.
+    /// without deadlocking the main thread.
+    private let lock = NSRecursiveLock()
 
     // state guarded by lock
     private var _scene: SplatScene?

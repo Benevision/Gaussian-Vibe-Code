@@ -143,9 +143,10 @@ class SetupAssistant(Adw.Window):
                            active=self.with_splatprep, sensitive=self.splatprep_src is not None)
         sp.connect("notify::active", self._on_option, "splatprep")
         opts.add(sp)
-        lg = Adw.SwitchRow(title="Learned feature matching (LightGlue)",
-                           subtitle="SuperPoint / DISK / ALIKED + LightGlue for better SfM on hard scenes. "
-                                    "Adds about 100 MB (more without a GPU).",
+        lg = Adw.SwitchRow(title="Processing models (recommended)",
+                           subtitle="Camera solving (COLMAP, LightGlue matchers) and moving-object masking "
+                                    "(OWLv2 + SAM 2), so the Mac can hand these jobs to this GPU. "
+                                    "Adds about 300 MB now; model weights (≈1–2 GB) download on first use.",
                            active=self.with_lightglue, sensitive=self.with_splatprep)
         lg.connect("notify::active", self._on_option, "lightglue")
         opts.add(lg)

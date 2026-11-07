@@ -121,8 +121,9 @@ final class SplatMTKView: MTKView {
         } else {
             // Mouse wheel: one notch ≈ 8 % zoom (fly mode: move forward/back).
             let notches = Float(e.scrollingDeltaY)
+            let step = flyStep  // read before goal{}: flyStep takes the renderer lock that goal{} holds
             goal { c in
-                if c.mode == .fly { c.fly(SIMD3(0, 0, notches), speed: flyStep * 0.15) }
+                if c.mode == .fly { c.fly(SIMD3(0, 0, notches), speed: step * 0.15) }
                 else { c.zoom(exp(-notches * 0.08 * n.zoomSpeed)) }
             }
         }
@@ -131,8 +132,9 @@ final class SplatMTKView: MTKView {
     @objc func onPinch(_ g: NSMagnificationGestureRecognizer) {
         let m = Float(g.magnification); g.magnification = 0
         let n = nav
+        let step = flyStep  // read before goal{} (see scrollWheel)
         goal { c in
-            if c.mode == .fly { c.fly(SIMD3(0, 0, m * 4), speed: flyStep) } else { c.zoom(exp(-m * n.zoomSpeed)) }
+            if c.mode == .fly { c.fly(SIMD3(0, 0, m * 4), speed: step) } else { c.zoom(exp(-m * n.zoomSpeed)) }
         }
     }
     @objc func onRotate(_ g: NSRotationGestureRecognizer) {

@@ -41,14 +41,16 @@ struct MaskingOptions: Codable, Hashable, Sendable {
 
 /// Generates masks for a frame set and records them in `FrameSet.frames[i].mask` (combined with existing masks).
 enum FrameMasker {
+    /// - Parameter worker: when set, learned (splatprep) masks are computed on that Linux worker; Apple Vision
+    ///   masks always run on this Mac. Falls back to this Mac if the worker can't run the model.
     static func apply(_ options: MaskingOptions, to frames: inout FrameSet, runner: SplatPrepRunner = .init(),
-                      progress: PipelineProgressHandler? = nil) async throws {
+                      worker: WorkerClient? = nil, progress: PipelineProgressHandler? = nil) async throws {
         switch options.model {
         case .none: return
         case .appleVisionForeground, .appleVisionPerson, .appleVisionDynamic:
             try await applyVision(options, to: &frames, progress: progress)
         case .splatprep(let id):
-            try await applySplatPrep(modelId: id, options: options, to: &frames, runner: runner, progress: progress)
+            try await applySplatPrep(modelId: id, options: options, to: &frames, runner: runner, worker: worker, progress: progress)
         }
         try frames.save()
     }
@@ -79,7 +81,7 @@ enum FrameMasker {
     }
 
     static func applySplatPrep(modelId: String, options: MaskingOptions, to frames: inout FrameSet, runner: SplatPrepRunner,
-                               progress: PipelineProgressHandler?) async throws {
+                               worker: WorkerClient? = nil, progress: PipelineProgressHandler?) async throws {
         var r = ProcessingRequest(task: .masks)
         r.imagesDir = "images"; r.outputDir = "splatprep-masks"; r.maskModel = modelId; r.invertMask = options.invert
         if modelId == "dynamic" {
@@ -88,7 +90,18 @@ enum FrameMasker {
             r.maskClasses = options.dynamicClasses ?? MaskingOptions.defaultDynamicClasses
             r.maskThreshold = 0.35
         }
-        try await runner.run(r, workDir: frames.root, progress: progress)
+        var ranRemotely = false
+        if let worker {
+            do {
+                try await runRemote(r, frames: frames, worker: worker, progress: progress)
+                ranRemotely = true
+            } catch {
+                // e.g. the worker hasn't installed the processing models yet: do it here instead.
+                progress?(PipelineProgress(stage: "Masking", fraction: -1,
+                                           message: "worker couldn't run \(modelId) (\(error.localizedDescription)) — masking on this Mac"))
+            }
+        }
+        if !ranRemotely { try await runner.run(r, workDir: frames.root, progress: progress) }
         let dir = frames.root.appendingPathComponent("splatprep-masks/masks")
         for i in frames.frames.indices {
             let f = frames.frames[i]
@@ -100,6 +113,26 @@ enum FrameMasker {
             if options.dilatePixels > 0 { keep = erode(keep, width: f.width, height: f.height, radius: options.dilatePixels) }
             frames.frames[i].mask = try combineAndWrite(keep, frame: f, root: frames.root)
         }
+    }
+
+    /// Uploads `images/` to the worker, runs the masks request there and unpacks `splatprep-masks/` here.
+    static func runRemote(_ r: ProcessingRequest, frames: FrameSet, worker: WorkerClient, progress: PipelineProgressHandler?) async throws {
+        let fm = FileManager.default
+        let staging = frames.root.appendingPathComponent(".remote-upload/dataset")
+        try? fm.removeItem(at: staging.deletingLastPathComponent())
+        try fm.ensureDirectory(staging)
+        defer { try? fm.removeItem(at: staging.deletingLastPathComponent()) }
+        try fm.linkOrCopyTree(frames.root.appendingPathComponent("images"), to: staging.appendingPathComponent("images"))
+        let unpack = frames.root.appendingPathComponent(".remote-output")
+        try? fm.removeItem(at: unpack)
+        defer { try? fm.removeItem(at: unpack) }
+        try await worker.runProcessing(directory: staging, request: r, outputDirectory: unpack, progress: progress)
+        // The zip holds either outputDir itself or its contents.
+        let inner = [unpack.appendingPathComponent(r.outputDir), unpack].first { fm.fileExists(atPath: $0.appendingPathComponent("masks").path) }
+        guard let inner else { throw PipelineError.processFailed("remote masking returned no masks/") }
+        let outDir = frames.root.appendingPathComponent(r.outputDir)
+        try? fm.removeItem(at: outDir)
+        try fm.moveItem(at: inner, to: outDir)
     }
 
     /// ANDs with an existing mask of the frame and writes `masks/<stem>.png`.

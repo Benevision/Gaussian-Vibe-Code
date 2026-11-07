@@ -61,6 +61,14 @@ SPLATPREP_CORE_DEPS = ["opencv-python-headless>=4.7"]
 LIGHTGLUE_DEPS = ["kornia>=0.7",
                   "lightglue @ https://github.com/cvg/LightGlue/archive/refs/heads/main.zip"]
 
+# Everything else the Mac can send here (splatprep extras sfm / masks / sam2 / loftr): the COLMAP mapper as
+# a Python package, OWLv2 + SegFormer (transformers), SAM 2 (pure-Python install: its optional CUDA
+# extension is skipped when no toolkit is present). Model weights download on first use.
+PROCESSING_DEPS = ["pycolmap>=3.10", "transformers>=4.38", "huggingface_hub>=0.20", "safetensors",
+                   "SAM-2 @ https://github.com/facebookresearch/sam2/archive/refs/heads/main.zip"]
+PROCESSING_DOWNLOAD_MB = 160
+PROCESSING_DISK_MB = 600
+
 PYTORCH_INDEX = "https://download.pytorch.org/whl/"
 GSPLAT_INDEX = "https://docs.gsplat.studio/whl/"
 PYPI_INDEX = "https://pypi.org/simple"
@@ -319,8 +327,13 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
                           "SuperPoint / DISK / ALIKED + LightGlue learned feature matching.", "command",
                           argv=pip_argv(py, paths, *LIGHTGLUE_DEPS), download_mb=20, weight=3,
                           parser="pip"))
-        download += extra_dl
-        disk += extra_disk
+        steps.append(Step("processing", "Installing camera solving and masking models",
+                          "COLMAP mapper, OWLv2 object detection and SAM 2 tracking, so the Mac can send "
+                          "camera solving and moving-object masking here.", "command",
+                          argv=pip_argv(py, paths, *PROCESSING_DEPS, extra=("--no-build-isolation",)),
+                          download_mb=PROCESSING_DOWNLOAD_MB, weight=6, parser="pip"))
+        download += extra_dl + PROCESSING_DOWNLOAD_MB
+        disk += extra_disk + PROCESSING_DISK_MB
     steps.append(Step("verify", "Checking the installation",
                       "Imports everything and asks PyTorch whether it can see the GPU.", "verify",
                       argv=[str(py), "-c", VERIFY_SCRIPT], weight=2))
@@ -359,6 +372,9 @@ r["gsplatPrebuilt"] = has("gsplat.csrc")
 r["splatworker"] = has("splatworker") and has("fastapi") and has("uvicorn")
 r["splatprep"] = has("splatprep") and has("cv2")
 r["lightglue"] = has("lightglue")
+r["pycolmap"] = has("pycolmap")
+r["sam2"] = has("sam2")
+r["transformers"] = has("transformers")
 print("SPLATWORKER-VERIFY " + json.dumps(r), flush=True)
 """
 

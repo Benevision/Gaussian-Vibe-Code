@@ -107,6 +107,19 @@ def cmd_synth(args) -> int:
     return 0
 
 
+def cmd_benchmark_merge(args) -> int:
+    from .benchmark import markdown_report, merge_reports
+
+    reps = [json.loads(Path(p).read_text()) for p in args.reports]
+    merged = merge_reports(reps)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "benchmark.json").write_text(json.dumps(merged, indent=2))
+    (out / "benchmark.md").write_text(markdown_report(merged))
+    print(markdown_report(merged))
+    return 0
+
+
 def cmd_benchmark(args) -> int:
     from .benchmark import markdown_report, run_benchmark
     from .synth import generate
@@ -201,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--in-process", action="store_true", help="run backends in this process (no isolation)")
     b.add_argument("--quiet", action="store_true")
     b.set_defaults(func=cmd_benchmark)
+
+    bm = sub.add_parser("benchmark-merge", help="combine benchmark.json files (later ones replace earlier rows)")
+    bm.add_argument("reports", nargs="+", help="benchmark.json files, oldest first")
+    bm.add_argument("--out", required=True, help="output directory (benchmark.json + benchmark.md)")
+    bm.set_defaults(func=cmd_benchmark_merge)
 
     e = sub.add_parser("export", help="COLMAP model -> dataset.json + images + points3d.ply")
     e.add_argument("--model", required=True)

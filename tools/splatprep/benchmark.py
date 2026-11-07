@@ -518,3 +518,31 @@ def run_benchmark_request(req: dict, workdir: Path, progress: ProgressFn) -> dic
     opts = {k: req[k] for k in ("matching", "mapper", "maxKeypoints", "resizeMax", "retrievalTopK", "sequentialOverlap", "cameraModel") if k in req}
     rep = run_benchmark(paths, out, models, opts, bool(req.get("inProcess", False)), progress)
     return {"task": "benchmark", "status": "ok", "benchmark": str(out / "benchmark.json"), "summary": rep["summary"]}
+
+
+def merge_reports(reports: List[dict]) -> dict:
+    """Combine benchmark reports: later reports replace earlier (model, dataset) rows, datasets and
+    models are unioned, and the summary is recomputed. Used to fold partial reruns into one report."""
+    if not reports:
+        raise ValueError("nothing to merge")
+    base = json.loads(json.dumps(reports[0], default=_json_default))
+    rows: Dict[tuple, dict] = {}
+    datasets: Dict[str, dict] = {}
+    models: List[str] = []
+    for rep in reports:
+        for d in rep.get("datasets", []):
+            datasets[d["name"]] = d
+        for m in rep.get("models", []):
+            mid = m if isinstance(m, str) else m.get("id")
+            if mid not in [x if isinstance(x, str) else x.get("id") for x in models]:
+                models.append(m)
+        for r in rep.get("results", []):
+            rows[(r["model"], r["dataset"])] = r
+    order = [m if isinstance(m, str) else m.get("id") for m in models]
+    ds_order = list(datasets)
+    results = sorted(rows.values(), key=lambda r: (ds_order.index(r["dataset"]) if r["dataset"] in ds_order else 99,
+                                                   order.index(r["model"]) if r["model"] in order else 99))
+    base.update({"datasets": list(datasets.values()), "models": models, "results": results,
+                 "summary": _summary(results), "createdAt": reports[-1].get("createdAt", base.get("createdAt")),
+                 "mergedFrom": len(reports)})
+    return base

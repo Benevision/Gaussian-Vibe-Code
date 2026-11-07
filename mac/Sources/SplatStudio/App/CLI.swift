@@ -111,6 +111,33 @@ enum CLI {
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }
+        // Developer aid: --fly-test <splat> flies the camera through the scene (forward, strafe, up) rendering
+        // every step like the viewer does, to reproduce navigation crashes headlessly.
+        if let f = value("--fly-test") {
+            do {
+                let g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))
+                let r = try SplatRenderer()
+                let sc = SplatScene(cloud: g)
+                r.scene = sc
+                var cam = ViewerCamera()
+                cam.frame(center: sc.center, radius: sc.radius)
+                cam.mode = .fly
+                let st = ViewerSettings()
+                let step = max(sc.radius * 0.25, 0.05) * 0.05
+                let moves: [SIMD3<Float>] = [SIMD3(0, 0, 1), SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, -1), SIMD3(-1, 0, 0)]
+                var frames = 0
+                for (k, mv) in moves.enumerated() {
+                    for i in 0..<(k == 0 ? 400 : 120) {
+                        cam.fly(mv, speed: step)
+                        if i % 7 == 0 { cam.look(dx: 9, dy: (i % 14 == 0 ? 4 : -4)) }
+                        guard r.renderOffscreen(width: 800, height: 500, camera: cam, settings: st) != nil else { throw FormatError.invalid("render failed at frame \(frames)") }
+                        frames += 1
+                    }
+                    print("move \(k) ok, eye \(cam.eye), frames \(frames)"); fflush(stdout)
+                }
+                print("fly test passed: \(frames) frames"); exit(0)
+            } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
+        }
         if let f = value("--info") {
             do {
                 let g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))

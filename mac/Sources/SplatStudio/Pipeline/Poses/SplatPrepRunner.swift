@@ -522,17 +522,19 @@ struct BenchmarkReport: Codable, Sendable {
     static func load(_ url: URL) throws -> BenchmarkReport { try JSONDecoder().decode(BenchmarkReport.self, from: Data(contentsOf: url)) }
 
     /// Newest `benchmark.json` (by modification date) anywhere under `directory`.
+    /// The most complete `benchmark.json` under `directory` (most model × dataset results), newest first
+    /// among equals — so a partial rerun (e.g. one model) never hides the full report.
     static func latest(in directory: URL) -> (url: URL, report: BenchmarkReport)? {
         let fm = FileManager.default
         guard let e = fm.enumerator(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return nil }
-        var best: (URL, Date)? = nil
+        var best: (url: URL, report: BenchmarkReport, rows: Int, date: Date)? = nil
         while let u = e.nextObject() as? URL {
-            guard u.lastPathComponent == "benchmark.json" else { continue }
+            guard u.lastPathComponent == "benchmark.json", let r = try? load(u) else { continue }
             let d = (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if best == nil || d > best!.1 { best = (u, d) }
+            let rows = r.results?.count ?? 0
+            if best == nil || rows > best!.rows || (rows == best!.rows && d > best!.date) { best = (u, r, rows, d) }
         }
-        guard let b = best, let r = try? load(b.0) else { return nil }
-        return (b.0, r)
+        return best.map { ($0.url, $0.report) }
     }
 
     /// Default location for benchmark runs: `~/Library/Application Support/SplatStudio/benchmarks`.

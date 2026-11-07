@@ -276,7 +276,10 @@ def test_build_plan_gpu(paths, tmp_path):
                       splatprep_dir=tmp_path)
     ids = [s.id for s in plan.steps]
     assert ids == ["python", "venv", "pip", "torch", "gsplat", "worker", "splatprep", "torchvision",
-                   "lightglue", "verify"]
+                   "lightglue", "processing", "verify"]
+    proc = [s for s in plan.steps if s.id == "processing"][0].argv
+    assert "--no-build-isolation" in proc and any(a.startswith("pycolmap") for a in proc) \
+        and any(a.startswith("SAM-2 @ https://") for a in proc)
     by = {s.id: s for s in plan.steps}
     assert by["python"].url == PYTHON_RUNTIME.url and len(by["python"].sha256) == 64
     assert by["venv"].argv[:3] == [str(paths.python_exe), "-m", "venv"]

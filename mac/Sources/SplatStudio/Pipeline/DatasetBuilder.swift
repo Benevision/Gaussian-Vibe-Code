@@ -152,7 +152,7 @@ enum DatasetBuilder {
         switch source {
         case .captureBundle(let u):
             var ds = try await CaptureImporter.importBundle(u, options: o.capture, into: dir, progress: PipelineProgress.scaled(progress, 0...0.6))
-            ds = try await maskDataset(ds, o, progress: PipelineProgress.scaled(progress, 0.6...0.7))
+            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, 0.6...0.7))
             if case .splatprep = o.poseSolver {
                 // Refine with SfM, using the capture poses as priors.
                 try PriorsFile.write(dataset: ds, to: dir.appendingPathComponent("priors.json"))
@@ -163,11 +163,11 @@ enum DatasetBuilder {
             return finish(ds, progress)
         case .colmap(let p, let images):
             var ds = try await COLMAPImporter.importProject(at: p, imagesDir: images, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
-            ds = try await maskDataset(ds, o, progress: PipelineProgress.scaled(progress, 0.85...0.97))
+            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, 0.85...0.97))
             return finish(ds, progress)
         case .nerfstudio(let t):
             var ds = try await NerfstudioImporter.importDataset(transforms: t, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
-            ds = try await maskDataset(ds, o, progress: PipelineProgress.scaled(progress, 0.85...0.97))
+            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, 0.85...0.97))
             return finish(ds, progress)
         default: break
         }
@@ -195,7 +195,8 @@ enum DatasetBuilder {
 
         // 3. Masks.
         if o.masking.model != .none {
-            try await FrameMasker.apply(o.masking, to: &frames, runner: SplatPrepRunner(), progress: maskP)
+            try await FrameMasker.apply(o.masking, to: &frames, runner: SplatPrepRunner(),
+                                        worker: o.compute != .thisMac ? worker : nil, progress: maskP)
         }
 
         // 4. Poses (+ rig constraints / metric scale).
@@ -254,10 +255,11 @@ enum DatasetBuilder {
     }
 
     /// Applies masking to an already imported dataset.
-    static func maskDataset(_ ds: PreparedDataset, _ o: PrepOptions, progress: PipelineProgressHandler?) async throws -> PreparedDataset {
+    static func maskDataset(_ ds: PreparedDataset, _ o: PrepOptions, worker: WorkerClient? = nil,
+                            progress: PipelineProgressHandler?) async throws -> PreparedDataset {
         guard o.masking.model != .none else { return ds }
         var frames = frameSet(from: ds)
-        try await FrameMasker.apply(o.masking, to: &frames, progress: progress)
+        try await FrameMasker.apply(o.masking, to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress)
         var out = ds
         let masks = Dictionary(frames.frames.map { ($0.image, $0.mask) }, uniquingKeysWith: { a, _ in a })
         for i in out.manifest.cameras.indices { if let m = masks[out.manifest.cameras[i].image] { out.manifest.cameras[i].mask = m } }
