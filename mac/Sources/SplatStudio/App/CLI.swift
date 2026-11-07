@@ -153,6 +153,15 @@ enum CLI {
                     print(String(format: "coverage: %.1f %% poor, %.1f %% unseen, median %d views, depth %@, %.2f s", c.poorFraction * 100, c.unseenFraction * 100, c.medianViews,
                                  c.usedDepth ? "yes" : "no", Date().timeIntervalSince(t0)))
                 }
+                if a.contains("--auto-clean"), let dsPath = value("--dataset") {
+                    let c = try Coverage.compute(scene: sc, dataset: try PreparedDataset.load(URL(fileURLWithPath: dsPath)))
+                    let plan = Coverage.cleanPlan(scene: sc, result: c, minViewsOutside: value("--clean-views").flatMap(Int.init) ?? 3)
+                    let f = sc.flagsPointer, p = sc.positionsPointer
+                    var del = 0, delWellSeen = 0
+                    _ = p
+                    for i in 0..<sc.count where plan.remove[i] { f[i] |= 1; del += 1; if c.views[i] >= 3 { delWellSeen += 1 } }
+                    print("auto clean: removed \(del) of \(sc.count) (\(plan.unseenCount) unseen, \(plan.outsideCount) outside box; \(delWellSeen) of them seen by >= 3 photos); box \(plan.boxMin) – \(plan.boxMax)")
+                }
                 guard let tex = r.renderOffscreen(width: size.0, height: size.1, camera: cam, settings: st) else { throw FormatError.invalid("render failed") }
                 try ImageWriter.writePNG(texture: tex, to: URL(fileURLWithPath: a[i + 2]))
                 print("Rendered \(g.count) splats → \(a[i + 2])")
@@ -165,7 +174,7 @@ enum CLI {
         // gsplat…) on a dataset's holdout photos, rendered by the Metal trainer's rasteriser with exact intrinsics.
         if let f = value("--eval"), let dsPath = value("--dataset") {
             do {
-                let g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))
+                var g = try SplatFileFormat.load(url: URL(fileURLWithPath: f))
                 let ds = try PreparedDataset.load(URL(fileURLWithPath: dsPath))
                 var cfg = TrainingConfig()
                 cfg.shDegree = value("--sh").flatMap(Int.init) ?? g.shDegree
@@ -174,6 +183,22 @@ enum CLI {
                 cfg.randomInitCount = 10; cfg.depthWeight = 0
                 let t = MetalTrainer(dataset: ds, config: cfg)
                 try t.prepare { _ in }
+                if a.contains("--peak-clean") {
+                    let thr = value("--peak-thr").flatMap(Float.init) ?? (1.0 / 255.0)
+                    let t0 = Date()
+                    let peaks = try t.peakContribution(cloud: g)
+                    let keep = peaks.map { $0 >= thr }
+                    print(String(format: "peak clean: removed %d of %d splats (max contribution < %.4f) in %.1f s", keep.filter { !$0 }.count, g.count, thr, Date().timeIntervalSince(t0)))
+                    g = g.filtered(keep)
+                    if let out = value("--clean-out") { try PLYCodec.writeGaussians(g, to: URL(fileURLWithPath: out)) }
+                }
+                if a.contains("--auto-clean") {
+                    let sc = SplatScene(cloud: g)
+                    let c = try Coverage.compute(scene: sc, dataset: ds)
+                    let plan = Coverage.cleanPlan(scene: sc, result: c, minViewsOutside: value("--clean-views").flatMap(Int.init) ?? 3)
+                    g = g.filtered(plan.remove.map { !$0 })
+                    print("auto clean removed \(plan.remove.filter { $0 }.count) splats (\(plan.unseenCount) unseen, \(plan.outsideCount) outside box)")
+                }
                 let r = try t.evaluate(cloud: g)
                 print(String(format: "eval %@: %d splats, SH %d, antialiased %@ → held-out PSNR %.2f dB over %d views (min %.2f, max %.2f)",
                              (f as NSString).lastPathComponent, g.count, cfg.shDegree, cfg.antialiased ? "yes" : "no", r.mean, r.perView.count,

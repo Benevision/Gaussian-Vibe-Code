@@ -187,6 +187,55 @@ kernel void rasterize_forward(device const uint2* ranges [[buffer(0)]],
     }
 }
 
+// ---------------------------------------------------------------- per-splat peak contribution
+// Same compositing as rasterize_forward, recording for every splat the most it adds to any pixel (alpha * T).
+// Non-negative floats order like their bit patterns, so an atomic max on the bits is a float max.
+kernel void rasterize_peak(device const uint2* ranges [[buffer(0)]],
+                           device const uint* tileVals [[buffer(1)]],
+                           device const float2* p2d [[buffer(2)]],
+                           device const float4* conicO [[buffer(3)]],
+                           constant RasterParams& rp [[buffer(5)]],
+                           device atomic_uint* peak [[buffer(9)]],
+                           uint2 tg [[threadgroup_position_in_grid]],
+                           uint2 lt [[thread_position_in_threadgroup]],
+                           uint tidx [[thread_index_in_threadgroup]]) {
+    threadgroup float2 sP[256];
+    threadgroup float4 sC[256];
+    threadgroup uint sG[256];
+    threadgroup uint anyActive;
+    uint2 pix = tg * TILE + lt;
+    bool inside = pix.x < rp.width && pix.y < rp.height;
+    float2 pf = float2(pix) + 0.5f;
+    uint2 range = ranges[tg.y * rp.tilesX + tg.x];
+    int toDo = int(range.y) - int(range.x);
+    int rounds = (toDo + 255) / 256;
+    float T = 1.0f;
+    bool done = !inside;
+    for (int r = 0; r < rounds; r++, toDo -= 256) {
+        if (tidx == 0) anyActive = 0;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (!done) anyActive = 1;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (anyActive == 0) break;
+        uint idx = range.x + uint(r) * 256 + tidx;
+        if (idx < range.y) { uint g = tileVals[idx]; sP[tidx] = p2d[g]; sC[tidx] = conicO[g]; sG[tidx] = g; }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        int cnt = min(256, toDo);
+        for (int j = 0; j < cnt && !done; j++) {
+            float2 d = sP[j] - pf;
+            float4 con = sC[j];
+            float power = -0.5f * (con.x * d.x * d.x + con.z * d.y * d.y) - con.y * d.x * d.y;
+            if (power > 0.0f) continue;
+            float alpha = min(0.99f, con.w * exp(power));
+            if (alpha < 1.0f / 255.0f) continue;
+            float testT = T * (1.0f - alpha);
+            if (testT < 0.0001f) { done = true; continue; }
+            atomic_fetch_max_explicit(&peak[sG[j]], as_type<uint>(alpha * T), memory_order_relaxed);
+            T = testT;
+        }
+    }
+}
+
 // ---------------------------------------------------------------- rasterise (backward)
 // Accumulator layout per gaussian (12 floats): dmean2D.xy, dconic.abc, dopacity, drgb, ddepth, |dmean2D|.xy
 kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],

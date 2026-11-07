@@ -394,7 +394,7 @@ final class MetalTrainer: @unchecked Sendable {
     }
     private var tileCount = 0
 
-    private func encodeRaster(_ enc: MTLComputeCommandEncoder, v: TrainView, rp: inout RasterParams) {
+    private func encodeRaster(_ enc: MTLComputeCommandEncoder, v: TrainView, rp: inout RasterParams, peak: MTLBuffer? = nil) {
         let m = tileCount
         let numTiles = Int(rp.tilesX * rp.tilesY)
         enc.setBuffer(sortVals, offset: 0, index: 0); enc.setBuffer(offsets, offset: 0, index: 1)
@@ -411,9 +411,10 @@ final class MetalTrainer: @unchecked Sendable {
         enc.setBuffer(tileKeys!, offset: 0, index: 0); enc.setBuffer(ranges, offset: 0, index: 1); enc.set(UInt32(m), 2)
         enc.dispatch1D(ctx.pipeline("tile_ranges"), count: m)
         enc.memoryBarrier(scope: .buffers)
-        enc.setComputePipelineState(ctx.pipeline("rasterize_forward"))
+        enc.setComputePipelineState(ctx.pipeline(peak == nil ? "rasterize_forward" : "rasterize_peak"))
         enc.setBuffer(ranges, offset: 0, index: 0); enc.setBuffer(tileVals!, offset: 0, index: 1)
         enc.setBuffer(p2d, offset: 0, index: 2); enc.setBuffer(conicO, offset: 0, index: 3)
+        if let peak { enc.setBuffer(peak, offset: 0, index: 9) }
         enc.setBuffer(rgbd, offset: 0, index: 4)
         enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 5)
         enc.setBuffer(img, offset: 0, index: 6); enc.setBuffer(finalT, offset: 0, index: 7)
@@ -758,6 +759,31 @@ final class MetalTrainer: @unchecked Sendable {
         let mse = s[2] / Float(v.width * v.height * 3)
         let px = Array(UnsafeBufferPointer(start: out.contents().bindMemory(to: UInt8.self, capacity: v.width * v.height * 4), count: v.width * v.height * 4))
         return (px, mse)
+    }
+
+    /// For every splat of `g`, the most it adds to any pixel of any of this dataset's photos (training and
+    /// held-out). Below ~1/255 a splat makes no visible difference from any capture viewpoint.
+    func peakContribution(cloud g: GaussianCloud, progress: ((Double) -> Void)? = nil) throws -> [Float] {
+        load(g)
+        step = config.shDegreeInterval * (config.shDegree + 1)
+        let peak = ctx.buffer(max(n, 1) * 4, label: "peak")
+        memset(peak.contents(), 0, max(n, 1) * 4)
+        let all = trainViews + evalViews
+        for (k, v) in all.enumerated() {
+            paramLock.lock()
+            var u = uniforms(for: v, shDegree: activeSHDegree)
+            var rp = rasterParams(for: v, bg: .zero)
+            if try encodeForward(view: v, u: &u, rp: &rp) {
+                let cb = ctx.queue.makeCommandBuffer()!
+                let enc = cb.makeComputeCommandEncoder()!
+                encodeRaster(enc, v: v, rp: &rp, peak: peak)
+                enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+            }
+            paramLock.unlock()
+            progress?(Double(k + 1) / Double(max(all.count, 1)))
+        }
+        let p = peak.contents().bindMemory(to: Float.self, capacity: n)
+        return Array(UnsafeBufferPointer(start: p, count: n))
     }
 
     /// Mean PSNR over the holdout views (or a sample of training views if there are none).

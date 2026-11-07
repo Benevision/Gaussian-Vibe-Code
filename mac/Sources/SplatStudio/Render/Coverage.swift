@@ -53,6 +53,45 @@ enum Coverage {
         let unseenFraction: Double    // share no photo saw at all (usually floaters beyond the walls)
         let medianViews: Int
         let usedDepth: Bool
+        /// Photos that saw each splat (0 = none: behind every camera's depth surface or outside every frame).
+        let views: [UInt16]
+    }
+
+    /// What "Auto clean" removes: splats no photo saw, and splats outside the box the photos covered well.
+    struct CleanPlan {
+        /// Splats to remove: seen by no photo, or outside the box and seen by fewer than 3 photos (well-seen
+        /// geometry at the edges of a room is always kept).
+        var remove: [Bool]
+        var boxMin: SIMD3<Float>
+        var boxMax: SIMD3<Float>
+        var unseenCount: Int
+        var outsideCount: Int
+    }
+
+    /// Box = 1st–99th percentile, per axis, of reasonably opaque splats seen by ≥ 3 photos, grown by 5 % of its
+    /// size. Proposed for removal: splats seen by no photo, and splats outside the box that fewer than 3 photos
+    /// saw. (Cutting everything outside the box removed real walls at the room's edges.)
+    static func cleanPlan(scene: SplatScene, result r: Result, minViewsOutside: Int = 3) -> CleanPlan {
+        let n = scene.count
+        let pos = scene.gpos.contents().bindMemory(to: SIMD4<Float>.self, capacity: n)
+        var xs: [Float] = [], ys: [Float] = [], zs: [Float] = []
+        for i in stride(from: 0, to: n, by: max(1, n / 400_000)) where r.views[i] >= 3 && pos[i].w > 0.3 {
+            xs.append(pos[i].x); ys.append(pos[i].y); zs.append(pos[i].z)
+        }
+        func pct(_ a: inout [Float], _ q: Double) -> Float { a.isEmpty ? 0 : a[min(a.count - 1, Int(Double(a.count - 1) * q))] }
+        xs.sort(); ys.sort(); zs.sort()
+        var lo = SIMD3(pct(&xs, 0.01), pct(&ys, 0.01), pct(&zs, 0.01))
+        var hi = SIMD3(pct(&xs, 0.99), pct(&ys, 0.99), pct(&zs, 0.99))
+        let pad = (hi - lo) * 0.05
+        lo -= pad; hi += pad
+        var remove = [Bool](repeating: false, count: n)
+        var u = 0, o = 0
+        for i in 0..<n {
+            let q = SIMD3(pos[i].x, pos[i].y, pos[i].z)
+            if r.views[i] == 0 { remove[i] = true; u += 1 }
+            else if Int(r.views[i]) < minViewsOutside, !xs.isEmpty, any(q .< lo) || any(q .> hi) { remove[i] = true; o += 1 }
+        }
+        return CleanPlan(remove: remove, boxMin: lo, boxMax: hi, unseenCount: u, outsideCount: o)
     }
 
     private struct CovCam {
@@ -131,9 +170,10 @@ enum Coverage {
                 if cnt == 0 { unseen += w } else if s < 0.34 { poor += w }
             }
         }
+        let viewCounts = (0..<n).map { UInt16(min(raw[$0].x, 65535)) }
         return Result(score: score, poorFraction: counted > 0 ? poor / counted : 0,
                       unseenFraction: counted > 0 ? unseen / counted : 0,
                       medianViews: views.isEmpty ? 0 : Int(views[views.count / 2]),
-                      usedDepth: offsets.contains { $0 != UInt32.max })
+                      usedDepth: offsets.contains { $0 != UInt32.max }, views: viewCounts)
     }
 }

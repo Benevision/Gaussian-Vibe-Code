@@ -204,6 +204,17 @@ struct EditPanel: View {
                 }
             }
             PanelSection(title: "Clean up", systemImage: "sparkles") {
+                SettingRow(id: "edit.autoClean") {
+                    HStack {
+                        Button { model.autoClean() } label: { Label("Auto clean", systemImage: "wand.and.stars") }
+                            .disabled(model.autoCleanBusy || model.scene == nil)
+                        if model.selectedCount > 0 {
+                            Button("Delete selected") { model.deleteSelected() }.buttonStyle(.borderedProminent)
+                        }
+                    }
+                }
+                if model.autoCleanBusy { ProgressView().controlSize(.small) }
+                if let info = model.autoCleanInfo { Text(info).font(.caption).fixedSize(horizontal: false, vertical: true) }
                 SettingRow(id: "edit.opacityThreshold") {
                     HStack { NumberSlider(value: $opacityT, range: 0.005...0.5, log: true, width: 90); Button("Delete") { model.deleteBelowOpacity(Float(opacityT)) } }
                 }
