@@ -25,3 +25,4 @@ Sample datasets/
 *.mov
 *.splatcapture/
 mac/.build-app/
+tools/build/
