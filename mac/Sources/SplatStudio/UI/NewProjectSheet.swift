@@ -56,6 +56,7 @@ struct NewProjectSheet: View {
         }
         .frame(width: 680, height: 620)
         .onAppear {
+            prep.reset()   // a new project starts on its settings, not on the last run's result
             source = model.newProjectSource
             step = model.newProjectStartStep; model.newProjectStartStep = 0
             if let s = source { projectName = defaultName(s) }

@@ -261,8 +261,11 @@ final class WorkerClient: @unchecked Sendable {
                 if s.state.isTerminal { return s }
                 try await Task.sleep(nanoseconds: UInt64(pollInterval * 1e9))
             }
-        } catch is CancellationError {
-            _ = try? await cancelJob(id)
+        } catch {
+            // Cancelling surfaces as CancellationError or as URLError.cancelled from the in-flight poll.
+            // Tell the worker from a detached task: requests made inside the cancelled task are aborted too.
+            guard error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled else { throw error }
+            await Task.detached { [self] in _ = try? await self.cancelJob(id) }.value
             throw CancellationError()
         }
     }

@@ -367,7 +367,7 @@ final class PrepSession {
 
     func run(source: SourceDescription, options: PrepOptions, projectDir: URL, thenTrain: Bool) {
         guard !running else { return }
-        running = true; error = nil; log.removeAll()
+        running = true; error = nil; log.removeAll(); cancelRequested = false
         logFile = projectDir.appendingPathComponent("prep.log")
         self.thenTrain = thenTrain
         startedAt = Date(); lastUpdate = startedAt; overall = 0; samples.removeAll(); stageStarts.removeAll(); stageEnds.removeAll(); stageETA = nil
@@ -393,13 +393,26 @@ final class PrepSession {
                 self.app?.showNewProject = false
                 if thenTrain { self.app?.training.start(dataset: leveled) }
             } catch {
+                guard let self else { return }
+                self.running = false
+                // A cancel is not a failure: don't show "Preparation failed … CancellationError".
+                if self.cancelRequested || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self?.appendLog("FAILED: \(message)")
-                self?.running = false
-                self?.error = message
+                self.appendLog("FAILED: \(message)")
+                self.error = message
             }
         }
     }
 
-    func cancel() { appendLog("Cancelled"); task?.cancel(); running = false }
+    private var cancelRequested = false
+
+    func cancel() { cancelRequested = true; appendLog("Cancelled"); task?.cancel(); running = false; error = nil }
+
+    /// Clears a finished / failed / cancelled run so a new project starts on its settings, not the old result.
+    func reset() {
+        guard !running else { return }
+        error = nil; log.removeAll(); cancelRequested = false; overall = 0
+        progress = PipelineProgress(stage: "", fraction: 0, message: "")
+        startedAt = nil; lastUpdate = nil; stageStarts.removeAll(); stageEnds.removeAll(); samples.removeAll(); stageETA = nil
+    }
 }
