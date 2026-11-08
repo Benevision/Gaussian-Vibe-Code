@@ -110,7 +110,7 @@ enum SettingsCatalog {
               defaultValue: "On"),
         .init(id: "viewer.orientation", group: .viewer, title: "Scene up direction",
               summary: "Which axis of the scene points up. Fix upside-down or sideways splats here.",
-              detail: "Splat files don't store which way is up, and tools disagree (COLMAP/3DGS use −Y, OpenGL/ARKit +Y, Blender and drones +Z). Splat Studio levels every dataset it builds to −Y, but files from elsewhere may need help: pick an axis, Flip upside down, or rotate until it looks level and choose Level to view. Your choice is remembered for that file, and Export can bake it in so other viewers show it upright too.",
+              detail: "Splat files don't store which way is up, and tools disagree (COLMAP/3DGS use −Y, OpenGL/ARKit +Y, Blender and drones +Z). SplatWork levels every dataset it builds to −Y, but files from elsewhere may need help: pick an axis, Flip upside down, or rotate until it looks level and choose Level to view. Your choice is remembered for that file, and Export can bake it in so other viewers show it upright too.",
               defaultValue: "−Y (or as saved with the file)", advanced: false),
         .init(id: "viewer.fov", group: .viewer, title: "Field of view",
               summary: "Vertical field of view of the viewer camera.",
@@ -310,7 +310,7 @@ enum SettingsCatalog {
               defaultValue: "42"),
         .init(id: "train.device", group: .trainingBasics, title: "Compute devices",
               summary: "Tick the machines that may work on this project: this Mac, Linux GPU workers, iPhones running Compute.",
-              detail: "One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: Splat Worker with CUDA, typically 2–4× faster than an M4 Pro, with live previews). Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically. An iPhone with Splat Capture's Compute screen open takes small blocks.",
+              detail: "One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork Node with CUDA, typically 2–4× faster than an M4 Pro, with live previews). Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically. An iPhone with SplatWork Capture's Compute screen open takes small blocks.",
               defaultValue: "This Mac", advanced: false),
 
         .init(id: "train.strategy", group: .densification, title: "Densification strategy",
@@ -429,7 +429,7 @@ enum SettingsCatalog {
               defaultValue: "On (Mac and Linux worker)"),
         .init(id: "train.appearanceCorrection", group: .regularisation, title: "Per-photo colour correction",
               summary: "Learns each photo's exposure, white balance and tint, so differences between photos don't turn into haze or colour noise.",
-              detail: "Phones and cameras change exposure and white balance between shots (auto-exposure, walking from sun into shade). Without correction the scene has to average those differences, which shows up as washed-out haze, blotchy colour and floaters. With this on, every training photo gets a small learned colour transform (3×3 colour matrix + offset) that is applied only while comparing to that photo; the saved splat stays at a neutral, median exposure. iPhone captures seed it with each frame's recorded shutter time and ISO. It switches itself off when every photo has the same recorded exposure (Splat Capture locks exposure): there is nothing to correct, and the extra freedom cost about 1 dB on held-out views of a 649-frame bedroom scan and let colours drift too bright. Exports bake in the average correction, so the saved splat matches a typical photo. Leave it on for drone footage, video and handheld photos, where exposure changes.",
+              detail: "Phones and cameras change exposure and white balance between shots (auto-exposure, walking from sun into shade). Without correction the scene has to average those differences, which shows up as washed-out haze, blotchy colour and floaters. With this on, every training photo gets a small learned colour transform (3×3 colour matrix + offset) that is applied only while comparing to that photo; the saved splat stays at a neutral, median exposure. iPhone captures seed it with each frame's recorded shutter time and ISO. It switches itself off when every photo has the same recorded exposure (SplatWork Capture locks exposure): there is nothing to correct, and the extra freedom cost about 1 dB on held-out views of a 649-frame bedroom scan and let colours drift too bright. Exports bake in the average correction, so the saved splat matches a typical photo. Leave it on for drone footage, video and handheld photos, where exposure changes.",
               defaultValue: "On (off automatically when exposure is locked)", advanced: false),
         .init(id: "train.appearanceLR", group: .regularisation, title: "Colour-correction learning rate",
               summary: "How fast each photo's correction adapts.",
@@ -464,8 +464,8 @@ enum SettingsCatalog {
               detail: "Every machine trains the same synthetic scene (about 1 million splats, 1600 × 1200 photos, 2,000 steps; steps 1,000–2,000 are timed) and each worker also gets the scene uploaded and its result downloaded, which measures the network. The results replace the built-in guess of each GPU's speed: the training panel shows how long a job would take on each machine (including the upload), and Both mode trains small scenes on whichever finishes first. Run it again after changing hardware, drivers or the worker's runtime. Training on the Mac while another app uses the GPU will make it look slower than it is.",
               defaultValue: "–", advanced: false),
         .init(id: "net.workers", group: .compute, title: "Linux GPU workers",
-              summary: "Splat Worker servers found on your network (Bonjour) or added manually.",
-              detail: "Install Splat Worker on a Linux PC with an NVIDIA GPU (see linux/README.md). It appears here automatically. Add it manually with host:port if your network blocks Bonjour. A token protects it from other devices on the LAN.",
+              summary: "SplatWork Node servers found on your network (Bonjour) or added manually.",
+              detail: "Install SplatWork Node on a Linux PC with an NVIDIA GPU (see linux/README.md). It appears here automatically. Add it manually with host:port if your network blocks Bonjour. A token protects it from other devices on the LAN.",
               defaultValue: "None", advanced: false),
         .init(id: "net.placement", group: .compute, title: "Work placement",
               summary: "Only this Mac, only the worker, or both.",
@@ -484,7 +484,7 @@ enum SettingsCatalog {
               detail: "More overlap avoids seams at block borders but duplicates work.",
               defaultValue: "15 %", range: "5–40 %"),
         .init(id: "net.receive", group: .compute, title: "Receive from iPhone",
-              summary: "Lets Splat Capture on your iPhone send captures straight to this Mac over Wi-Fi.",
+              summary: "Lets SplatWork Capture on your iPhone send captures straight to this Mac over Wi-Fi.",
               detail: "The Mac advertises itself on the local network. Enable 'Require pairing code' so only devices you pair can send captures; received captures land in the iPhone Inbox in the sidebar.",
               defaultValue: "On", advanced: false),
         .init(id: "net.pairing", group: .compute, title: "Require pairing code",
@@ -528,7 +528,7 @@ enum SettingsCatalog {
             t.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " || $0 == "-" }
                 .map(String.init).joined().replacingOccurrences(of: " ", with: "-")
         }
-        var s = "# Splat Studio — settings reference\n\n"
+        var s = "# SplatWork — settings reference\n\n"
         s += "Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). \(all.count) settings. "
         s += "**Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. "
         s += "The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.\n\n"

@@ -64,6 +64,8 @@ struct NewProjectSheet: View {
         .frame(width: 680, height: 620)
         .sheet(item: $reuseOffer) { offer in reuseSheet(offer) }
         .onAppear {
+            // Reopened while preparing (or after a run that failed while hidden): show that run, don't reset it.
+            if prep.running || prep.error != nil { return }
             prep.reset()   // a new project starts on its settings, not on the last run's result
             source = model.newProjectSource
             step = model.newProjectStartStep; model.newProjectStartStep = 0
@@ -98,6 +100,10 @@ struct NewProjectSheet: View {
     private var footer: some View {
         HStack {
             Button("Cancel") { if prep.running { prep.cancel() } else { dismiss() } }.keyboardShortcut(.cancelAction)
+            if prep.running {
+                Button("Hide") { dismiss() }
+                    .help("Keep preparing in the background and use the rest of the app; the progress button in the toolbar brings this back")
+            }
             if !prep.running && prep.error == nil && mode == .easy {
                 Toggle("Show all options", isOn: $showAll)
                     .toggleStyle(.switch).controlSize(.small)
@@ -124,7 +130,7 @@ struct NewProjectSheet: View {
 
     @ViewBuilder private var sourcePage: some View {
         Text("What are you starting from?").font(.title2.bold())
-        Text("Splat Studio turns any of these into a set of posed images, then trains a Gaussian splat from them.").foregroundStyle(.secondary)
+        Text("SplatWork turns any of these into a set of posed images, then trains a Gaussian splat from them.").foregroundStyle(.secondary)
         GroupBox {
             HStack {
                 Image(systemName: sourceIcon).font(.title).foregroundStyle(.tint).frame(width: 40)
@@ -691,7 +697,7 @@ struct ComputePicker: View {
                     }
                 }
                 if browser.workers.isEmpty {
-                    Text("No workers found — start Splat Worker on a PC or Compute on an iPhone (or add one under Compute).")
+                    Text("No workers found — start SplatWork Node on a PC or Compute on an iPhone (or add one under Compute).")
                         .font(.caption).foregroundStyle(.secondary)
                 } else if selected.count > 1 {
                     Text("Several devices: big scenes are split into blocks shared between them; small ones train on the fastest.")

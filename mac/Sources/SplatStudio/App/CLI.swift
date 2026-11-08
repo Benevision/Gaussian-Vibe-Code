@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// Headless commands, handled before any UI is created:
 ///
@@ -7,11 +8,66 @@ import Foundation
 ///         [--preset preview|balanced|high|ultra] [--config cfg.json] [--iterations N]
 ///   SplatStudio --convert <in.ply|spz|splat> <out.ply|spz|splat> [--sh N]
 ///   SplatStudio --info <file>                           Print splat statistics
+///   SplatStudio --serve-worker [--port 7879] [--name N] Headless "act as a worker" (training jobs from iPhones / Macs)
 enum CLI {
     static func runIfRequested() {
         let a = CommandLine.arguments
         func value(_ flag: String) -> String? { a.firstIndex(of: flag).flatMap { $0 + 1 < a.count ? a[$0 + 1] : nil } }
         if a.contains("--dump-settings") { print(SettingsCatalog.markdown()); exit(0) }
+        if a.contains("--serve-worker") {
+            let port = value("--port").flatMap(UInt16.init) ?? MacWorker.port
+            let name = value("--name") ?? LocalDeviceName.current
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("SplatStudio-worker-\(port)", isDirectory: true)
+            let e = WorkerEngine(name: name, root: root)
+            let txt = NWTXTRecord(["version": "1", "gpu": e.gpuName, "auth": "0", "kind": "mac"])
+            let service = a.contains("--no-bonjour") ? nil : NWListener.Service(name: name, type: WorkerBrowser.serviceType, domain: nil, txtRecord: txt)
+            var last = ""
+            e.onChange = {
+                for j in e.snapshot() where !j.isTerminal || j.jobId == e.snapshot().last?.jobId {
+                    let line = "\(j.jobId) \(j.state) \(j.step)/\(j.totalSteps) \(j.message ?? "")"
+                    if line != last && (j.step % 250 == 0 || j.isTerminal || j.state != "training") { print(line); fflush(stdout); last = line }
+                }
+            }
+            let server = HTTPServer(port: port, service: service, tempDir: e.tempDir,
+                                    policy: { m, p, len in e.bodyPolicy(method: m, path: p, contentLength: len) },
+                                    onState: { st in print("worker server: \(st)"); fflush(stdout) },
+                                    handler: { r in print("\(r.method) \(r.path)"); fflush(stdout); return e.handle(r) })
+            server.start()
+            print("Serving \"\(name)\" (\(e.gpuName)) on port \(port); Ctrl-C to stop"); fflush(stdout)
+            withExtendedLifetime(server) { dispatchMain() }
+        }
+        if a.contains("--update-check") {
+            // Latest GitHub release (--dev: the rolling developer build) vs this build; --download also fetches, verifies and unpacks it (not installed).
+            let cases: [(String, String, Bool)] = [("1.1.0", "1.0.0", true), ("1.0.0", "1.0.0", false), ("1.0.0", "1.0.0-dev", false),
+                                                  ("1.1.0", "1.0.0-dev", true), ("1.0.0", "1.0.0-rc1", true), ("1.0.10", "1.0.9", true),
+                                                  ("1.0", "1.0.1", false), ("2.0.0-rc1", "1.9.0", true)]
+            for (r, l, want) in cases where AppUpdater.isNewer(r, than: l) != want { print("isNewer(\(r), \(l)) != \(want)"); exit(1) }
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "none"
+            let sem = DispatchSemaphore(value: 0)
+            Task.detached {
+                do {
+                    guard let r = try await AppUpdater.fetchLatest(dev: CommandLine.arguments.contains("--dev")) else { print("no release"); sem.signal(); return }
+                    print("latest \(r.displayVersion) (\(r.dmgName), \(r.dmgSize) bytes, sums: \(r.checksums != nil)); this build \(current); newer: \(AppUpdater.isNewer(r.version, than: current))")
+                    if CommandLine.arguments.contains("--download") {
+                        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("splatwork-update-\(UUID().uuidString)")
+                        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                        let dmg = dir.appendingPathComponent(r.dmgName)
+                        let (tmp, _) = try await URLSession.shared.download(from: r.dmg)
+                        try FileManager.default.moveItem(at: tmp, to: dmg)
+                        if let sums = r.checksums {
+                            let (d, _) = try await URLSession.shared.data(from: sums)
+                            let want = AppUpdater.checksum(in: String(decoding: d, as: UTF8.self), for: r.dmgName)
+                            let have = try AppUpdater.sha256(of: dmg)
+                            print("sha256 \(have == want ? "ok" : "MISMATCH") \(have)")
+                        }
+                        let app = try AppUpdater.extractApp(from: dmg, into: dir, version: r.version, build: r.build)
+                        print("staged \(app.path)")
+                    }
+                } catch { print("error: \(error.localizedDescription)") }
+                sem.signal()
+            }
+            sem.wait(); exit(0)
+        }
         if let v = value("--frames-fingerprint") {
             // Fingerprint a worker frames job would be filed under, with the default new-project settings
             // (pass --360 for 360° video). Lets an earlier job be registered in a project's .remote-jobs.json.

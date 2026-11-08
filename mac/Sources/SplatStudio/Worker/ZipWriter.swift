@@ -30,7 +30,8 @@ enum ZipWriter {
     /// Zips `directory` so that it is the single top-level entry of the archive
     /// (e.g. `Kitchen.splatcapture/manifest.json`).
     /// - Parameter progress: called with (bytesDone, bytesTotal) from the calling thread.
-    static func zipDirectory(_ directory: URL, to output: URL,
+    /// - Parameter keepParent: false = the directory's contents at the top level (no folder entry prefix).
+    static func zipDirectory(_ directory: URL, to output: URL, keepParent: Bool = true,
                              progress: ((Int64, Int64) -> Void)? = nil) throws {
         let fm = FileManager.default
         let root = directory.lastPathComponent
@@ -44,7 +45,7 @@ enum ZipWriter {
                 let full = url.standardizedFileURL.resolvingSymlinksInPath().path
                 var rel = full.hasPrefix(basePath) ? String(full.dropFirst(basePath.count)) : url.lastPathComponent
                 if rel.hasPrefix("/") { rel.removeFirst() }
-                files.append((url, "\(root)/\(rel)", UInt64(v.fileSize ?? 0), v.contentModificationDate ?? Date()))
+                files.append((url, keepParent ? "\(root)/\(rel)" : rel, UInt64(v.fileSize ?? 0), v.contentModificationDate ?? Date()))
             }
         }
         // manifest first is friendlier for streaming readers.
@@ -92,7 +93,7 @@ enum ZipWriter {
             offset += UInt64(h.count)
 
             guard let input = try? FileHandle(forReadingFrom: url) else { throw ZipError.cannotOpen(url.path) }
-            var crc = CRC32()
+            var crc = ZipCRC32()
             var written: UInt64 = 0
             while true {
                 let chunk = try autoreleasepool { try input.read(upToCount: chunkSize) } ?? Data()
@@ -199,7 +200,7 @@ enum ZipWriter {
 }
 
 /// CRC-32 (IEEE 802.3), slicing-by-8.
-struct CRC32 {
+struct ZipCRC32 {
     private static let tables: [[UInt32]] = {
         var t = [[UInt32]](repeating: [UInt32](repeating: 0, count: 256), count: 8)
         for i in 0..<256 {

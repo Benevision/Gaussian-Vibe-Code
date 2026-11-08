@@ -71,6 +71,11 @@ class SplatWorkerApp(Adw.Application):
                 self.window.start_server()
 
     def do_shutdown(self) -> None:
+        if self.window is not None:
+            self.window.updater.close()
+            studio = getattr(self.window, "studio", None)
+            if studio is not None:
+                studio.shutdown()  # cancel local pipelines (while the server still answers), stop the receiver
         if self.state is not None:
             self.state.shutdown()  # stops the server (jobs are cancelled cleanly)
         Adw.Application.do_shutdown(self)
@@ -118,7 +123,7 @@ class SplatWorkerApp(Adw.Application):
             if not self._background_requested:
                 self._request_background(s.autostart)
             n = Gio.Notification.new(f"{APP_NAME} is still running")
-            n.set_body("The worker server keeps working for your Mac. Open SplatWork again to see it, or choose "
+            n.set_body("The server keeps working for your Mac. Open SplatWork Node again to see it, or choose "
                        "Quit in its menu to stop it.")
             n.set_default_action("app.show")
             self.send_notification("background", n)
@@ -130,14 +135,19 @@ class SplatWorkerApp(Adw.Application):
     def _quit(self, *_args) -> None:
         jobs = self.window._last_poll.jobs if self.window and self.window._last_poll else []
         running = [j for j in jobs if j.get("state") in ("loading", "training")]
-        if running and self.window is not None:
+        studio = getattr(self.window, "studio", None) if self.window else None
+        local = studio.busy_names() if studio is not None else []
+        if (running or local) and self.window is not None:
             self._present()
 
             def answer(rid):
                 if rid == "quit":
                     self._really_quit()
-            alert(self.window, "Quit SplatWork?",
-                  f"{len(running)} job(s) are running and will be stopped.",
+            what = [f"{len(running)} job(s) are running"] if running else []
+            if local:
+                what.append("working on " + ", ".join(local))
+            alert(self.window, "Quit SplatWork Node?",
+                  " and ".join(what).capitalize() + "; this is stopped.",
                   (("cancel", "Cancel", "default"), ("quit", "Quit", "destructive")), answer)
         else:
             self._really_quit()
@@ -180,7 +190,7 @@ class SplatWorkerApp(Adw.Application):
 
     def _about(self, *_args) -> None:
         kwargs = dict(application_name=APP_NAME, application_icon=APP_ID, version=__version__,
-                      developer_name="Splat Studio", license_type=Gtk.License.MIT_X11,
+                      developer_name="SplatWork", license_type=Gtk.License.MIT_X11,
                       comments="View, create and edit Gaussian splats on this PC, and train them for "
                                "SplatWork on your Mac with this computer's NVIDIA GPU.")
         if hasattr(Adw, "AboutDialog"):  # libadwaita 1.5

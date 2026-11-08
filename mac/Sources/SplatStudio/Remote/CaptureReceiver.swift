@@ -24,7 +24,7 @@ struct CaptureTransfer: Identifiable, Hashable, Sendable {
     var fraction: Double? { expected.map { $0 > 0 ? Double(received) / Double($0) : 0 } }
 }
 
-/// Receives `.splatcapture` uploads from Splat Capture (iOS): an HTTP/1.1 server on `NWListener`
+/// Receives `.splatcapture` uploads from SplatWork Capture (iOS): an HTTP/1.1 server on `NWListener`
 /// advertising `_splatcapture._tcp` (TXT `name`, `version=1`). Bodies are streamed to a temp file,
 /// unzipped with `ditto` into `inbox`, and published in `received`.
 @MainActor
@@ -35,7 +35,7 @@ final class CaptureReceiver {
     enum State: Equatable { case stopped, starting, listening(port: UInt16), failed(String) }
 
     private(set) var state: State = .stopped
-    /// Default port (Splat Capture's manual-entry default). Falls back to a free port if taken.
+    /// Default port (SplatWork Capture's manual-entry default). Falls back to a free port if taken.
     nonisolated static let defaultPort: UInt16 = 7879
     /// The bound port while listening (for "host:port" manual entry on the iPhone).
     private(set) var listeningPort: UInt16?
@@ -240,7 +240,7 @@ final class CaptureHTTPServer: @unchecked Sendable {
         let cfg = config
         switch (r.method, r.path.split(separator: "?").first.map(String.init) ?? r.path) {
         case ("GET", "/v1/hello"):
-            return Response(status: 200, json: ["name": cfg.name, "app": "Splat Studio", "version": 1])
+            return Response(status: 200, json: ["name": cfg.name, "app": "SplatWork", "version": 1])
         case ("POST", "/v1/captures"):
             if cfg.requirePairing && r.headers["x-pairing-code"]?.trimmingCharacters(in: .whitespaces) != cfg.pairingCode {
                 events?(.rejected("Upload from \(r.peer ?? "?") rejected: wrong or missing pairing code"))

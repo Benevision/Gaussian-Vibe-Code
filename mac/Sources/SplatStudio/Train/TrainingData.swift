@@ -124,6 +124,16 @@ enum GaussianInitializer {
             var p2: [SIMD3<Float>] = [], c2: [SIMD3<UInt8>] = []
             for (i, p) in pts.enumerated() where all(p .>= lo - m) && all(p .<= hi + m) { p2.append(p); c2.append(i < cols.count ? cols[i] : SIMD3(128, 128, 128)) }
             pts = p2; cols = c2
+            if pts.isEmpty {
+                // A block with no triangulated points (foliage, sky-facing, textureless): start from a uniform
+                // fill of its box instead of nothing (the iPhone trained such a block to 0 splats).
+                var rng = SplitMix64(seed: UInt64(config.seed) &+ 11)
+                let n = min(50_000, max(config.maxGaussians / 10, 1_000))
+                for _ in 0..<n {
+                    pts.append(lo - m + SIMD3(rng.uniform(), rng.uniform(), rng.uniform()) * (hi - lo + 2 * m))
+                    cols.append(SIMD3(128, 128, 128))
+                }
+            }
         }
         // Sparse SfM clouds (Apple Object Capture yields ~1–5 k points) are topped up so densification
         // starts from a useful population: jittered copies of real points at their local spacing, plus a

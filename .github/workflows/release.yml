@@ -1,9 +1,9 @@
 # Suite release: push a tag like v1.4.0 and this builds
-#   * Splat Studio for Mac (Apple silicon) as a .dmg — version = the tag
-#   * Splat Worker for Linux as a single-file .flatpak (its own version, linux/splatworker/__init__.py)
+#   * SplatWork for Mac (Apple silicon) as a .dmg — version = the tag
+#   * SplatWork Node for Linux as a single-file .flatpak (its own version, linux/splatworker/__init__.py)
 # and publishes them on one GitHub Release with SHA-256 checksums and install notes.
 #
-#   git tag -a v1.4.0 -m "Splat Studio 1.4.0" && git push origin v1.4.0
+#   git tag -a v1.4.0 -m "SplatWork 1.4.0" && git push origin v1.4.0
 #
 # Workers that added the Flatpak remote keep updating on every push to main (splat-worker-flatpak.yml);
 # the release bundle is for new installs and for PCs without the remote.
@@ -45,7 +45,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then V="${GITHUB_REF_NAME#v}"; else V="${{ inputs.version }}"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
-      - name: Build Splat Studio.app
+      - name: Build SplatWork.app
         env:
           SPLAT_VERSION: ${{ steps.v.outputs.version }}
         run: |
@@ -69,7 +69,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC" >/dev/null
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           ID=$(security find-identity -v -p codesigning "$KC" | awk -F'"' '/Developer ID Application/{print $2; exit}')
-          APP="mac/build/Splat Studio.app"
+          APP="mac/build/SplatWork.app"
           codesign --force --deep --options runtime --timestamp --sign "$ID" "$APP"
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
@@ -99,7 +99,9 @@ jobs:
           key: fpb-bundle-${{ hashFiles('linux/flatpak/*.yml', 'linux/flatpak/python3-deps.json') }}-${{ github.sha }}
           restore-keys: fpb-bundle-${{ hashFiles('linux/flatpak/*.yml', 'linux/flatpak/python3-deps.json') }}-
       - name: Build single-file bundle
-        run: linux/flatpak/make-bundle.sh
+        run: |
+          export SPLAT_REPO_URL="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/flatpak/repo/"
+          linux/flatpak/make-bundle.sh
       - uses: actions/upload-artifact@v4
         with:
           name: worker
@@ -126,20 +128,20 @@ jobs:
           WV=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' linux/splatworker/__init__.py)
           PREV=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"; REPO="${GITHUB_REPOSITORY#*/}"
-          SIGNED="ad-hoc signed (not notarized): the first time, right-click the app → **Open** → **Open**, or run \`xattr -dr com.apple.quarantine \"/Applications/Splat Studio.app\"\`."
+          SIGNED="ad-hoc signed (not notarized): the first time, right-click the app → **Open** → **Open**, or run \`xattr -dr com.apple.quarantine \"/Applications/SplatWork.app\"\`."
           [ "$NOTARIZED" = "true" ] && SIGNED="signed with a Developer ID and notarized."
           {
             echo "## Install"
             echo
-            echo "**Mac (Apple silicon, macOS 15 or later)** — \`$DMG\`: open it and drag Splat Studio to Applications. This build is $SIGNED"
+            echo "**Mac (Apple silicon, macOS 15 or later)** — \`$DMG\`: open it and drag SplatWork to Applications. This build is $SIGNED"
             echo
-            echo "**Linux GPU worker (NVIDIA)** — Splat Worker $WV, \`$FP\`:"
+            echo "**Linux GPU worker (NVIDIA)** — SplatWork Node $WV, \`$FP\`:"
             echo '```'
             echo "flatpak install --user $FP"
             echo '```'
             echo "On first start its setup assistant downloads PyTorch, CUDA and gsplat for your driver (about 3 GB). To get updates automatically instead, add the repository: \`flatpak install --user https://$OWNER.github.io/$REPO/flatpak/splatworker.flatpakref\`."
             echo
-            echo "**iPhone (Splat Capture)** — not included: iOS apps can't be installed from a download; build it from \`ios/\` in Xcode."
+            echo "**iPhone (SplatWork Capture)** — not included: iOS apps can't be installed from a download; build it from \`ios/\` in Xcode."
             echo
             echo "## Changes"
             echo
@@ -151,4 +153,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --title "Splat Studio ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag
+          gh release create "$GITHUB_REF_NAME" dist/* --title "SplatWork ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

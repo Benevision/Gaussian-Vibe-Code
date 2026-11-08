@@ -1,10 +1,10 @@
-# Splat Worker systemd unit.
+# SplatWork Node systemd unit.
 # Installed by `./install.sh --system`, or manually:
 #   sudo cp splatworker.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now splatworker
 # Logs: journalctl -u splatworker -f
 [Unit]
-Description=Splat Worker (CUDA Gaussian splat training server for Splat Studio)
+Description=SplatWork Node (CUDA Gaussian splat training server for SplatWork)
 Wants=network-online.target
 After=network-online.target nvidia-persistenced.service
 

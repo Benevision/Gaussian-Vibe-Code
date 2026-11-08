@@ -57,7 +57,7 @@ def _check_gsplat_kernels(torch, gsplat) -> None:
     if not ok:
         raise TrainingError(
             f"gsplat {getattr(gsplat, '__version__', '?')}'s GPU kernels can't load with PyTorch {torch.__version__} — "
-            "the GPU runtime's PyTorch was replaced. Open Splat Worker → menu → Set Up… and run it again to repair "
+            "the GPU runtime's PyTorch was replaced. Open SplatWork Node → menu → Set Up… and run it again to repair "
             "(downloads and settings are kept).")
 
 
@@ -892,7 +892,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 
     use_appearance = cfg.appearanceCorrection
     if use_appearance and exposure_locked([v.camera for v in train_views + eval_views]):
-        # locked exposure (Splat Capture): nothing to correct; the extra freedom cost 1 dB held-out on the Mac
+        # locked exposure (SplatWork Capture): nothing to correct; the extra freedom cost 1 dB held-out on the Mac
         use_appearance = False
         log("exposure is the same in every photo: per-photo colour correction off")
     bilagrid = None

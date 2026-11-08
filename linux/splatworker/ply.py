@@ -64,7 +64,7 @@ def write_gaussian_ply(
     """Write a standard 3DGS PLY atomically (tmp file + rename).
 
     ``up`` (the scene's up direction, from the dataset) is recorded as ``comment splatstudio_up x y z`` so
-    Splat Studio opens the result the right way up (other viewers ignore comments).
+    SplatWork opens the result the right way up (other viewers ignore comments).
 
     Args:
         means: [N, 3]

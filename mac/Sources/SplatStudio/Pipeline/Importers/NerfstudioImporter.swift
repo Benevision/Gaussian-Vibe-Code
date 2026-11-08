@@ -153,12 +153,3 @@ extension Array where Element == Float {
     func padded(_ n: Int) -> [Float] { count >= n ? Array(prefix(n)) : self + [Float](repeating: 0, count: n - count) }
 }
 
-extension ImageUtil {
-    /// Stored pixel size (EXIF orientation NOT applied).
-    static func pixelSizeRaw(_ url: URL) -> (Int, Int)? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-              let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }
-        return (w, h)
-    }
-}

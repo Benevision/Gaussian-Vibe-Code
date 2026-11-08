@@ -44,7 +44,7 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var invertMask: Bool? = nil
     /// auto | cuda | mps | cpu (splatprep extension)
     var device: String? = nil
-    /// Rig description for multi-camera captures (Splat Studio extension; ignored by toolkits that don't support it).
+    /// Rig description for multi-camera captures (SplatWork extension; ignored by toolkits that don't support it).
     var rig: RigHint? = nil
     /// task = frames: the video (relative to the work dir), its extraction options and, for 360° footage, the views.
     var video: String? = nil
@@ -158,6 +158,7 @@ final class LineTail: @unchecked Sendable {
 enum LineStreamingProcess {
     static func run(executable: URL, arguments: [String], cwd: URL? = nil, environment: [String: String]? = nil,
                     stdout: @escaping @Sendable (Substring) -> Void, stderr: @escaping @Sendable (Substring) -> Void) async throws -> Int32 {
+        #if os(macOS)
         let p = Process()
         p.executableURL = executable
         p.arguments = arguments
@@ -180,6 +181,9 @@ enum LineStreamingProcess {
         errSplit.feed(err.fileHandleForReading.readDataToEndOfFile()); errSplit.flush()
         try Task.checkCancellation()
         return p.terminationStatus
+        #else
+        throw PipelineError.unsupported("\(executable.lastPathComponent) can't run on iOS (needs a Mac or a Linux worker)")
+        #endif
     }
 
     final class LineSplitter: @unchecked Sendable {
@@ -283,6 +287,7 @@ struct SplatPrepPoseSolver: PoseSolver {
 
 // MARK: - Python environment
 
+#if os(macOS)
 /// Managed Python virtual environment for splatprep at `~/Library/Application Support/SplatStudio/python`.
 @MainActor
 @Observable
@@ -420,6 +425,16 @@ final class PythonEnvironment {
         guard status == 0 else { throw PipelineError.processFailed("\(exe.lastPathComponent) \(args.first ?? "") failed (\(status)):\n\(tail.text)") }
     }
 }
+#else
+/// iOS: no Python. splatprep steps (learned masks, camera solving) run on a Linux worker instead.
+enum PythonEnvironment {
+    static var root: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SplatStudio/python", isDirectory: true)
+    }
+    static var defaultPython: URL { root.appendingPathComponent("bin/python") }
+    static func locateToolsDirectory() -> URL? { nil }
+}
+#endif
 
 // MARK: - Model cards & benchmarks (for UI display)
 

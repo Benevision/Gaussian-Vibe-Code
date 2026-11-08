@@ -57,7 +57,7 @@ def cmd_serve(args) -> int:
     if token is None:
         log.warning("no token configured: anyone on the network can use this worker "
                     "(use --token-file or SPLATWORKER_TOKEN)")
-    log.info("Splat Worker %s '%s' on %s:%d, data dir %s", __version__, settings.name,
+    log.info("SplatWork Node %s '%s' on %s:%d, data dir %s", __version__, settings.name,
              settings.host, settings.port, settings.data_dir)
     app = create_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=args.log_level,
@@ -173,7 +173,7 @@ def cmd_info(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="splatworker", description="Splat Worker - CUDA training server")
+    p = argparse.ArgumentParser(prog="splatworker", description="SplatWork Node - CUDA training server")
     p.add_argument("--version", action="version", version=f"splatworker {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 

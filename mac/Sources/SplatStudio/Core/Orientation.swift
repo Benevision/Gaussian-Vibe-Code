@@ -3,7 +3,7 @@ import simd
 
 /// Scene orientation helpers.
 ///
-/// Splat files carry no "up" direction. Splat Studio uses the 3DGS/COLMAP convention (world up = −Y),
+/// Splat files carry no "up" direction. SplatWork uses the 3DGS/COLMAP convention (world up = −Y),
 /// normalises every dataset it builds to it, writes `comment splatstudio_up x y z` into PLYs it saves,
 /// and remembers the viewer's up direction per file when the user changes it.
 enum Orientation {

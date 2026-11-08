@@ -1,4 +1,4 @@
-"""splatprep — feature matching, SfM, masking and benchmarking for Splat Studio.
+"""splatprep — feature matching, SfM, masking and benchmarking for SplatWork.
 
 See docs/PROTOCOL.md §2 and §6 for the contract with the Mac app and the
 Linux worker.  Public entry points:

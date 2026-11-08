@@ -4,6 +4,7 @@
 
     splatworker-app                      open the window (first run: setup assistant)
     splatworker-app --background         start the server without a window (used for autostart)
+    splatworker-app --after-update       (internal) start once the previous version has quit
     splatworker-app --headless [ARGS]    no GUI: run `splatworker serve` with the GUI's settings;
                                          ARGS override them (e.g. --port 9000 --no-mdns)
     splatworker-app --headless info      any other splatworker sub-command, in the GPU runtime
@@ -130,7 +131,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv and argv[0] == "--version":
         from splatworker import __version__
 
-        print(f"Splat Worker {__version__} ({APP_ID})")
+        print(f"SplatWork Node {__version__} ({APP_ID})")
         return 0
     if argv and argv[0] in ("--headless", "--cli"):
         exe, cmd, env, warning = headless_command(argv[1:])
@@ -146,6 +147,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     background = "--background" in argv
     try:
         from .gtk.app import run_app
+        if "--after-update" in argv:     # started by the previous version (portal Spawn): let it finish quitting
+            from .gtk.flatpak_update import wait_for_previous_instance
+            wait_for_previous_instance(APP_ID)
     except (ImportError, ValueError) as e:
         print(f"The graphical interface needs GTK 4, libadwaita and PyGObject ({e}).\n"
               "Run with --headless to start the server without it.", file=sys.stderr)

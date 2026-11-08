@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Splat Worker installer: creates a virtualenv with CUDA PyTorch + gsplat.
+# SplatWork Node installer: creates a virtualenv with CUDA PyTorch + gsplat.
 #
 #   ./install.sh                       # venv in ./venv, auto-detect CUDA wheel tag
 #   ./install.sh --cuda cu121          # force a PyTorch CUDA wheel tag (cu118 cu121 cu124 cu126 cu128)
@@ -135,7 +135,7 @@ if [[ "$SYSTEM" == 1 ]]; then
   sed "s#/opt/splatworker/venv#$PREFIX#g" "$HERE/splatworker.service" | sudo tee /etc/systemd/system/splatworker.service >/dev/null
   sudo systemctl daemon-reload
   sudo systemctl enable --now splatworker
-  say "service started. Token (enter this in Splat Studio):"
+  say "service started. Token (enter this in SplatWork):"
   sudo cat /etc/splatworker/token
   warn "the venv at $PREFIX must be readable by the 'splatworker' user"
 else

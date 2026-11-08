@@ -225,7 +225,7 @@ enum SystemBenchmark {
             })
             guard let t0, s1 > s0 else { throw PipelineError.processFailed("benchmark run too short to measure") }
             let rate = Double(s1 - s0) / t1.timeIntervalSince(t0)
-            return DeviceBenchmark(deviceId: "local", name: Host.current().localizedName ?? "This Mac", date: Date(),
+            return DeviceBenchmark(deviceId: "local", name: LocalDeviceName.current, date: Date(),
                                    gpu: MetalContext.shared.device.name, software: appVersion, trainStepsPerSecond: rate,
                                    splats: splats, megapixels: megapixels)
         }.value
@@ -244,7 +244,7 @@ enum SystemBenchmark {
         let up0 = Date()
         let did = try await client.uploadDataset(zip: zip) { f in progress("Uploading to \(endpoint.name)", 0.02 + 0.08 * f) }
         let upSecs = Date().timeIntervalSince(up0)
-        let jid = try await client.createJob(datasetId: did, name: "Splat Studio benchmark", config: config)
+        let jid = try await client.createJob(datasetId: did, name: "SplatWork benchmark", config: config)
         var t0: Date? = nil, s0 = 0, t1 = Date(), s1 = 0
         let final = try await client.waitForJob(jid) { s in
             let step = s.step ?? 0
@@ -271,7 +271,7 @@ enum SystemBenchmark {
     }
 
     private static var appVersion: String {
-        "Splat Studio " + ((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev")
+        "SplatWork " + ((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev")
     }
 }
 
@@ -363,6 +363,21 @@ enum MemoryForecast {
     /// Why a run would not fit on this worker (GPU memory for the splats; host RAM for the photos on workers
     /// that hold every photo in memory), with what to change; nil when it fits or nothing is known.
     static func workerProblem(info: WorkerInfo, dataset: PreparedDataset, config: TrainingConfig) -> String? {
+        // iPhones / Mac workers size jobs to their own memory (fewer splats, smaller images down to 480 px); only
+        // a job that can't fit even then needs splitting. They report what they may still allocate.
+        if let v = info.workerVersion, v.hasPrefix("ios") || v.hasPrefix("mac") {
+            guard let avail = info.memory?.availableMB, avail > 0 else { return nil }
+            var px480: Double = 0, largest: Double = 0
+            for c in dataset.manifest.cameras {
+                let longest = Double(max(c.width, c.height)), s = longest > 480 ? 480 / longest : 1
+                let px = Double(c.width) * s * Double(c.height) * s
+                px480 += px; largest = max(largest, px)
+            }
+            let need = 250 * 1_048_576 + px480 * 4 * 1.6 + largest * 280 + 50_000 * 2_000
+            let usable = Double(avail) * 1_048_576 * 0.65
+            return need > usable ? "\(info.name) can't hold all \(dataset.manifest.cameras.count) photos even at 480 px "
+                + "(about \(formatBytes(Int(need))) of \(formatBytes(Int(usable))) it can use)." : nil
+        }
         var images: Int64 = 0, maxPx: Int64 = 0
         for c in dataset.manifest.cameras {
             let longest = max(c.width, c.height)
@@ -377,7 +392,7 @@ enum MemoryForecast {
             let ram = Int64(info.memory?.availableMB ?? 0) * 1_048_576
             if images > 3 << 30, ram == 0 || images * 2 > ram {
                 return "\(name) would hold all \(dataset.manifest.cameras.count) photos in memory (about \(formatBytes(Int(images * 2)))), "
-                    + "which can freeze it. Update Splat Worker on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
+                    + "which can freeze it. Update SplatWork Node on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
             }
         }
         // GPU: splat state (params, gradients, Adam, rasteriser buffers) + per-pixel scratch + CUDA context.

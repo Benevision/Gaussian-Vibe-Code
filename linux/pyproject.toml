@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "splatworker"
 version = "1.4.0"
-description = "Splat Studio for Linux + Splat Worker: Gaussian-splat studio and LAN CUDA training server"
+description = "SplatWork Node: Gaussian-splat studio and LAN CUDA training server for SplatWork"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

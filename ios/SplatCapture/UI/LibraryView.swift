@@ -8,6 +8,7 @@ struct LibraryView: View {
     @State private var newName = ""
     @State private var deleting: CaptureItem?
     @State private var sending: CaptureItem?
+    @State private var making: CaptureItem?
     @State private var exporter = ZipExporter()
     @State private var errorMessage: String?
 
@@ -29,7 +30,7 @@ struct LibraryView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             }
             .navigationDestination(for: CaptureItem.self) { item in
-                CaptureDetailView(item: item, onSend: { sending = $0 }, onShare: { share($0) },
+                CaptureDetailView(item: item, onMakeSplat: { making = $0 }, onSend: { sending = $0 }, onShare: { share($0) },
                                   onRename: { beginRename($0) }, onDelete: { deleting = $0 })
             }
             .task { await library.reload() }
@@ -53,6 +54,7 @@ struct LibraryView: View {
                 }
             }
             .sheet(item: $sending) { SendToMacView(item: $0) }
+            .fullScreenCover(item: $making) { MakeSplatView(item: $0) }
             .sheet(item: Binding(get: { exporter.readyURL.map(ShareFile.init) },
                                  set: { if $0 == nil { exporter.finishedSharing() } })) { file in
                 ActivityView(items: [file.url])
@@ -91,6 +93,7 @@ struct LibraryView: View {
                             Button { sending = item } label: { Label("Send", systemImage: "desktopcomputer") }.tint(.green)
                         }
                         .contextMenu {
+                            Button { making = item } label: { Label("Make splat", systemImage: "sparkles") }
                             Button { sending = item } label: { Label("Send to Mac", systemImage: "desktopcomputer.and.arrow.down") }
                             Button { share(item) } label: { Label("Share as .zip", systemImage: "square.and.arrow.up") }
                             Button { beginRename(item) } label: { Label("Rename", systemImage: "pencil") }
@@ -98,7 +101,7 @@ struct LibraryView: View {
                         }
                 }
             } footer: {
-                Text("\(library.items.count) captures · \(library.totalBytes.formattedBytes) · Free: \(CaptureStore.freeSpace.formattedBytes). Captures are also visible in the Files app under On My iPhone › Splat Capture › Captures.")
+                Text("\(library.items.count) captures · \(library.totalBytes.formattedBytes) · Free: \(CaptureStore.freeSpace.formattedBytes). Captures are also visible in the Files app under On My iPhone › SplatWork Capture › Captures.")
             }
         }
     }
@@ -169,6 +172,7 @@ struct ThumbnailView: View {
 
 struct CaptureDetailView: View {
     let item: CaptureItem
+    let onMakeSplat: (CaptureItem) -> Void
     let onSend: (CaptureItem) -> Void
     let onShare: (CaptureItem) -> Void
     let onRename: (CaptureItem) -> Void
@@ -197,6 +201,9 @@ struct CaptureDetailView: View {
                 if let d = current.device { LabeledContent("Device", value: d) }
             }
             Section {
+                Button { onMakeSplat(current) } label: {
+                    Label(SplatOutput.for(current.url).exists ? "Splat (view or make again)" : "Make splat", systemImage: "sparkles")
+                }
                 Button { onSend(current) } label: { Label("Send to Mac", systemImage: "desktopcomputer.and.arrow.down") }
                 Button { onShare(current) } label: { Label("Share as .zip (AirDrop, Files…)", systemImage: "square.and.arrow.up") }
                 Button { onRename(current) } label: { Label("Rename", systemImage: "pencil") }

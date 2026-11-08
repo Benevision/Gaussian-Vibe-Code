@@ -56,7 +56,7 @@ struct ComputeScheduler: Sendable {
             t = min(3, max(0.3, gb / 20))
         }
         if let measured = BenchmarkStore.shared.throughput(for: "local") { t = measured }   // Compute → Benchmark
-        return ComputeDevice(id: "local", name: Host.current().localizedName ?? "This Mac", kind: .local, capabilities: caps, throughput: t)
+        return ComputeDevice(id: "local", name: LocalDeviceName.current, kind: .local, capabilities: caps, throughput: t)
     }
 
     /// A remote device from a health-checked worker.

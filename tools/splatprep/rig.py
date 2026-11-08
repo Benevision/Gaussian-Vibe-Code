@@ -10,7 +10,7 @@ mapper solves V·F poses. With the rig:
 * the mapper registers whole frames (COLMAP ≥ 3.12 rigs: ``image_prefix`` sensors, frames grouped by the rest of
   the name), so it solves F poses with the view rotations held fixed, and with the exactly known intrinsics.
 
-Request (from Splat Studio)::
+Request (from SplatWork)::
 
     "rig": {"kind": "multiview",
             "groups": [{"000000_v00.jpg": R, "000000_v01.jpg": R, ...}, ...],   # one dict per frame, in time order

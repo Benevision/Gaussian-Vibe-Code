@@ -44,7 +44,7 @@ def background_options(autostart: bool, token: str, reason: Optional[str] = None
     """``a{sv}`` options as {key: (gvariant type, value)}."""
     return {
         "handle_token": ("s", token),
-        "reason": ("s", reason or "Keep the Splat Worker server running so your Mac can use this GPU."),
+        "reason": ("s", reason or "Keep the SplatWork Node server running so your Mac can use this GPU."),
         "autostart": ("b", bool(autostart)),
         "commandline": ("as", commandline or ["splatworker-app", BACKGROUND_ARG]),
         "dbus-activatable": ("b", False),

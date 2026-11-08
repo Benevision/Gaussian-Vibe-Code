@@ -10,6 +10,7 @@ struct CaptureView: View {
     @State private var showCompute = false
     @State private var flash = false
     @State private var sendTarget: CaptureItem?
+    @State private var makeTarget: CaptureItem?
 
     var body: some View {
         ZStack {
@@ -67,7 +68,7 @@ struct CaptureView: View {
                     model.stopRecording()
                 }
             case .active:
-                if !showLibrary && !showSettings && !showCompute { model.startSession(settings: settings.capture) }
+                if !showLibrary && !showSettings && !showCompute && makeTarget == nil { model.startSession(settings: settings.capture) }
             default: break
             }
         }
@@ -94,6 +95,18 @@ struct CaptureView: View {
                                              sendTarget = library.item(at: summary.url)
                                          }
                                      },
+                                     onMakeSplat: {
+                                         model.showFinished = false
+                                         Task {
+                                             await library.reload()
+                                             try? await Task.sleep(for: .milliseconds(500))
+                                             if let item = library.item(at: summary.url) {
+                                                 // training wants the whole GPU: no AR session underneath
+                                                 model.pauseSession()
+                                                 makeTarget = item
+                                             }
+                                         }
+                                     },
                                      onLibrary: {
                                          model.showFinished = false
                                          openLibrary()
@@ -105,7 +118,10 @@ struct CaptureView: View {
         .sheet(item: $sendTarget) { item in
             SendToMacView(item: item)
         }
-        .alert("Splat Capture", isPresented: Binding(
+        .fullScreenCover(item: $makeTarget, onDismiss: { model.startSession(settings: settings.capture) }) { item in
+            MakeSplatView(item: item)
+        }
+        .alert("SplatWork Capture", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })) {
             if model.errorMessage?.contains("Settings") == true {
@@ -271,6 +287,7 @@ struct CaptureFinishedSheet: View {
     let summary: CaptureSummary
     let autoStopMessage: String?
     let onSend: () -> Void
+    let onMakeSplat: () -> Void
     let onLibrary: () -> Void
     let onDiscard: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -297,6 +314,7 @@ struct CaptureFinishedSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
+                    Button { onMakeSplat() } label: { Label("Make splat", systemImage: "sparkles") }
                     Button { onSend() } label: { Label("Send to Mac", systemImage: "desktopcomputer.and.arrow.down") }
                     Button { onLibrary() } label: { Label("Open Library", systemImage: "square.stack.3d.up") }
                     Button(role: .destructive) { confirmDiscard = true } label: { Label("Discard Capture", systemImage: "trash") }

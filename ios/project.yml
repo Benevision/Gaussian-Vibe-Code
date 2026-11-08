@@ -23,6 +23,12 @@ targets:
     platform: iOS
     sources:
       - path: SplatCapture
+      # The training-worker server (Compute screen), shared with SplatWork's "act as a worker" mode
+      - path: ../mac/Sources/SplatStudio/Worker/WorkerEngine.swift
+      - path: ../mac/Sources/SplatStudio/Worker/HTTPServer.swift
+      - path: ../mac/Sources/SplatStudio/Worker/WorkerRouter.swift
+      - path: ../mac/Sources/SplatStudio/Worker/ZipReader.swift
+      - path: ../mac/Sources/SplatStudio/Worker/ZipWriter.swift
     dependencies:
       - target: SplatTrainKit
     # No com.apple.developer.kernel.increased-memory-limit entitlement: a personal (free) Apple developer team
@@ -50,7 +56,7 @@ targets:
     info:
       path: SplatCapture/Resources/Info.plist
       properties:
-        CFBundleDisplayName: Splat Capture
+        CFBundleDisplayName: SplatWork Capture
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
@@ -62,8 +68,8 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
-        NSCameraUsageDescription: "Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
-        NSLocalNetworkUsageDescription: "Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac, and (Compute screen) lets Splat Studio send training work to this iPhone."
+        NSCameraUsageDescription: "SplatWork Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
+        NSLocalNetworkUsageDescription: "SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac, and (Compute screen) lets SplatWork send training work to this iPhone."
         NSBonjourServices: [_splatcapture._tcp, _splatworker._tcp]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -84,11 +90,41 @@ targets:
       # the whole trainer folder, so new trainer files are picked up (AutoClean is Mac-only tooling but compiles)
       - path: ../mac/Sources/SplatStudio/Train
       - path: ../mac/Sources/SplatStudio/Render/MetalContext.swift
+      - path: ../mac/Sources/SplatStudio/Render/ViewerCamera.swift
       - path: ../mac/Sources/SplatStudio/Render/SplatScene.swift
       - path: ../mac/Sources/SplatStudio/Render/SplatRenderer.swift
       - path: ../mac/Sources/SplatStudio/Render/Coverage.swift
       - path: ../mac/Sources/SplatStudio/Shaders
       - path: ../mac/Sources/SplatStudio/Formats/PLY.swift
+      # On-device preparation of iPhone captures (CaptureImporter → PreparedDataset, Apple Vision masks); the
+      # Process / Python parts (splatprep, ditto) are #if os(macOS) — learned masks and solving go to a worker.
+      - path: ../mac/Sources/SplatStudio/Pipeline/PipelineCommon.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Masking.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Importers/CaptureImporter.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Importers/DatasetWriting.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Poses/PoseCommon.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Poses/SplatPrepRunner.swift
+      # referenced by the above (image remapping / undistortion, option types of the video & 360 sources)
+      - path: ../mac/Sources/SplatStudio/Pipeline/ImageRemapper.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/PhotoIngest.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/VideoFrames.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/Equirect360.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoSources.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoDepth.swift
+      - path: ../mac/Sources/SplatStudio/Formats/SplatFormats.swift
+      - path: ../mac/Sources/SplatStudio/Formats/CompressedPLY.swift
+      # Offloading: discover SplatWork Nodes / Macs (_splatworker._tcp) and train on them, whole or in blocks.
+      - path: ../mac/Sources/SplatStudio/Remote/WorkerClient.swift
+      - path: ../mac/Sources/SplatStudio/Remote/WorkerBrowser.swift
+      - path: ../mac/Sources/SplatStudio/Remote/ComputeScheduler.swift
+      - path: ../mac/Sources/SplatStudio/Remote/BlockTraining.swift
+      - path: ../mac/Sources/SplatStudio/Remote/RemoteStore.swift
+      - path: ../mac/Sources/SplatStudio/Remote/SystemBenchmark.swift
+      # the public facade (TrainKit / TrainKitJob, also used by SplatWork's "act as a worker") and the
+      # pure-Swift zip (ZipUtil on iOS has no /usr/bin/ditto; also compiled into the app target)
+      - path: ../mac/Sources/SplatStudio/Worker/TrainKit.swift
+      - path: ../mac/Sources/SplatStudio/Worker/ZipWriter.swift
+      - path: ../mac/Sources/SplatStudio/Worker/ZipReader.swift
     settings:
       base:
         SWIFT_INSTALL_OBJC_HEADER: NO   # pure Swift; XcodeGen's header-copy script fails under script sandboxing

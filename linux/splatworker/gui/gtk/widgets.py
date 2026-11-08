@@ -155,4 +155,4 @@ def show_job_log(parent: Gtk.Window, client, job_id: str, title: str) -> None:
 
 def empty_clients_row() -> Adw.ActionRow:
     return action_row("No Mac has connected yet",
-                      "Requests from Splat Studio will show up here.", icon="network-idle-symbolic")
+                      "Requests from SplatWork will show up here.", icon="network-idle-symbolic")

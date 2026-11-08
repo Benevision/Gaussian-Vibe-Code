@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=SplatWork
+Name=SplatWork Node
 GenericName=Gaussian Splat Editor & Trainer
 Comment=View, create and edit Gaussian splats; train them on this computer's NVIDIA GPU, also for your Mac
 Exec=splatworker-app
