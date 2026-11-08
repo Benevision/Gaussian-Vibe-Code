@@ -308,9 +308,9 @@ enum SettingsCatalog {
               summary: "Makes runs reproducible.",
               detail: "Same data + same settings + same seed = the same result. Change it to get a different random initialisation.",
               defaultValue: "42"),
-        .init(id: "train.device", group: .trainingBasics, title: "Compute device",
-              summary: "Train on this Mac, on a networked Linux GPU worker, or both.",
-              detail: "This Mac: Metal trainer, no setup. Remote worker: runs Splat Worker (CUDA, gsplat) on your PC — typically 3–8× faster on a recent NVIDIA GPU, with live previews streamed back. Both: the camera solve and training stages are placed on whichever machine is faster, and large scenes are split into spatial blocks that train in parallel on both machines and are merged automatically.",
+        .init(id: "train.device", group: .trainingBasics, title: "Compute devices",
+              summary: "Tick the machines that may work on this project: this Mac, Linux GPU workers, iPhones running Compute.",
+              detail: "One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: Splat Worker with CUDA, typically 2–4× faster than an M4 Pro, with live previews). Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically. An iPhone with Splat Capture's Compute screen open takes small blocks.",
               defaultValue: "This Mac", advanced: false),
 
         .init(id: "train.strategy", group: .densification, title: "Densification strategy",

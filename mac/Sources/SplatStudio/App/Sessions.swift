@@ -32,6 +32,8 @@ final class TrainingSession {
     var customised = false
     var placement: ComputePlacement = .thisMac
     var workerId: String? = nil
+    /// Devices ticked for block-parallel training ("local" = this Mac, else worker ids); nil = every online device.
+    var deviceIds: Set<String>? = nil
     var status = TrainerStatus()
     var remoteMessage: String? = nil
     var livePreview = true
@@ -246,15 +248,16 @@ final class TrainingSession {
 
     private func startBoth(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String) {
         let browser = WorkerBrowser.shared
-        var devices = [ComputeScheduler.localDevice()]
+        let useLocal = deviceIds?.contains("local") ?? true
+        var devices = useLocal ? [ComputeScheduler.localDevice()] : []
         var clients: [String: WorkerClient] = [:]
-        for w in browser.workers {
+        for w in browser.workers where deviceIds?.contains(w.id) ?? true {
             if let h = browser.health[w.id], case .online = h.status, let info = h.info, let c = browser.client(for: w.id) {
                 devices.append(ComputeScheduler.remoteDevice(w, info: info)); clients[w.id] = c
             }
         }
         if clients.isEmpty {
-            remoteMessage = "No online worker — training on this Mac only."
+            remoteMessage = "None of the chosen workers is online — training on this Mac only."
             startLocal(dataset: dataset, config: cfg, output: output); return
         }
         // Splitting only pays off for big scenes: below 400 images a block still sees most of the scene,
@@ -305,7 +308,7 @@ final class TrainingSession {
                 var rateSamples: [(Date, Int)] = []
                 let finalBlocks = blocks
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
-                                                                   local: MetalTrainingRunner(), clients: clients,
+                                                                   local: useLocal ? MetalTrainingRunner() : nil, clients: clients,
                                                                    fits: { fits($0, $1, finalBlocks) }) { bp in
                     Task { @MainActor in
                         guard let self else { return }

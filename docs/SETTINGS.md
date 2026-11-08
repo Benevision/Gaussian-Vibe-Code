@@ -1,6 +1,6 @@
 # Splat Studio — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
@@ -8,9 +8,9 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 - [Editing](#editing) — 7 settings
 - [Sources & frame extraction](#sources--frame-extraction) — 13 settings
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
-- [Masking](#masking) — 3 settings
+- [Masking](#masking) — 4 settings
 - [Training — basics](#training--basics) — 9 settings
-- [Training — densification](#training--densification) — 12 settings
+- [Training — densification](#training--densification) — 13 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
 - [Training — losses & regularisation](#training--losses--regularisation) — 17 settings
 - [Compute & networking](#compute--networking) — 9 settings
@@ -867,6 +867,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 | Setting | Default | Range | Mode |
 |---|---|---|---|
 | [Mask model](#mask-model) | None | – | Easy |
+| [Sky → learned skybox](#sky--learned-skybox) | On for videos, 360° and photos | – | Advanced |
 | [Mask fixed parts of the frame](#mask-fixed-parts-of-the-frame) | Off | – | Advanced |
 | [Invert mask](#invert-mask) | Off | – | Advanced |
 
@@ -888,6 +889,22 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 - Sky removal for outdoor scenes.
 - You can review and correct any masks afterwards with Edit masks… (click an object once and SAM 2 tracks it through every frame).
 - Masks combine with 'Ignore moving objects' during training.
+
+### Sky → learned skybox
+
+> Finds the sky in every photo; it's drawn by a learned backdrop at infinity instead of by splats.
+
+| | |
+|---|---|
+| **Default** | On for videos, 360° and photos |
+| **Mode** | Advanced |
+| **ID** | `mask.sky` |
+
+**How it works.** Splats can't represent something kilometres away: they try to paint the sky as a brown haze with shards floating in it (the worst views of a drone flight).
+
+- With this on, a sky model (SegFormer, or a simple bright-and-smooth-at-the-top heuristic when it isn't installed) marks the sky in each photo as a separate layer, stacked on any other masks.
+- Camera solving ignores it, and training draws those pixels with a learned skybox — a panorama behind the scene — while keeping splats out of them.
+- On by default for videos, 360° footage and photo folders; indoor scenes simply have no sky.
 
 ### Mask fixed parts of the frame
 
@@ -932,7 +949,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 | [Training background](#training-background) | Random | – | Advanced |
 | [Anti-aliased rendering](#anti-aliased-rendering) | On | – | Advanced |
 | [Random seed](#random-seed) | 42 | – | Advanced |
-| [Compute device](#compute-device) | This Mac | – | Easy |
+| [Compute devices](#compute-devices) | This Mac | – | Easy |
 
 ### Quality preset
 
@@ -1058,9 +1075,9 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 
 - Change it to get a different random initialisation.
 
-### Compute device
+### Compute devices
 
-> Train on this Mac, on a networked Linux GPU worker, or both.
+> Tick the machines that may work on this project: this Mac, Linux GPU workers, iPhones running Compute.
 
 | | |
 |---|---|
@@ -1068,9 +1085,10 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 | **Mode** | Easy |
 | **ID** | `train.device` |
 
-**How it works.** This Mac: Metal trainer, no setup. Remote worker: runs Splat Worker (CUDA, gsplat) on your PC — typically 3–8× faster on a recent NVIDIA GPU, with live previews streamed back.
+**How it works.** One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: Splat Worker with CUDA, typically 2–4× faster than an M4 Pro, with live previews).
 
-- Both: the camera solve and training stages are placed on whichever machine is faster, and large scenes are split into spatial blocks that train in parallel on both machines and are merged automatically.
+- Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically.
+- An iPhone with Splat Capture's Compute screen open takes small blocks.
 
 ## Training — densification
 
@@ -1078,6 +1096,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 |---|---|---|---|
 | [Densification strategy](#densification-strategy) | MCMC | – | Advanced |
 | [Splat budget](#splat-budget) | 1 500 000 | 10 000–10 000 000 | Advanced |
+| [Optimizer memory](#optimizer-memory) | Full (fp32) | – | Advanced |
 | [Densify from step](#densify-from-step) | 500 | – | Advanced |
 | [Densify until step](#densify-until-step) | 15 000 | – | Advanced |
 | [Densify every](#densify-every) | 100 | – | Advanced |
@@ -1119,6 +1138,24 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 sett
 **How it works.** With MCMC the scene grows to exactly this number. Memory is roughly 1 KB per gaussian during training (parameters + optimiser state + gradients) and 248 bytes in a PLY.
 
 - 1–1.5 M suits rooms and objects; 3–6 M large outdoor scenes.
+
+### Optimizer memory
+
+> Stores the optimizer's running averages in compressed form so more splats fit in GPU memory.
+
+| | |
+|---|---|
+| **Default** | Full (fp32) |
+| **Effect** | Compact: less memory per splat, slightly noisier optimisation; speed about the same. |
+| **Mode** | Advanced |
+| **ID** | `train.optimizerPrecision` |
+
+**How it works.** Training keeps two running averages (Adam moments) for every number of every splat, which normally takes more memory than the splats themselves.
+
+- Compact stores them as 16-bit values, and the colour detail (higher SH) ones as 8-bit codes, with unbiased random rounding so training behaves almost the same.
+- On this Mac it cuts the optimizer's share from 472 to 152 bytes per splat (about 1 GB less at 3 M splats), which matters most on iPhones and smaller Macs.
+- Same scheme as the Linux worker's setting.
+- Full keeps the exact 32-bit values.
 
 ### Densify from step
 

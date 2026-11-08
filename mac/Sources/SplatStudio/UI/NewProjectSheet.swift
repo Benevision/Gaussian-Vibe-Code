@@ -646,15 +646,54 @@ struct ComputePicker: View {
         self.session = session; self._prepPlacement = prepPlacement; self.dataset = dataset
     }
 
+    /// Ticked devices: "local" and worker ids (from the session's placement when nothing was ticked yet).
+    private var selected: Set<String> {
+        if let s = session.deviceIds { return s }
+        switch session.placement {
+        case .thisMac: return ["local"]
+        case .remote: return [session.workerId ?? browser.workers.first?.id ?? "local"]
+        case .both: return Set(["local"] + browser.workers.map(\.id))
+        }
+    }
+    private func online(_ id: String) -> Bool { if case .online = browser.health[id]?.status { return true }; return false }
+    private func tick(_ id: String) -> Binding<Bool> {
+        Binding(get: { selected.contains(id) }, set: { on in
+            var s = selected
+            if on { s.insert(id) } else if s.count > 1 { s.remove(id) }       // keep at least one device
+            apply(s)
+        })
+    }
+    /// Maps the ticked devices onto the existing modes: this Mac only / one worker / several (block-parallel).
+    private func apply(_ s: Set<String>) {
+        session.deviceIds = s
+        let workers = s.subtracting(["local"])
+        if workers.isEmpty { session.placement = .thisMac }
+        else if s.count == 1, let w = workers.first { session.placement = .remote; session.workerId = w }
+        else { session.placement = .both; session.workerId = workers.sorted().first }
+        prepPlacement = session.placement
+    }
+
     var body: some View {
         SettingRow(id: "train.device") {
-            Picker("", selection: $session.placement) {
-                Text("This Mac").tag(ComputePlacement.thisMac)
-                Text("Linux worker").tag(ComputePlacement.remote)
-                Text("Both").tag(ComputePlacement.both)
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(isOn: tick("local")) {
+                    Text("This Mac").font(.callout) + Text("  \(MetalContext.shared.device.name)").font(.caption).foregroundColor(.secondary)
+                }
+                ForEach(browser.workers) { w in
+                    Toggle(isOn: tick(w.id)) {
+                        Text(w.name).font(.callout)
+                            + Text("  \(w.gpuName ?? w.host)\(online(w.id) ? "" : " · offline")").font(.caption).foregroundColor(online(w.id) ? .secondary : .orange)
+                    }
+                }
+                if browser.workers.isEmpty {
+                    Text("No workers found — start Splat Worker on a PC or Compute on an iPhone (or add one under Compute).")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if selected.count > 1 {
+                    Text("Several devices: big scenes are split into blocks shared between them; small ones train on the fastest.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 260)
-            .onChange(of: session.placement) { _, v in prepPlacement = v }
+            .toggleStyle(.checkbox)
         }
         if let ds = dataset, session.placement != .remote, let problem = MemoryForecast.macProblem(dataset: ds, config: session.config) {
             Label(problem, systemImage: "memorychip").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -674,15 +713,6 @@ struct ComputePicker: View {
                     "\(e.name) ≈ \(formatDuration(e.seconds))" + (e.uploadSeconds >= 30 ? " (incl. \(formatDuration(e.uploadSeconds)) upload)" : "")
                         + (e.deviceId == fastest && est.count > 1 ? " — fastest" : "")
                 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        if session.placement != .thisMac {
-            if browser.workers.isEmpty {
-                Label("No worker found. Start Splat Worker on your PC, or add it under Compute in the sidebar.", systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
-            } else {
-                Picker("Worker", selection: Binding(get: { session.workerId ?? browser.workers.first?.id ?? "" }, set: { session.workerId = $0 })) {
-                    ForEach(browser.workers) { w in Text("\(w.name) — \(w.gpuName ?? w.host)").tag(w.id) }
-                }
             }
         }
     }
