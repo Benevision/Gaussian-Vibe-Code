@@ -1,4 +1,4 @@
-"""Server features for Splat Studio on the same PC: local-folder datasets, the shared priority queue, census."""
+"""Server features for the desktop app on the same PC: local-folder datasets, the shared priority queue, census."""
 import io
 
 import numpy as np
@@ -10,12 +10,14 @@ from splatworker.config import ServerSettings
 from splatworker.server import create_app
 
 TOKEN = "tok"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
+SECRET = "s" * 43
+REMOTE = {"Authorization": f"Bearer {TOKEN}"}
+AUTH = {**REMOTE, "X-SplatWork-Local": SECRET}    # the desktop app that started the server
 
 
-def make(tmp_path, local=True, client_host="127.0.0.1"):
+def make(tmp_path, local=True, client_host="127.0.0.1", secret=SECRET):
     settings = ServerSettings(data_dir=tmp_path / "data", token=TOKEN, name="w", mdns=False,
-                              allow_local_datasets=local)
+                              allow_local_datasets=local, local_secret=secret)
     backend = FakeBackend()
     app = create_app(settings, backend=backend, devices=[None])
     c = TestClient(app, client=(client_host, 50000))
@@ -116,3 +118,53 @@ def test_census_ply_path_is_local_only(tmp_path, dataset_zip):
         wait_state(c, j, "completed")
         k = c.post("/v1/census", json={"datasetId": d["datasetId"], "jobId": j}, headers=AUTH).json()["jobId"]
         assert wait_state(c, k, "completed")["kind"] == "census"
+
+
+def test_loopback_without_the_secret_is_remote(tmp_path):
+    """SSH tunnels / tailscale serve / proxies arrive from 127.0.0.1: only the per-launch secret counts."""
+    ds = make_dataset(tmp_path / "p" / "dataset")
+    with make(tmp_path) as c:
+        bad = {**REMOTE, "X-SplatWork-Local": "x" * 43}
+        for h in (REMOTE, bad):
+            assert c.post("/v1/datasets/local", json={"path": str(ds)}, headers=h).status_code == 403
+        did = c.post("/v1/datasets/local", json={"path": str(ds)}, headers=AUTH).json()["datasetId"]
+        # a remote(-looking) client can't see, train on, download, compose or delete the app's folder datasets
+        assert c.get("/v1/datasets", headers=REMOTE).json() == []
+        listed = c.get("/v1/datasets", headers=AUTH).json()
+        assert [d["datasetId"] for d in listed] == [did] and "external" not in listed[0]
+        assert c.post("/v1/jobs", json={"datasetId": did}, headers=REMOTE).status_code == 404
+        assert c.get(f"/v1/datasets/{did}/archive.zip", headers=REMOTE).status_code == 404
+        assert c.post("/v1/datasets/compose", json={"layers": [{"datasetId": did}]},
+                      headers=REMOTE).status_code == 404
+        assert c.delete(f"/v1/datasets/{did}", headers=REMOTE).status_code == 404
+        j = c.post("/v1/jobs", json={"datasetId": did, "priority": 900}, headers=REMOTE)
+        assert j.status_code == 404
+        j = c.post("/v1/jobs", json={"datasetId": did, "priority": 5000}, headers=AUTH).json()["jobId"]
+        assert wait_state(c, j, "completed")["priority"] == 1000
+        assert c.post(f"/v1/jobs/{j}/prioritize", headers=REMOTE).status_code == 403
+
+
+def test_no_secret_means_no_local_endpoints(tmp_path):
+    ds = make_dataset(tmp_path / "p")
+    with make(tmp_path, secret=None) as c:
+        assert "local" not in c.get("/v1/info", headers=AUTH).json()["capabilities"]
+        assert c.post("/v1/datasets/local", json={"path": str(ds)}, headers=AUTH).status_code == 403
+
+
+def test_export_local_only_into_registered_folders(tmp_path, dataset_zip):
+    proj = tmp_path / "proj" / "dataset"
+    proj.mkdir(parents=True)
+    with make(tmp_path) as c:
+        d = c.post("/v1/datasets", content=dataset_zip, headers={**AUTH, "Content-Type": "application/zip"}).json()
+        did = d["datasetId"]
+        out = tmp_path / "elsewhere"
+        r = c.post(f"/v1/datasets/{did}/export-local", json={"path": str(out)}, headers=AUTH)
+        assert r.status_code == 403 and not out.exists()
+        c.post("/v1/datasets/local", json={"path": str(proj)}, headers=AUTH)
+        r = c.post(f"/v1/datasets/{did}/export-local", json={"path": str(proj / "sub")}, headers=AUTH)
+        assert r.status_code == 200 and (proj / "sub" / "dataset.json").is_file()
+        assert c.post(f"/v1/datasets/{did}/export-local", json={"path": str(proj)},
+                      headers=REMOTE).status_code == 403
+        # broad folders can't be registered
+        for broad in ("/", str(tmp_path / "data"), str(tmp_path)):
+            assert c.post("/v1/datasets/local", json={"path": broad}, headers=AUTH).status_code == 403, broad

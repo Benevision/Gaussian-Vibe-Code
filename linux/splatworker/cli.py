@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from .config import LOCAL_SECRET_ENV
+
 from . import __version__
 
 
@@ -52,7 +54,12 @@ def cmd_serve(args) -> int:
         max_upload_bytes=int(args.max_upload_gb * 1024 ** 3),
         max_extracted_bytes=int(args.max_extracted_gb * 1024 ** 3),
         allow_local_datasets=bool(getattr(args, "allow_local_datasets", False)),
+        # read once and removed, so jobs' subprocesses don't inherit it
+        local_secret=os.environ.pop(LOCAL_SECRET_ENV, None) or None,
     )
+    if settings.allow_local_datasets and not settings.local_enabled:
+        logging.getLogger("splatworker").info(
+            "--allow-local-datasets without %s: the desktop-app-only endpoints stay off", LOCAL_SECRET_ENV)
     log = logging.getLogger("splatworker")
     if token is None:
         log.warning("no token configured: anyone on the network can use this worker "
@@ -194,7 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-extracted-gb", type=float, default=40.0)
     s.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug"])
     s.add_argument("--allow-local-datasets", action="store_true",
-                   help="let clients on 127.0.0.1 register a local folder as a dataset (Splat Studio on this PC)")
+                   help="enable the endpoints for SplatWork Node's desktop app on this PC (local folders as "
+                        "datasets, queue order); it must also pass its per-launch secret in $" + LOCAL_SECRET_ENV)
     s.set_defaults(func=cmd_serve)
 
     t = sub.add_parser("train", help="train a dataset directory locally")

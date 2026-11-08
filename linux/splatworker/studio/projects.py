@@ -25,7 +25,7 @@ PROJECT_FILE = "project.json"
 
 
 def default_root(env=None) -> Path:
-    """``~/Documents/SplatStudio`` (the Flatpak has ``xdg-documents/SplatStudio:create``)."""
+    """``~/Documents/SplatWork`` (the Flatpak has ``xdg-documents/SplatWork:create``)."""
     env = os.environ if env is None else env
     docs = None
     try:
@@ -38,7 +38,7 @@ def default_root(env=None) -> Path:
         docs = None
     if docs is None:
         docs = Path(env.get("HOME") or Path.home()) / "Documents"
-    return docs / "SplatStudio"
+    return docs / "SplatWork"
 
 
 def safe_name(name: str) -> str:
@@ -129,7 +129,7 @@ class Project:
         (root / "outputs").mkdir(exist_ok=True)
         p = cls(root)
         p.update(format="splatstudio-project", version=1, name=name, createdAt=datetime.now().isoformat(),
-                 options=options, app="SplatWork for Linux")
+                 options=options, app="SplatWork Node")
         return p
 
     @classmethod

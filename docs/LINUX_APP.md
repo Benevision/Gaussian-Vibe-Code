@@ -1,4 +1,4 @@
-# SplatWork for Linux — parity plan
+# SplatWork Node (Linux) — parity plan
 
 The Linux desktop app (`linux/`, Flatpak `com.example.SplatWorker`) grows from a GPU **worker** with a status
 window into a full **SplatWork** studio, while the worker server keeps running for the Mac and the iPhone.
@@ -36,7 +36,7 @@ Status: ✅ done · 🟡 partial (what is missing is said) · ⏳ not yet · ➖
   can be moved to the front (`POST /v1/jobs/{id}/prioritize`) or cancelled on the Queue & Worker page, which shows each job's
   origin (this PC / the address of the Mac). The viewer renders with OpenGL and does not use CUDA, so it
   works while either side trains.
-* **Projects** live in `~/Documents/SplatStudio/<name>/` (Flatpak permission `xdg-documents/SplatStudio:create`),
+* **Projects** live in `~/Documents/SplatWork/<name>/` (Flatpak permission `xdg-documents/SplatWork:create`),
   the same layout as the Mac: `project.json`, `dataset/` (`dataset.json`, `images/`, `masks/`,
   `splatprep-sky/masks/`), `outputs/<name>-<time>.ply` + `.sky.png/.sky.json`, `prep.log`. A project made on
   either machine opens on the other.
@@ -172,7 +172,7 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
   a splat spread thinly over many pixels can pass here and fail on the Mac. The plan rules (2 %, 25 % of the
   typical photo count, minimum typical count 12) are identical.
 * The Flatpak's app id stays `com.example.SplatWorker` so existing installs update in place; the window and
-  launcher are called **SplatWork** (the suite was renamed from "Splat Studio").
+  launcher are called **SplatWork Node** (the suite was renamed from "Splat Studio" to SplatWork).
 
 ## What needs testing on the PC (RTX 4080, CachyOS, fish)
 
@@ -182,7 +182,7 @@ end to end against a real HTTP server with a fake trainer and a stand-in splatpr
 
 Install the build from the branch (after the CI build or a local `linux/flatpak/build.sh`), then:
 
-1. **Update prompt.** `flatpak update` should ask to allow the new `xdg-documents/SplatStudio` folder. The app is
+1. **Update prompt.** `flatpak update` should ask to allow the new `xdg-documents/SplatWork` folder. The app is
    now called *SplatWork*; the worker must still show up on the Mac and train a job sent from it.
 2. **Viewer on NVIDIA.** Open a trained PLY with a skybox (one of the Mac's outputs or `…/jobs/<id>/result.ply`):
    the window must not show "The viewer can't start". Check the Renderer row (View tab → Performance) says NVIDIA
@@ -193,7 +193,7 @@ Install the build from the branch (after the CI build or a local `linux/flatpak/
    on the Mac (and SuperSplat for compressed PLY).
 4. **New Project → train.** Photos folder (Quick preview), then a phone video with *Remove people* + sky, then a 360°
    video. Watch stages, the log and the live dashboard; the live preview should appear in the viewer; the result
-   must open when done and land in `~/Documents/SplatStudio/<name>/outputs/` with `.sky.png/.sky.json`.
+   must open when done and land in `~/Documents/SplatWork/<name>/outputs/` with `.sky.png/.sky.json`.
    `flatpak run --command=splatworker com.example.SplatWorker splat-info <result.ply>` shows the splat count.
 5. **Queue sharing.** Start a long training from the Mac, then a project here: the local job waits (status "Waiting
    for the GPU"), then runs before any other job the Mac queued meanwhile; "Run next" (↑ on the Queue & Worker page)
@@ -201,7 +201,7 @@ Install the build from the branch (after the CI build or a local `linux/flatpak/
 6. **Auto clean.** Open a project's result, Edit → Auto clean: a `census` job runs (Queue & Worker shows it), then
    splats are selected; Delete, Undo. Compare the count with the Mac's Auto clean on the same file (the measure
    differs slightly, see Notes).
-7. **iPhone Inbox.** Send a capture from Splat Capture to the PC (pairing code), then *New splat…* on it.
+7. **iPhone Inbox.** Send a capture from SplatWork Capture to the PC (pairing code), then *New splat…* on it.
 8. **Fish / paths.** Nothing in the app uses the shell; `flatpak run …` commands above work as is in fish.
 
 Logs: Queue & Worker → Log, `~/.var/app/com.example.SplatWorker/data/splatworker/data/jobs/<id>/train.log`, and

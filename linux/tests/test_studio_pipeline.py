@@ -82,7 +82,7 @@ def server(tmp_path, monkeypatch):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     settings = ServerSettings(data_dir=tmp_path / "data", token="t", name="w", mdns=False, host="127.0.0.1",
-                              port=port, allow_local_datasets=True)
+                              port=port, allow_local_datasets=True, local_secret="k" * 32)
     backend = FakeBackend()
     app = create_app(settings, backend=backend, devices=[None])
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
@@ -92,7 +92,7 @@ def server(tmp_path, monkeypatch):
         if srv.started:
             break
         time.sleep(0.02)
-    yield Client(f"http://127.0.0.1:{port}", "t"), backend, settings
+    yield Client(f"http://127.0.0.1:{port}", "t", local_secret="k" * 32), backend, settings
     srv.should_exit = True
     th.join(5)
 

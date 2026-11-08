@@ -12,7 +12,7 @@ from typing import Any, List
 
 @dataclass
 class StudioPrefs:
-    projects_dir: str = ""              # "" = ~/Documents/SplatStudio
+    projects_dir: str = ""              # "" = ~/Documents/SplatWork
     local_jobs_first: bool = True       # Studio jobs go ahead of queued remote jobs (never pre-empt)
     rotate_speed: float = 1.0           # nav.rotateSpeed
     pan_speed: float = 1.0              # nav.panSpeed
@@ -23,7 +23,7 @@ class StudioPrefs:
     background: List[float] = dataclasses.field(default_factory=lambda: [0.06, 0.06, 0.07])   # viewer.background
     render_scale: float = 1.0           # viewer.renderScale
     show_cameras: bool = True           # viewer.showCameras
-    receive_captures: bool = True       # net.receive
+    receive_captures: bool = False      # net.receive (off until turned on: listens on every interface)
     require_pairing: bool = True        # net.pairing
     capture_port: int = 7879
 

@@ -98,7 +98,8 @@ class StudioController:
         port = self.state.running_port
         if port is None or self.state.server.snapshot().state != RUNNING:
             return None
-        return Client(f"http://127.0.0.1:{port}", self.state.token(), timeout=30)
+        return Client(f"http://127.0.0.1:{port}", self.state.token(), timeout=30,
+                      local_secret=getattr(self.state, "local_secret", None))
 
     def with_server(self, then: Callable[[Client], None], fail: Callable[[str], None]) -> None:
         """Run ``then(client)`` on a worker thread once the local server answers (starting it if needed)."""
@@ -206,7 +207,8 @@ class StudioController:
             self.inbox_dir, self.state.settings.effective_name() or socket.gethostname(),
             port=self.prefs.capture_port, require_code=self.prefs.require_pairing,
             on_received=lambda cap: GLib.idle_add(self._receiver_event, "received", cap),
-            on_progress=lambda n, d, t: GLib.idle_add(self._receiver_event, "progress", (n, d, t)))
+            on_progress=lambda n, d, t: GLib.idle_add(self._receiver_event, "progress", (n, d, t)),
+            on_code_changed=lambda code: GLib.idle_add(self._receiver_event, "code", code))
         ok = self.receiver.start()
         self._receiver_event("state", ok)
         return ok
@@ -225,9 +227,25 @@ class StudioController:
             self.changed()
         return False
 
+    @property
+    def busy(self) -> bool:
+        """A pipeline is running (between the server's jobs too: importing photos, stacking masks, …)."""
+        return any(r.active for r in self.runs.values())
+
+    def busy_names(self) -> List[str]:
+        return [r.project.name for r in self.runs.values() if r.active]
+
     def shutdown(self) -> None:
-        for run in self.runs.values():
+        """On quit: cancel running pipelines (their server jobs too), stop the iPhone receiver + its Bonjour."""
+        for run in list(self.runs.values()):
             if run.active:
-                run.pipeline.cancel()
+                try:
+                    run.pipeline.cancel()
+                except Exception:  # noqa: BLE001
+                    pass
         if self.receiver:
-            self.receiver.stop()
+            try:
+                self.receiver.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self.receiver = None

@@ -19,6 +19,9 @@ _BACKGROUNDS = ("black", "white", "random")
 _OPTIMIZER_PRECISIONS = ("fp32", "compact")
 
 
+
+LOCAL_SECRET_ENV = "SPLATWORK_LOCAL_SECRET"   # see ServerSettings.local_secret
+
 @dataclass
 class TrainingConfig:
     """Every key of PROTOCOL.md §3 with its documented default.
@@ -317,8 +320,15 @@ class ServerSettings:
     max_extracted_bytes: int = 40 * 1024 ** 3  # total uncompressed size
     max_files: int = 100_000
     max_compression_ratio: float = 200.0       # per entry (zip bomb guard)
-    # Splat Studio on this PC: loopback clients may register a local folder as a dataset (no upload/copy).
+    # The desktop app on this PC may register its own folders as datasets (no upload / copy), export into them,
+    # census a file by path and reorder the queue. It proves who it is with ``local_secret`` (per launch, passed
+    # in the server's environment, sent as the X-SplatWork-Local header); loopback alone is not enough.
     allow_local_datasets: bool = False
+    local_secret: Optional[str] = None
+
+    @property
+    def local_enabled(self) -> bool:
+        return bool(self.allow_local_datasets and self.local_secret and len(self.local_secret) >= 16)
 
     def __post_init__(self) -> None:
         self.data_dir = Path(self.data_dir).expanduser().resolve()

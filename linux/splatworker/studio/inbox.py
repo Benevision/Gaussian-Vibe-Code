@@ -1,15 +1,18 @@
-"""iPhone Inbox: receives ``.splatcapture`` bundles from Splat Capture (PROTOCOL.md §5), like the Mac.
+"""iPhone Inbox: receives ``.splatcapture`` bundles from SplatWork Capture (PROTOCOL.md §5), like the Mac.
 
 HTTP on port 7879 (next free port if taken), Bonjour ``_splatcapture._tcp`` with TXT ``name`` / ``version=1``.
 
-* ``GET /v1/hello`` → ``{"name", "app": "Splat Studio", "version": 1}``
+* ``GET /v1/hello`` → ``{"name", "app": "SplatWork", "version": 1}``
 * ``POST /v1/captures`` (zip; ``X-Capture-Name``, ``X-Pairing-Code``) → ``{"ok": true, "savedAs": "<name>.splatcapture"}``
-  403 when pairing is required and the code is wrong.
+  403 when pairing is required and the code is wrong; 429 after too many wrong codes (see ``Lockout``).
+
+Off until the user turns it on (Inbox page or Preferences → Studio): it listens on every interface.
 
 Captures are unpacked with the worker's safe extractor into ``<inbox>/<name>.splatcapture``.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import secrets
 import shutil
@@ -79,6 +82,43 @@ def list_captures(inbox: Path) -> List[Capture]:
     return sorted(out, key=lambda c: -c.received)
 
 
+class Lockout:
+    """Wrong pairing codes: after ``per_host`` misses within ``window`` s a sender is refused for ``window`` s;
+    after ``total`` misses from anyone the code is replaced (a 6-digit code can't be guessed in 20 tries)."""
+
+    def __init__(self, per_host: int = 5, total: int = 20, window: float = 600.0, clock=time.monotonic):
+        self.per_host, self.total, self.window, self.clock = per_host, total, window, clock
+        self._fails: dict = {}
+        self._total = 0
+        self._lock = threading.Lock()
+
+    def blocked(self, host: str) -> bool:
+        with self._lock:
+            now = self.clock()
+            recent = [t for t in self._fails.get(host, []) if now - t < self.window]
+            self._fails[host] = recent
+            return len(recent) >= self.per_host
+
+    def failed(self, host: str) -> bool:
+        """Record a miss; True when the code should be replaced."""
+        with self._lock:
+            self._fails.setdefault(host, []).append(self.clock())
+            self._total += 1
+            if self._total >= self.total:
+                self._total = 0
+                return True
+            return False
+
+    def reset(self) -> None:
+        with self._lock:
+            self._fails.clear()
+            self._total = 0
+
+
+def code_matches(given: str, code: str) -> bool:
+    return hmac.compare_digest(given.replace(" ", "").encode(), code.encode())
+
+
 def _unique(inbox: Path, name: str) -> Path:
     safe = "".join(ch if ch.isalnum() or ch in " ._-()" else "_" for ch in name).strip(" .") or "Capture"
     p, k = inbox / f"{safe}.splatcapture", 2
@@ -90,7 +130,8 @@ def _unique(inbox: Path, name: str) -> Path:
 class CaptureReceiver:
     def __init__(self, inbox: Path, name: str, port: int = 7879, require_code: bool = True,
                  on_received: Optional[Callable[[Capture], None]] = None,
-                 on_progress: Optional[Callable[[str, int, int], None]] = None, mdns: bool = True):
+                 on_progress: Optional[Callable[[str, int, int], None]] = None, mdns: bool = True,
+                 on_code_changed: Optional[Callable[[str], None]] = None):
         self.inbox = Path(inbox)
         self.name = name
         self.port = port
@@ -99,6 +140,9 @@ class CaptureReceiver:
         self.on_received = on_received
         self.on_progress = on_progress
         self.mdns = mdns
+        self.on_code_changed = on_code_changed
+        self.lockout = Lockout()
+        self._name_lock = threading.Lock()      # two uploads with the same name get different folders
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._zc = None
         self._info = None
@@ -128,14 +172,23 @@ class CaptureReceiver:
 
             def do_GET(self):
                 if self.path.split("?")[0] == "/v1/hello":
-                    return self._json(200, {"name": receiver.name, "app": "Splat Studio", "version": 1})
+                    return self._json(200, {"name": receiver.name, "app": "SplatWork", "version": 1})
                 self._json(404, {"error": "not found"})
 
             def do_POST(self):
                 if self.path.split("?")[0] != "/v1/captures":
                     return self._json(404, {"error": "not found"})
-                if receiver.require_code and self.headers.get("X-Pairing-Code", "").replace(" ", "") != receiver.code:
-                    return self._json(403, {"error": "wrong or missing pairing code"})
+                host = self.client_address[0]
+                if receiver.require_code:
+                    if receiver.lockout.blocked(host):
+                        self.close_connection = True
+                        return self._json(429, {"error": "too many wrong pairing codes; try again in 10 minutes"})
+                    if not code_matches(self.headers.get("X-Pairing-Code", ""), receiver.code):
+                        if receiver.lockout.failed(host):
+                            receiver.new_code()
+                        time.sleep(0.5)              # slow guessing down a little more
+                        self.close_connection = True
+                        return self._json(403, {"error": "wrong or missing pairing code"})
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
                 except ValueError:
@@ -186,8 +239,9 @@ class CaptureReceiver:
             root = roots[0] if len(roots) == 1 and roots[0].is_dir() and not (out / "manifest.json").exists() else out
             if not (root / "manifest.json").is_file():
                 raise ValueError("not a capture bundle (no manifest.json)")
-            dest = _unique(self.inbox, name)
-            shutil.move(str(root), dest)
+            with self._name_lock:
+                dest = _unique(self.inbox, name)
+                shutil.move(str(root), dest)
             (dest / ".received.json").write_text(json.dumps({"time": time.time(), "sender": sender}))
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -195,6 +249,13 @@ class CaptureReceiver:
         if self.on_received:
             self.on_received(cap)
         return cap
+
+    def new_code(self) -> str:
+        self.code = new_code()
+        self.lockout.reset()
+        if self.on_code_changed:
+            self.on_code_changed(self.code)
+        return self.code
 
     def _advertise(self) -> None:
         try:

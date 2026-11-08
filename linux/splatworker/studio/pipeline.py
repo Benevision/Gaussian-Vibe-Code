@@ -17,6 +17,7 @@ dataset.json (masks, sky, holdout) → training. Events go to ``on_event(kind, d
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import time
@@ -111,6 +112,19 @@ class LocalPipeline:
     def _progress(self, fraction: float, message: str = "") -> None:
         self.emit("progress", {"fraction": fraction, "message": message})
 
+    def _video_folder(self, video: Path) -> Path:
+        """A folder holding (a link to) the video that the server accepts as a dataset: the project's own
+        ``source/`` (the video's folder may be too broad to register, e.g. the home folder)."""
+        d = self.project.root / "source"
+        d.mkdir(exist_ok=True)
+        dst = d / video.name
+        if not dst.exists():
+            try:
+                os.link(video, dst)
+            except OSError:
+                os.symlink(video.resolve(), dst)
+        return d
+
     def _register(self, folder: Path) -> str:
         info = self.client.local_dataset(folder)
         self._registered.append(info["datasetId"])
@@ -182,6 +196,7 @@ class LocalPipeline:
     def _run(self) -> Optional[Path]:
         o, ds = self.o, self.project.dataset_dir
         ds.mkdir(parents=True, exist_ok=True)
+        self._register(ds)          # the server only exports into folders the app registered
         src = Path(o.source)
         has_priors = False
         imported = False
@@ -189,7 +204,7 @@ class LocalPipeline:
         # 1. source → images (or a finished dataset.json)
         if o.source_kind in ("video", "video360"):
             self._stage("Extracting frames")
-            vid = self._register(src.parent)
+            vid = self._register(self._video_folder(src))
             req = o.frames_request(src.name)
             req["outputDir"] = f"_frames_{uuid.uuid4().hex[:6]}"
             self._process(vid, req, "frames", ds)

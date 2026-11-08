@@ -95,7 +95,7 @@ def test_capture_receiver(tmp_path):
     try:
         base = f"http://127.0.0.1:{r.port}"
         hello = json.loads(urllib.request.urlopen(base + "/v1/hello").read())
-        assert hello == {"name": "Test PC", "app": "Splat Studio", "version": 1}
+        assert hello == {"name": "Test PC", "app": "SplatWork", "version": 1}
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
             z.writestr("Kitchen.splatcapture/manifest.json", json.dumps({"format": "splatcapture", "frames": [{}]}))
@@ -116,6 +116,55 @@ def test_capture_receiver(tmp_path):
         assert (caps[0].path / "images" / "000000.jpg").read_bytes() == b"jpeg"
     finally:
         r.stop()
+
+
+def test_pairing_lockout_and_name_race(tmp_path, monkeypatch):
+    import threading
+
+    from splatworker.studio import inbox
+    from splatworker.studio.inbox import CaptureReceiver, Lockout, code_matches
+
+    assert code_matches("123 456", "123456") and not code_matches("123457", "123456")
+    now = [0.0]
+    lk = Lockout(per_host=3, total=5, window=60, clock=lambda: now[0])
+    for _ in range(3):
+        assert not lk.blocked("a")
+        lk.failed("a")
+    assert lk.blocked("a") and not lk.blocked("b")
+    now[0] = 61
+    assert not lk.blocked("a")
+    assert lk.failed("b") is False and lk.failed("b") is True     # 5th miss overall: replace the code
+
+    # two uploads named alike at once get different folders
+    import io
+    import json
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("manifest.json", json.dumps({"frames": []}))
+    data = buf.getvalue()
+    r = CaptureReceiver(tmp_path / "inbox", "PC", mdns=False)
+    r.inbox.mkdir(parents=True)
+    real_move = inbox.shutil.move
+
+    def slow_move(a, b):
+        import time
+        time.sleep(0.05)
+        return real_move(a, b)
+    monkeypatch.setattr(inbox.shutil, "move", slow_move)
+    out = []
+    ts = [threading.Thread(target=lambda: out.append(r._receive(io.BytesIO(data), len(data), "Same", "x")))
+          for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len({c.path for c in out}) == 3
+    changed = []
+    r.on_code_changed = changed.append
+    old = r.code
+    r.new_code()
+    assert changed and (changed[0] == r.code) and (r.code != old or len(r.code) == 6)
 
 
 def test_cli_convert_and_info(tmp_path, capsys):

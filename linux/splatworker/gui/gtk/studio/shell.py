@@ -7,6 +7,7 @@ from typing import Optional
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
+from ... import APP_NAME
 from ....studio.formats import OPENABLE_SUFFIXES
 from ....studio.projects import Project
 from .rows import plain_row
@@ -34,26 +35,55 @@ SHORTCUTS = [
 ]
 
 
+class BrokenPage(Adw.Bin):
+    """Stands in for a Studio page that failed to build, so the rest (above all the worker page) still works.
+    Any method the shell calls on the real page is a no-op that says what went wrong."""
+
+    def __init__(self, title: str, error: BaseException, toast_fn):
+        super().__init__()
+        import traceback
+
+        self._title, self._error, self._toast = title, error, toast_fn
+        sp = Adw.StatusPage(icon_name="dialog-warning-symbolic", title=f"{title} could not be opened",
+                            description=f"{type(error).__name__}: {error}")
+        self.set_child(sp)
+        traceback.print_exception(error)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *a, **k: self._toast(f"{self._title} is not available: {self._error}")
+
+
 class StudioShell:
     """Builds the split view; expects ``self.toasts`` and the worker page (``worker_view``)."""
 
     def build_studio(self, worker_view: Gtk.Widget, menu_model) -> Gtk.Widget:
         self.studio = StudioController(self.state, toast=lambda m: toast(self.toasts, m))
         self.pages = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
-        self.viewer_page = ViewerPage(self, self.studio, self.new_project)
-        self.projects_page = ProjectsPage(self, self.studio, self.new_project, self.open_path)
-        self.inbox_page = InboxPage(self, self.studio, self.new_project)
-        self.models_page = ModelsPage(self, self.state)
+
+        def page(title, factory):
+            try:
+                return factory()
+            except Exception as e:  # noqa: BLE001 — one broken page must not take the worker down
+                return BrokenPage(title, e, lambda m: toast(self.toasts, m))
+        self.viewer_page = page("Viewer", lambda: ViewerPage(self, self.studio, self.new_project))
+        self.projects_page = page("Projects",
+                                  lambda: ProjectsPage(self, self.studio, self.new_project, self.open_path))
+        self.inbox_page = page("iPhone Inbox", lambda: InboxPage(self, self.studio, self.new_project))
+        self.models_page = page("Models & Benchmarks", lambda: ModelsPage(self, self.state, self.studio))
         self.pages.add_named(self.viewer_page, "viewer")
         self.pages.add_named(self.projects_page, "projects")
         self.pages.add_named(worker_view, "worker")
         self.pages.add_named(self.inbox_page, "inbox")
         self.pages.add_named(self.models_page, "models")
-        self.pages.add_named(ReferencePage(), "reference")
+        self.pages.add_named(page("Settings Reference", ReferencePage), "reference")
+        if self.studio.prefs.receive_captures:     # the receiver belongs to the app, not to the Inbox page
+            GLib.idle_add(lambda: (self.studio.start_receiver(), False)[1])
 
         side = Adw.ToolbarView()
         sh = Adw.HeaderBar()
-        sh.set_title_widget(Adw.WindowTitle(title="SplatWork"))
+        sh.set_title_widget(Adw.WindowTitle(title=APP_NAME))
         sh.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu_model, tooltip_text="Main menu",
                                    primary=True))
         side.add_top_bar(sh)
@@ -90,7 +120,7 @@ class StudioShell:
         side.set_content(ssw)
 
         self.split_view = Adw.NavigationSplitView(min_sidebar_width=200, max_sidebar_width=260)
-        self.split_view.set_sidebar(Adw.NavigationPage(title="SplatWork", child=side))
+        self.split_view.set_sidebar(Adw.NavigationPage(title=APP_NAME, child=side))
         self.content_page = Adw.NavigationPage(title="Viewer", child=self.pages)
         self.split_view.set_content(self.content_page)
         self.show_section("viewer")

@@ -112,7 +112,7 @@ class InboxPage(Gtk.Box):
         self.on_new_project = on_new_project
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_top=18, margin_bottom=18,
                       margin_start=18, margin_end=18)
-        recv = group("Receive from iPhone", "Splat Capture finds this PC on the network (Bonjour "
+        recv = group("Receive from iPhone", "SplatWork Capture finds this PC on the network (Bonjour "
                      "_splatcapture._tcp) and sends captures here.")
         self.recv_switch = switch_row("Receive captures", controller.prefs.receive_captures, self._toggle,
                                       "net.receive")
@@ -140,8 +140,6 @@ class InboxPage(Gtk.Box):
         self.append(_page("iPhone Inbox", sw, header_extra=[refresh]))
         controller.receiver_listeners.append(self._event)
         controller.listeners.append(self.refresh)
-        if controller.prefs.receive_captures:
-            GLib.idle_add(lambda: (controller.start_receiver(), False)[1])
         self.refresh()
         self._render_status()
 
@@ -159,7 +157,7 @@ class InboxPage(Gtk.Box):
 
     def _new_code(self) -> None:
         if self.ctl.receiver:
-            self.ctl.receiver.code = new_code()
+            self.ctl.receiver.new_code()
         self._render_status()
 
     def _event(self, kind, data) -> None:
@@ -189,7 +187,7 @@ class InboxPage(Gtk.Box):
         self._rows = []
         caps = list_captures(self.ctl.inbox_dir)
         if not caps:
-            row = action_row("No captures yet", "Record one with Splat Capture on the iPhone and tap Send.",
+            row = action_row("No captures yet", "Record one with SplatWork Capture on the iPhone and tap Send.",
                              icon="phone-symbolic")
             self.list_group.add(row)
             self._rows.append(row)
@@ -234,9 +232,10 @@ class InboxPage(Gtk.Box):
 # ============================================================================ models
 
 class ModelsPage(Gtk.Box):
-    def __init__(self, window, app_state):
+    def __init__(self, window, app_state, studio=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.state = app_state
+        self.studio = studio
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_top=18, margin_bottom=18,
                       margin_start=18, margin_end=18)
         rt = group("GPU runtime", "PyTorch, gsplat and the processing models live in this app's data folder.")

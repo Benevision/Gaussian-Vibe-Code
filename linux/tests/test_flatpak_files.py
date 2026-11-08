@@ -31,8 +31,8 @@ def test_manifest_basics(manifest):
     for needed in ("--share=network", "--device=all", "--socket=wayland", "--socket=fallback-x11",
                    "--talk-name=org.freedesktop.Avahi", "--filesystem=xdg-download"):
         assert needed in fa
-    # no broad filesystem access: Downloads (exports) and ~/Documents/SplatStudio (projects) only
-    allowed = {"--filesystem=xdg-download", "--filesystem=xdg-documents/SplatStudio:create"}
+    # no broad filesystem access: Downloads (exports) and ~/Documents/SplatWork (projects) only
+    allowed = {"--filesystem=xdg-download", "--filesystem=xdg-documents/SplatWork:create"}
     assert not [a for a in fa if a.startswith("--filesystem=") and a not in allowed]
 
 

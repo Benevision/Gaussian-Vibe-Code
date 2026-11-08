@@ -53,6 +53,7 @@ STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin")
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+LOCAL_HEADER = "X-SplatWork-Local"   # per-launch secret of the desktop app that started this server
 
 
 class ApiError(Exception):
@@ -444,7 +445,9 @@ class JobManager:
 _RAW_NAME = re.compile(r"[A-Za-z0-9._ -]{1,200}")
 
 
-def dataset_root(settings: ServerSettings, dataset_id: str) -> Optional[Path]:
+def dataset_root(settings: ServerSettings, dataset_id: str, local: bool = True) -> Optional[Path]:
+    """The dataset's folder. ``local=False`` (a request from another computer) hides datasets that are folders
+    of the desktop app on this PC (``POST /v1/datasets/local``): remote clients can neither see nor use them."""
     if not ID_RE.match(dataset_id or ""):
         return None
     d = settings.datasets_dir / dataset_id
@@ -457,8 +460,8 @@ def dataset_root(settings: ServerSettings, dataset_id: str) -> Optional[Path]:
     except Exception:
         return None
     if m.get("external"):
-        # a folder of Splat Studio on this PC (POST /v1/datasets/local), used in place
-        if not settings.allow_local_datasets:
+        # a folder of the desktop app on this PC (POST /v1/datasets/local), used in place
+        if not settings.local_enabled or not local:
             return None
         root = Path(m["external"]).resolve()
         return root if root.is_dir() else None
@@ -672,8 +675,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         caps = caps + ["priority"]        # ≥ 1.4.0: POST /v1/jobs/{id}/prioritize, JobStatus.priority / origin
         if "train" in caps:
             caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)
-        if settings.allow_local_datasets:
-            caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (loopback only)
+        if settings.local_enabled:
+            caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (the desktop app on this PC only)
         try:
             models = backend.models() if "process" in caps else []
         except Exception:
@@ -700,8 +703,21 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     installer = RuntimeInstaller()
 
     def _origin(request: Request) -> str:
+        """"local" = the desktop app that started this server: a loopback connection that also carries the
+        per-launch secret only that process knows. Loopback alone proves nothing (SSH tunnels, ``tailscale serve``
+        and reverse proxies all arrive from 127.0.0.1), so without the secret a request counts as remote."""
         host = request.client.host if request.client else ""
-        return "local" if host in LOOPBACK else host
+        if host in LOOPBACK and settings.local_enabled:
+            given = request.headers.get(LOCAL_HEADER, "")
+            if given and hmac.compare_digest(given.encode(), settings.local_secret.encode()):
+                return "local"
+        return host or "unknown"
+
+    def _is_local(request: Request) -> bool:
+        return _origin(request) == "local"
+
+    def _root(request: Request, dataset_id: str) -> Optional[Path]:
+        return dataset_root(settings, dataset_id, local=_is_local(request))
 
     def _priority(request: Request, body: Dict[str, Any]) -> int:
         """Only clients on this PC (the Studio) may ask to go first; remote jobs always queue at 0."""
@@ -815,7 +831,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             if not isinstance(l, dict):
                 raise ApiError(400, "each layer must be an object")
             did = l.get("datasetId")
-            if not isinstance(did, str) or dataset_root(settings, did) is None:
+            if not isinstance(did, str) or _root(request, did) is None:
                 raise ApiError(404, f"dataset {did} not found")
             prefix = l.get("prefix") or ""
             if prefix:
@@ -834,12 +850,12 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
 
     @app.post("/v1/datasets/local")
     async def register_local_dataset(request: Request):
-        """``{"path": "/abs/folder"}`` → a dataset that IS that folder (nothing copied). Loopback clients only, and
-        only when the server runs with ``--allow-local-datasets`` (the desktop app on this PC)."""
-        if not settings.allow_local_datasets:
+        """``{"path": "/abs/folder"}`` → a dataset that IS that folder (nothing copied). Only the desktop app that
+        started this server (``--allow-local-datasets`` + the per-launch secret, see ``_origin``)."""
+        if not settings.local_enabled:
             raise ApiError(403, "local datasets are disabled on this worker")
-        if _origin(request) != "local":
-            raise ApiError(403, "local datasets can only be registered from this computer")
+        if not _is_local(request):
+            raise ApiError(403, "local datasets can only be registered by the desktop app on this computer")
         body = await json_body(request)
         path = body.get("path")
         if not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path:
@@ -847,6 +863,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         root = Path(path).resolve()
         if not root.is_dir():
             raise ApiError(404, "folder not found")
+        if not _registrable(root):
+            raise ApiError(403, "that folder is too broad to use as a dataset")
         dataset_id = _new_dataset_id()
         d = settings.datasets_dir / dataset_id
         d.mkdir(parents=True)
@@ -866,23 +884,51 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         systems), merging into what is already there. Loopback clients with ``--allow-local-datasets`` only."""
         from .processing import link_tree
 
-        if not settings.allow_local_datasets or _origin(request) != "local":
+        if not settings.local_enabled or not _is_local(request):
             raise ApiError(403, "only the desktop app on this computer can export datasets to a folder")
         _check_id(dataset_id, "dataset")
-        root = dataset_root(settings, dataset_id)
+        root = _root(request, dataset_id)
         if root is None:
             raise ApiError(404, "dataset not found")
         body = await json_body(request)
         dest = body.get("path")
         if not isinstance(dest, str) or not os.path.isabs(dest):
             raise ApiError(400, "path must be an absolute folder path")
-        dest_p = Path(dest)
+        dest_p = Path(dest).resolve()
+        if not any(dest_p == r or r in dest_p.parents for r in _local_roots()):
+            # only into folders the user chose in the app (registered with POST /v1/datasets/local)
+            raise ApiError(403, "export-local can only write into a folder registered with /v1/datasets/local")
         dest_p.mkdir(parents=True, exist_ok=True)
         n = await run_in_threadpool(link_tree, root, dest_p, [root])
         return {"files": n, "path": str(dest_p)}
 
+    def _is_external(d: Path) -> bool:
+        try:
+            return bool(json.loads((d / "meta.json").read_text(encoding="utf-8")).get("external"))
+        except Exception:
+            return False
+
+    def _local_roots() -> List[Path]:
+        out = []
+        for meta in settings.datasets_dir.glob("*/meta.json"):
+            try:
+                ext = json.loads(meta.read_text(encoding="utf-8")).get("external")
+            except Exception:
+                continue
+            if ext:
+                out.append(Path(ext).resolve())
+        return out
+
+    def _registrable(root: Path) -> bool:
+        """Not ``/``, the home folder, or a folder holding this worker's own data."""
+        home = Path.home().resolve()
+        data = settings.data_dir.resolve()
+        return len(root.parts) > 2 and root != home and root not in home.parents \
+            and root != data and root not in data.parents and data not in root.parents
+
     @app.get("/v1/datasets")
-    def list_datasets():
+    def list_datasets(request: Request):
+        local = _is_local(request)
         out = []
         for d in sorted(settings.datasets_dir.iterdir()):
             meta = d / "meta.json"
@@ -893,14 +939,18 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             except Exception:
                 continue
             m.pop("root", None)
+            if m.get("external"):
+                if not local:
+                    continue           # the desktop app's own folders: not shown to other computers
+                m.pop("external", None)
             out.append(m)
         return out
 
     @app.delete("/v1/datasets/{dataset_id}", status_code=204)
-    def delete_dataset(dataset_id: str):
+    def delete_dataset(dataset_id: str, request: Request):
         _check_id(dataset_id, "dataset")
         d = settings.datasets_dir / dataset_id
-        if not (d / "meta.json").is_file():
+        if not (d / "meta.json").is_file() or (_is_external(d) and not _is_local(request)):
             raise ApiError(404, "dataset not found")
         if manager.dataset_in_use(dataset_id):
             raise ApiError(409, "dataset is used by a queued or running job")
@@ -908,11 +958,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return Response(status_code=204)
 
     # --------------------------------------------------------------- jobs
-    def _require_dataset(body: Dict[str, Any]) -> tuple:
+    def _require_dataset(body: Dict[str, Any], request: Request) -> tuple:
         dataset_id = body.get("datasetId")
         if not isinstance(dataset_id, str) or not dataset_id:
             raise ApiError(400, "datasetId is required")
-        root = dataset_root(settings, dataset_id)
+        root = _root(request, dataset_id)
         if root is None:
             raise ApiError(404, f"dataset {dataset_id} not found")
         return dataset_id, root
@@ -928,7 +978,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     @app.post("/v1/jobs")
     async def create_job(request: Request):
         body = await json_body(request)
-        dataset_id, root = _require_dataset(body)
+        dataset_id, root = _require_dataset(body, request)
         if not (root / "dataset.json").is_file():
             raise ApiError(400, "dataset has no dataset.json; it can only be used for /v1/process")
         try:
@@ -949,7 +999,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     @app.post("/v1/process")
     async def create_process_job(request: Request):
         body = await json_body(request)
-        dataset_id, _root = _require_dataset(body)
+        dataset_id, _root = _require_dataset(body, request)
         try:
             req = validate_request(body.get("request"))
         except ProcessingError as e:
@@ -966,7 +1016,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         """Auto clean census: ``{"datasetId", "jobId": <completed train job>}`` or, from this PC only,
         ``{"datasetId", "plyPath": "/abs/scene.ply"}``. Result: ``GET /v1/jobs/{id}/census.npz``."""
         body = await json_body(request)
-        dataset_id, root = _require_dataset(body)
+        dataset_id, root = _require_dataset(body, request)
         if not (root / "dataset.json").is_file():
             raise ApiError(400, "the census needs a dataset with dataset.json (the photos' cameras)")
         if body.get("jobId"):
@@ -975,8 +1025,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             if not ply.is_file():
                 raise ApiError(409, "that job has no result.ply")
         elif body.get("plyPath"):
-            if _origin(request) != "local":
-                raise ApiError(403, "plyPath can only be used from this computer")
+            if not _is_local(request):
+                raise ApiError(403, "plyPath can only be used by the desktop app on this computer")
             ply = Path(str(body["plyPath"]))
             if not ply.is_absolute() or not ply.is_file():
                 raise ApiError(404, "plyPath not found")
@@ -994,7 +1044,10 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return {"jobId": job.id}
 
     @app.post("/v1/jobs/{job_id}/prioritize")
-    def prioritize_job(job_id: str):
+    def prioritize_job(job_id: str, request: Request):
+        """Moving a job ahead of everybody else's is for the person at this PC (the desktop app) only."""
+        if not _is_local(request):
+            raise ApiError(403, "only the desktop app on this computer can reorder the queue")
         return manager.prioritize(job_id).snapshot()
 
     @app.get("/v1/jobs")
@@ -1040,11 +1093,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                             headers=headers)
 
     @app.get("/v1/jobs/{job_id}/cameras")
-    def get_job_cameras(job_id: str):
+    def get_job_cameras(job_id: str, request: Request):
         """The training job's cameras (same coordinates as its splats) — lets a viewer that watches the job
         draw the right camera frustums instead of whatever project it has open."""
         job = manager.get(job_id)
-        root = dataset_root(settings, job.spec.get("datasetId", "")) if job.spec.get("datasetId") else None
+        root = _root(request, job.spec.get("datasetId", "")) if job.spec.get("datasetId") else None
         dj = root / "dataset.json" if root is not None else None
         if dj is None or not dj.is_file():
             raise ApiError(404, "job has no dataset cameras")
@@ -1122,11 +1175,12 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return await _serve_zip(root, f"{job_id}-output.zip", _zip_filter(only, skip), cache=legacy)
 
     @app.get("/v1/datasets/{dataset_id}/archive.zip")
-    async def get_dataset_archive(dataset_id: str, only: Optional[str] = None, skip: Optional[str] = None):
+    async def get_dataset_archive(dataset_id: str, request: Request, only: Optional[str] = None,
+                                  skip: Optional[str] = None):
         """A dataset's files as a zip (``only`` / ``skip`` top-level folders) — e.g. a video's extracted frames
         fetched in the background while the next steps already run here."""
         _check_id(dataset_id, "dataset")
-        root = dataset_root(settings, dataset_id)
+        root = _root(request, dataset_id)
         if root is None:
             raise ApiError(404, "dataset not found")
         return await _serve_zip(root, f"{dataset_id}.zip", _zip_filter(only, skip))

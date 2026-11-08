@@ -18,9 +18,11 @@ class ApiError(Exception):
 
 
 class Client:
-    def __init__(self, base_url: str, token: Optional[str] = None, timeout: float = 30.0, opener=None):
+    def __init__(self, base_url: str, token: Optional[str] = None, timeout: float = 30.0, opener=None,
+                 local_secret: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.local_secret = local_secret
         self.timeout = timeout
         self._open = opener or urllib.request.urlopen
 
@@ -29,6 +31,8 @@ class Client:
         req = urllib.request.Request(self.base_url + path, data=body, method=method)
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
+        if self.local_secret:
+            req.add_header("X-SplatWork-Local", self.local_secret)
         if ctype:
             req.add_header("Content-Type", ctype)
         try:

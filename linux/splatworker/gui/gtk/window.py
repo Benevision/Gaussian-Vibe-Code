@@ -95,7 +95,13 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             bp.add_setter(bottom, "reveal", True)
             self.add_breakpoint(bp)
 
-        self.toasts.set_child(self.build_studio(view, menu))
+        try:
+            self.toasts.set_child(self.build_studio(view, menu))
+        except Exception:  # noqa: BLE001 — the worker must keep running even if the Studio can't start
+            import traceback
+            traceback.print_exc()
+            self.studio = None
+            self.toasts.set_child(view)
         self.refresh_static()
         self._render(self.state.poll(with_gpus=True))
         GLib.timeout_add(POLL_MS, self._tick)
@@ -314,7 +320,7 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
         def work():
             from ...studio.client import Client as C
 
-            C(f"http://127.0.0.1:{port}", token).prioritize(job_id)
+            C(f"http://127.0.0.1:{port}", token, local_secret=self.state.local_secret).prioritize(job_id)
         run_in_thread(work, self._after_job_action)
 
     def _after_job_action(self, _result, error) -> None:
@@ -429,11 +435,17 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
         jobs = self._last_poll.jobs if self._last_poll else []
         from .. import updates as U
         busy = U.busy_jobs(jobs)
-        if not busy:
+        studio = self.studio.busy_names() if getattr(self, "studio", None) else []
+        if not busy and not studio:
             action()
             return
-        alert(self, heading, f"{len(busy)} job(s) are running or queued. To {what} now, they are stopped "
-                             "(the Mac can start them again).",
+        parts = []
+        if busy:
+            parts.append(f"{len(busy)} job(s) are running or queued")
+        if studio:
+            parts.append("this PC is working on " + ", ".join(studio))
+        alert(self, heading, "; ".join(parts) + f". To {what} now, they are stopped "
+                             "(the Mac can start its jobs again).",
               (("cancel", "Cancel", "default"), ("go", "Stop Jobs and Continue", "destructive")),
               lambda r: action() if r == "go" else None)
 
@@ -448,14 +460,20 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             return True
         client = self.state.client() if self.state.server.is_active else None
 
+        studio_busy = self._studio_busy()   # a local pipeline between server jobs (importing, stacking masks…)
+
         def work():
             try:
                 busy = bool(U.busy_jobs(client.jobs())) if client is not None else False
             except Exception:
                 busy = True          # can't tell: don't restart under a job
-            GLib.idle_add(self._auto_update_decide, busy)
+            GLib.idle_add(self._auto_update_decide, busy or studio_busy)
         threading.Thread(target=work, daemon=True).start()
         return True
+
+    def _studio_busy(self) -> bool:
+        studio = getattr(self, "studio", None)
+        return bool(studio is not None and studio.busy)
 
     def _auto_update_decide(self, busy: bool) -> bool:
         from .. import updates as U
