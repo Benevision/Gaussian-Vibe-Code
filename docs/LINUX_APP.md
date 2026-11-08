@@ -1,7 +1,7 @@
-# Splat Studio for Linux — parity plan
+# SplatWork for Linux — parity plan
 
 The Linux desktop app (`linux/`, Flatpak `com.example.SplatWorker`) grows from a GPU **worker** with a status
-window into a full **Splat Studio**, while the worker server keeps running for the Mac and the iPhone.
+window into a full **SplatWork** studio, while the worker server keeps running for the Mac and the iPhone.
 This file is the checklist: every user-facing feature of the Mac app (`mac/`), how it maps onto Linux, and its
 status.
 
@@ -172,7 +172,7 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
   a splat spread thinly over many pixels can pass here and fail on the Mac. The plan rules (2 %, 25 % of the
   typical photo count, minimum typical count 12) are identical.
 * The Flatpak's app id stays `com.example.SplatWorker` so existing installs update in place; the window and
-  launcher are called **Splat Studio**.
+  launcher are called **SplatWork** (the suite was renamed from "Splat Studio").
 
 ## What needs testing on the PC (RTX 4080, CachyOS, fish)
 
@@ -183,7 +183,7 @@ end to end against a real HTTP server with a fake trainer and a stand-in splatpr
 Install the build from the branch (after the CI build or a local `linux/flatpak/build.sh`), then:
 
 1. **Update prompt.** `flatpak update` should ask to allow the new `xdg-documents/SplatStudio` folder. The app is
-   now called *Splat Studio*; the worker must still show up on the Mac and train a job sent from it.
+   now called *SplatWork*; the worker must still show up on the Mac and train a job sent from it.
 2. **Viewer on NVIDIA.** Open a trained PLY with a skybox (one of the Mac's outputs or `…/jobs/<id>/result.ply`):
    the window must not show "The viewer can't start". Check the Renderer row (View tab → Performance) says NVIDIA
    and OpenGL 4.6. Orbit / pan / zoom / double-click, WASD fly, display modes 1–5, skybox on/off, a 4K screenshot.

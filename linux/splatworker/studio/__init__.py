@@ -1,4 +1,4 @@
-"""Splat Studio for Linux: the GTK-free core of the desktop studio.
+"""SplatWork for Linux: the GTK-free core of the desktop studio.
 
 Everything in this package is plain Python + numpy (no GTK, no torch), so it runs in the Flatpak's own
 Python (GNOME runtime) next to the GUI and can be unit tested anywhere:

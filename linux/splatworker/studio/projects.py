@@ -129,7 +129,7 @@ class Project:
         (root / "outputs").mkdir(exist_ok=True)
         p = cls(root)
         p.update(format="splatstudio-project", version=1, name=name, createdAt=datetime.now().isoformat(),
-                 options=options, app="Splat Studio for Linux")
+                 options=options, app="SplatWork for Linux")
         return p
 
     @classmethod

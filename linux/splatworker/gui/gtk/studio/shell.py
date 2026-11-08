@@ -53,7 +53,7 @@ class StudioShell:
 
         side = Adw.ToolbarView()
         sh = Adw.HeaderBar()
-        sh.set_title_widget(Adw.WindowTitle(title="Splat Studio"))
+        sh.set_title_widget(Adw.WindowTitle(title="SplatWork"))
         sh.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu_model, tooltip_text="Main menu",
                                    primary=True))
         side.add_top_bar(sh)
@@ -90,7 +90,7 @@ class StudioShell:
         side.set_content(ssw)
 
         self.split_view = Adw.NavigationSplitView(min_sidebar_width=200, max_sidebar_width=260)
-        self.split_view.set_sidebar(Adw.NavigationPage(title="Splat Studio", child=side))
+        self.split_view.set_sidebar(Adw.NavigationPage(title="SplatWork", child=side))
         self.content_page = Adw.NavigationPage(title="Viewer", child=self.pages)
         self.split_view.set_content(self.content_page)
         self.show_section("viewer")
@@ -224,7 +224,7 @@ class StudioShell:
         elif path.is_dir():
             self.new_project("photos", str(path))
         else:
-            toast(self.toasts, f"Splat Studio can't open {path.name}")
+            toast(self.toasts, f"SplatWork can't open {path.name}")
 
     def new_project(self, kind: Optional[str], source: Optional[str]) -> None:
         NewProjectDialog(self, self.studio, kind, source, self._project_created).present()

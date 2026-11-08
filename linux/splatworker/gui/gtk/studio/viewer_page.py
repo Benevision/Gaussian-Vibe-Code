@@ -134,7 +134,7 @@ class ViewerPage(Gtk.Box):
     def _home(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, halign=Gtk.Align.CENTER,
                       valign=Gtk.Align.CENTER, margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
-        box.append(label("Splat Studio", ("title-1",), xalign=0.5))
+        box.append(label("SplatWork", ("title-1",), xalign=0.5))
         box.append(label("View, create and edit 3D Gaussian splats — trained on this PC's GPU, which keeps working "
                          "for your Mac at the same time.", ("dim-label",), xalign=0.5))
 

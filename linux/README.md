@@ -12,9 +12,9 @@ Splat Studio (Mac) ──Bonjour _splatworker._tcp──▶ discovers worker
                    ◀─GET preview.ply / result.ply
 ```
 
-## Splat Studio for Linux (1.4.0)
+## SplatWork for Linux (1.4.0)
 
-Since 1.4.0 the desktop app is a full **Splat Studio** — viewer (PLY, compressed PLY, .splat, .spz with the learned
+Since 1.4.0 the desktop app is a full **SplatWork** studio — viewer (PLY, compressed PLY, .splat, .spz with the learned
 skybox), New Project (photos, video, 360° video, iPhone captures, COLMAP, Nerfstudio → frames, stacked masks, sky,
 camera solving, training), editing (brush, crop, thresholds, Auto clean), export and an iPhone Inbox — and it is
 still the worker your Mac uses. Its old Status / Jobs / Log / Connect pages are the **Queue & Worker** page.

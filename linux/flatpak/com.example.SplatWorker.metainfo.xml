@@ -3,19 +3,19 @@
   <id>com.example.SplatWorker</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <name>Splat Studio</name>
+  <name>SplatWork</name>
   <summary>Create, view and edit Gaussian splats on your NVIDIA GPU</summary>
   <developer id="com.example">
     <name>Splat Studio</name>
   </developer>
   <description>
     <p>
-      Splat Studio for Linux views, creates and edits 3D Gaussian splats: open PLY, compressed PLY,
+      SplatWork for Linux views, creates and edits 3D Gaussian splats: open PLY, compressed PLY,
       .splat and .spz files with their learned skybox, turn photos, videos, 360° footage and iPhone
       captures into splats on this computer's NVIDIA GPU, clean them up and export them.
     </p>
     <p>
-      It also stays a training server (Splat Worker) for Splat Studio on macOS: the Mac finds it on
+      It also stays a training server (Splat Worker) for SplatWork on macOS: the Mac finds it on
       the local network and sends it training and processing jobs, which share one queue with the
       jobs started here.
     </p>
@@ -83,7 +83,7 @@
   <releases>
     <release version="1.4.0" date="2026-11-08">
       <description>
-        <p>Splat Worker becomes Splat Studio for Linux, and keeps working for your Mac.</p>
+        <p>Splat Worker becomes SplatWork for Linux, and keeps working for your Mac.</p>
         <ul>
           <li>Viewer for PLY, compressed PLY, .splat and .spz with the learned skybox, display modes, orientation, training cameras and 4K screenshots</li>
           <li>New Project from photos, video, 360° video, iPhone captures, COLMAP or Nerfstudio: frames, stacked masks, sky, camera solving and training on this PC with a live dashboard</li>

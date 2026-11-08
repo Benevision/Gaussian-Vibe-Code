@@ -10,4 +10,4 @@ as a child process using the GPU runtime the setup assistant installed into
 """
 
 APP_ID = "com.example.SplatWorker"
-APP_NAME = "Splat Studio"
+APP_NAME = "SplatWork"
