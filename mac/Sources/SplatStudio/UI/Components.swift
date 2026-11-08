@@ -105,6 +105,8 @@ struct SettingDocView: View {
 struct SettingRow<Control: View>: View {
     let id: String
     var showSummary = true
+    /// Always put the control under the title (lists whose width changes, e.g. the device checkboxes).
+    var stacked = false
     @ViewBuilder var control: () -> Control
     @Environment(\.experienceMode) private var mode
 
@@ -114,15 +116,22 @@ struct SettingRow<Control: View>: View {
             VStack(alignment: .leading, spacing: 3) {
                 // Side by side when there is room; otherwise the control moves under the title
                 // so neither the title nor the control is ever truncated.
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: 8) {
-                        titleView(d).fixedSize()
-                        Spacer(minLength: 8)
-                        control().fixedSize()
-                    }
+                if stacked {
                     VStack(alignment: .leading, spacing: 5) {
                         titleView(d).fixedSize(horizontal: false, vertical: true)
                         HStack { control(); Spacer(minLength: 0) }
+                    }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .center, spacing: 8) {
+                            titleView(d).fixedSize()
+                            Spacer(minLength: 8)
+                            control().fixedSize()
+                        }
+                        VStack(alignment: .leading, spacing: 5) {
+                            titleView(d).fixedSize(horizontal: false, vertical: true)
+                            HStack { control(); Spacer(minLength: 0) }
+                        }
                     }
                 }
                 if showSummary, let s = d?.summary {

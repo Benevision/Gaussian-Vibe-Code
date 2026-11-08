@@ -674,7 +674,7 @@ struct ComputePicker: View {
     }
 
     var body: some View {
-        SettingRow(id: "train.device") {
+        SettingRow(id: "train.device", stacked: true) {
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(isOn: tick("local")) {
                     Text("This Mac").font(.callout) + Text("  \(MetalContext.shared.device.name)").font(.caption).foregroundColor(.secondary)
