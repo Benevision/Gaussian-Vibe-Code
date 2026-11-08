@@ -159,6 +159,39 @@ def test_photos_pipeline_without_training_and_cancel(server, tmp_path):
     assert (proj.dataset_dir / "dataset.json").is_file()
 
 
+def test_training_pause_checkpoint_resume(server, tmp_path):
+    """The Projects page's Pause / Save checkpoint / Resume: the pipeline keeps waiting while the job is paused."""
+    from conftest import make_dataset, wait_for
+
+    client, backend, _ = server
+    backend.steps, backend.step_delay = 60, 0.03
+    assert "pause" in client.info()["capabilities"]
+    proj = Project.create(tmp_path / "projects", "Room", {})
+    make_dataset(proj.dataset_dir)
+    opts = ProjectOptions(name="Room", source_kind="dataset", source=str(proj.dataset_dir), preset="preview")
+    events = []
+    p = LocalPipeline(client, proj, opts, lambda k, d: events.append((k, d)))
+    p.poll_seconds = 0.02
+    result = {}
+    th = threading.Thread(target=lambda: result.update(out=p.train()), daemon=True)
+    th.start()
+    job = wait_for(lambda: next((j["jobId"] for j in client.jobs() if j["kind"] == "train"
+                                 and (j["step"] or 0) >= 3), None))
+    out, step = client.checkpoint(job, lambda n: proj.outputs_dir / f"Room-ck-step{n}.ply")
+    assert out.is_file() and step >= 3 and out.name == f"Room-ck-step{step}.ply"
+    assert formats.load(out).count == 10
+    assert client.pause(job)["state"] in ("training", "paused")
+    wait_for(lambda: client.job(job)["state"] == "paused")
+    time.sleep(0.2)
+    assert th.is_alive() and "out" not in result          # paused is not finished
+    out2, step2 = client.checkpoint(job, lambda n: proj.outputs_dir / f"Room-ck2-step{n}.ply")
+    assert step2 == client.job(job)["step"]
+    client.resume(job)
+    th.join(10)
+    assert result["out"].is_file() and backend.resumed_from[-1] == step2
+    assert set(proj.outputs()) == {result["out"], out, out2}
+
+
 def test_nerfstudio_import(tmp_path):
     src = tmp_path / "ns"
     (src / "images").mkdir(parents=True)

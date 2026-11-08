@@ -125,6 +125,24 @@ class Client:
     def prioritize(self, job_id: str) -> None:
         self.post(f"/v1/jobs/{job_id}/prioritize")
 
+    # pause / resume / checkpoint (worker capability "pause")
+    def pause(self, job_id: str) -> Dict[str, Any]:
+        return self.post(f"/v1/jobs/{job_id}/pause")
+
+    def resume(self, job_id: str) -> Dict[str, Any]:
+        return self.post(f"/v1/jobs/{job_id}/resume")
+
+    def checkpoint(self, job_id: str, dest_for_step: Callable[[int], Path], wait: float = 120.0) -> tuple:
+        """Have the job write a checkpoint of its current splats and download it to ``dest_for_step(step)``.
+        Returns ``(path, step)``."""
+        with self._req("POST", f"/v1/jobs/{job_id}/checkpoint?wait={wait:g}", b"{}", "application/json",
+                       timeout=wait + 30) as r:
+            s = json.loads(r.read() or b"{}")
+        step = s.get("checkpointStep")
+        if step is None:
+            raise ApiError(None, "the worker didn't write a checkpoint in time")
+        return self.download(f"/v1/jobs/{job_id}/checkpoint.ply", dest_for_step(int(step))), int(step)
+
     def log(self, job_id: str) -> str:
         with self._req("GET", f"/v1/jobs/{job_id}/log") as r:
             return r.read().decode("utf-8", "replace")

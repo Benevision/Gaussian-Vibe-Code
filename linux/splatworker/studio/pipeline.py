@@ -155,6 +155,7 @@ class LocalPipeline:
                     if self.cancel_event.is_set():
                         raise Cancelled()
                     raise PipelineError(s.get("message") or "job failed")
+                # "paused" is not finished: keep waiting (Stop still cancels it) until it is resumed and ends
                 time.sleep(self.poll_seconds)
         finally:
             self.current_job = None
