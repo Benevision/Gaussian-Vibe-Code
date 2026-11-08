@@ -41,6 +41,8 @@ class CameraInfo:
     depth_height: Optional[int] = None
     holdout: bool = False
     exposure: Optional[float] = None  # shutter s × ISO / 100 (iPhone captures); seeds appearance correction
+    mask: Optional[str] = None        # 8-bit PNG, 255 = keep (moving objects, rig, … removed)
+    sky: Optional[str] = None         # 8-bit PNG, 255 = sky (drawn by the skybox, not by splats)
 
 
 @dataclass
@@ -188,6 +190,14 @@ def parse_dataset(directory, check_files: bool = True) -> DatasetInfo:
             dw, dh = c.get("depthWidth"), c.get("depthHeight")
             if not isinstance(dw, int) or not isinstance(dh, int) or dw <= 0 or dh <= 0:
                 raise DatasetError(f"{label}: depthWidth/depthHeight required with depth")
+        aux = {}
+        for key in ("mask", "sky"):
+            v = c.get(key)
+            if v is not None:
+                if not isinstance(v, str):
+                    raise DatasetError(f"{label}: {key} must be a path")
+                safe_join(root, v)
+                aux[key] = v
         cam_id = c.get("id", i)
         cameras.append(CameraInfo(
             id=int(cam_id) if isinstance(cam_id, (int, float)) else i,
@@ -196,6 +206,7 @@ def parse_dataset(directory, check_files: bool = True) -> DatasetInfo:
             depth=depth, depth_width=dw, depth_height=dh,
             holdout=bool(c.get("holdout", False)),
             exposure=float(c["exposure"]) if isinstance(c.get("exposure"), (int, float)) and c["exposure"] > 0 else None,
+            mask=aux.get("mask"), sky=aux.get("sky"),
         ))
 
     if not any(not c.holdout for c in cameras):
@@ -264,6 +275,7 @@ class LoadedView:
     world_to_camera: np.ndarray  # float32 [4, 4]
     depth: Optional[np.ndarray]  # float32 [H, W] (resized to image), 0 = invalid
     size: Optional[tuple] = None  # (width, height) when image is None
+    mask: Optional[np.ndarray] = None  # uint8 [H, W], 255 = train on this pixel (moving objects etc. → 0: ignored)
 
     @property
     def width(self) -> int:
@@ -332,6 +344,17 @@ def load_view(ds: DatasetInfo, cam: CameraInfo, max_size: int, load_depth_maps: 
         alpha = np.ascontiguousarray(arr[..., 3])
         arr = arr[..., :3]
     arr = np.ascontiguousarray(arr)
+    # Mask file (255 = keep): pixels outside it are ignored by the loss (not trained as background, which is what
+    # an image's own alpha means). Until 1.3.14 the worker ignored mask files: masked sets trained unmasked.
+    mask = None
+    if cam.mask:
+        mp = ds.resolve(cam.mask)
+        if mp.is_file():
+            with Image.open(mp) as m:
+                m = m.convert("L")
+                if m.size != (new_w, new_h):
+                    m = m.resize((new_w, new_h), Image.BILINEAR)
+                mask = np.ascontiguousarray(np.asarray(m, dtype=np.uint8))
 
     K = scaled_intrinsics(cam, new_w, new_h)
     w2c = np.linalg.inv(cam.camera_to_world).astype(np.float32)
@@ -340,7 +363,7 @@ def load_view(ds: DatasetInfo, cam: CameraInfo, max_size: int, load_depth_maps: 
     if load_depth_maps and cam.depth:
         d = load_depth(ds.resolve(cam.depth), cam.depth_width, cam.depth_height)
         depth = resize_nearest(d, new_w, new_h).astype(np.float32)
-    return LoadedView(camera=cam, image=arr, alpha=alpha, K=K, world_to_camera=w2c, depth=depth)
+    return LoadedView(camera=cam, image=arr, alpha=alpha, K=K, world_to_camera=w2c, depth=depth, mask=mask)
 
 
 # ---------------------------------------------------------------------------

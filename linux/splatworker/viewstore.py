@@ -53,7 +53,7 @@ def choose_mode(estimated_total: int, ram: Optional[int] = None) -> str:
 
 
 class ViewStore:
-    """``get(view)`` → (image uint8 HxWx3, alpha uint8 HxW | None, depth float32 HxW | None)."""
+    """``get(view)`` → (image uint8 HxWx3, alpha uint8 HxW | None, depth float32 HxW | None, mask uint8 HxW | None)."""
 
     def __init__(self, loader: Callable, views: Sequence, mode: str, budget: int, threads: int = 4):
         self.loader = loader          # header view → fully loaded view
@@ -68,7 +68,7 @@ class ViewStore:
 
     def _load(self, v) -> Tuple:
         full = self.loader(v)
-        return full.image, full.alpha, full.depth
+        return full.image, full.alpha, full.depth, getattr(full, "mask", None)
 
     @staticmethod
     def _size(t: Tuple) -> int:
@@ -86,7 +86,7 @@ class ViewStore:
 
     def get(self, v) -> Tuple:
         if v.image is not None:                       # gpu / ram modes: pixels live on the view
-            return v.image, v.alpha, v.depth
+            return v.image, v.alpha, v.depth, getattr(v, "mask", None)
         key = id(v)
         with self.lock:
             t = self.cache.get(key)

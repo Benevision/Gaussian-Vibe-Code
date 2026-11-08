@@ -157,6 +157,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `progressiveResolution` | bool | false | coarse-to-fine: ¼ → ½ → ¾ → full image resolution over the first half of the densification window (worker ≥ 1.3.9) |
 | `decoupledSSIM` | bool | false | with per-photo colour correction, SSIM contrast/structure use the uncorrected render (luminance the corrected one) (worker ≥ 1.3.9) |
 | `backgroundShell` | int | 0 | splats on a far-field sphere (3× scene size) for distant land/sky beyond the capture (worker ≥ 1.3.9, Mac) |
+| `optimizerPrecision` | `"fp32"` \| `"compact"` | `"fp32"` | CUDA worker: Adam moment storage. `"compact"` keeps the higher-SH-band (`shN`) moments as 8-bit codes with one fp32 scale per splat and all other moments as bfloat16 (stochastic rounding, same Adam update) — at SH degree 3 training memory per splat drops from ~944 B to ~622 B (params + grads + optimizer state), so more splats fit on the GPU. Ignored by the Metal trainer |
 | `appearanceLR` | float | 0.02 | Adam LR of the per-photo corrections (each photo updates only when drawn) |
 | `appearanceReg` | float | 0.001 | L2 pull of each correction towards its exposure-seeded start |
 

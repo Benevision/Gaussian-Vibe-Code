@@ -712,6 +712,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     # uint8 pixels: resident on the GPU (gpu mode) or copied up per step from RAM; converted to float per step.
     gpu_cache: Dict[int, tuple] = {}
     pose_cache: Dict[int, tuple] = {}
+    masks: Dict[int, object] = {}   # id(view) → its ignore mask for the current step (set by to_dev)
 
     def to_dev(v: LoadedView):
         key = id(v)
@@ -721,15 +722,17 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if mode == "gpu":
             if key not in gpu_cache:
                 gpu_cache[key] = tuple(torch.from_numpy(a).to(dev) if a is not None else None
-                                       for a in (v.image, v.alpha, v.depth))
-            img8, a8, d = gpu_cache[key]
+                                       for a in (v.image, v.alpha, v.depth, v.mask))
+            img8, a8, d, m8 = gpu_cache[key]
         else:
-            im, al, dp = store.get(v)
+            im, al, dp, mk = store.get(v)
             img8 = torch.from_numpy(im).to(dev)
             a8 = torch.from_numpy(al).to(dev) if al is not None else None
             d = torch.from_numpy(dp).to(dev) if dp is not None else None
+            m8 = torch.from_numpy(mk).to(dev) if mk is not None else None
         img = img8.float() / 255.0
         alpha = a8.float()[..., None] / 255.0 if a8 is not None else None
+        masks[key] = m8.float()[..., None] / 255.0 if m8 is not None else None
         return img, alpha, d, K, w2c
 
     # ---------------------------------------------------------------- init
@@ -757,8 +760,21 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         "sh0": cfg.lrColor,
         "shN": cfg.lrSHRest,
     }
-    optimizers = {k: torch.optim.Adam([{"params": params[k], "lr": lr, "name": k}], eps=1e-15)
-                  for k, lr in lrs.items()}
+    if cfg.optimizerPrecision == "fp32":
+        optimizers = {k: torch.optim.Adam([{"params": params[k], "lr": lr, "name": k}], eps=1e-15)
+                      for k, lr in lrs.items()}
+    else:   # reduced-precision Adam moments (same update rule) so more splats fit in GPU memory
+        from .compact_adam import CompactAdam, moments_for
+        optimizers = {k: CompactAdam([{"params": params[k], "lr": lr, "name": k}], eps=1e-15,
+                                     moments=moments_for(k, cfg.optimizerPrecision), seed=cfg.seed)
+                      for k, lr in lrs.items()}
+    from .compact_adam import estimate_bytes_per_splat
+    mem = estimate_bytes_per_splat(cfg.shDegree, cfg.optimizerPrecision)
+    log(f"optimizerPrecision={cfg.optimizerPrecision}"
+        + (" (int8 SH-rest moments, bf16 others)" if cfg.optimizerPrecision == "compact" else "")
+        + f": ~{mem['total']} B/splat for params+grads+Adam state "
+          f"(state {mem['optimizerState']} B; fp32 Adam would be "
+          f"{estimate_bytes_per_splat(cfg.shDegree, 'fp32')['total']} B)")
     gamma = (cfg.lrPositionFinal / cfg.lrPosition) ** (1.0 / cfg.iterations)
     pos_sched = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], gamma=gamma)
 
@@ -833,6 +849,9 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                 if appearance is not None:  # holdout photos keep their exposure-seeded correction
                     pred = appearance.apply(len(train_views) + k, pred)
                 gt = img if alpha is None else img * alpha + (1 - alpha) * eval_bg
+                ignore = masks.get(id(v))
+                if ignore is not None:   # score only the pixels the model is meant to explain
+                    gt = gt * ignore + pred.clamp(0, 1) * (1 - ignore)
                 mse = torch.mean((pred.clamp(0, 1) - gt) ** 2).item()
                 psnrs.append(-10 * math.log10(max(mse, 1e-10)))
         return float(np.mean(psnrs))
@@ -907,6 +926,13 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 
         if transient_on:
             gt = transient.apply(pred, gt, alphas[0], step)
+        ignore = masks.get(id(v))
+        if ignore is not None:
+            # masked-out pixels (moving objects, the rig, …) carry no error and no gradient
+            if ignore.shape[0] != pred.shape[0] or ignore.shape[1] != pred.shape[1]:
+                ignore = torch.nn.functional.interpolate(ignore.permute(2, 0, 1)[None], size=pred.shape[:2],
+                                                         mode="area")[0].permute(1, 2, 0)
+            gt = gt * ignore + pred.detach() * (1.0 - ignore)
         l1 = torch.abs(pred - gt).mean()
         if cfg.decoupledSSIM and pred is not pred_raw:
             ssim_val = ssim_split(torch, pred.permute(2, 0, 1)[None], pred_raw.permute(2, 0, 1)[None],
@@ -981,6 +1007,11 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             if (cfg.longAxisSplit and cfg.densifyStart < step < densify_stop
                     and step % cfg.densifyInterval == 0):
                 spread_clone_groups(torch, params)
+        if cfg.optimizerPrecision != "fp32":
+            # gsplat's torch.cat with fp32 zeros promotes compact state to fp32 when it adds splats; cast it back
+            # now so the promoted copy doesn't occupy GPU memory through the next forward/backward
+            for opt in optimizers.values():
+                opt.restore_dtypes()
 
         # --------------------------------------------------- bookkeeping
         cur = step + 1

@@ -16,6 +16,7 @@ class ConfigError(ValueError):
 
 _STRATEGIES = ("mcmc", "adaptive")
 _BACKGROUNDS = ("black", "white", "random")
+_OPTIMIZER_PRECISIONS = ("fp32", "compact")
 
 
 @dataclass
@@ -97,6 +98,9 @@ class TrainingConfig:
     decoupledSSIM: bool = False
     # Far-field shell of this many splats (0 = off) for distant land / sky beyond the capture.
     backgroundShell: int = 0
+    # Adam moment storage: "fp32" (plain torch Adam) or "compact" (8-bit SH-rest moments, bf16 for the rest) —
+    # ~1/3 less training memory per splat at SH degree 3, so more splats fit on the GPU (compact_adam.py).
+    optimizerPrecision: str = "fp32"
     # PROTOCOL.md §7 (block-parallel training)
     region: Optional[Region] = None
     cameraIds: Optional[List[int]] = None
@@ -147,6 +151,8 @@ class TrainingConfig:
         need(self.shDegreeInterval >= 1, "shDegreeInterval must be >= 1")
         need(self.strategy in _STRATEGIES, f"strategy must be one of {list(_STRATEGIES)}")
         need(self.background in _BACKGROUNDS, f"background must be one of {list(_BACKGROUNDS)}")
+        need(self.optimizerPrecision in _OPTIMIZER_PRECISIONS,
+             f"optimizerPrecision must be one of {list(_OPTIMIZER_PRECISIONS)}")
         need(self.maxGaussians >= 1, "maxGaussians must be >= 1")
         need(self.densifyInterval >= 1, "densifyInterval must be >= 1")
         need(self.opacityResetInterval >= 1, "opacityResetInterval must be >= 1")
