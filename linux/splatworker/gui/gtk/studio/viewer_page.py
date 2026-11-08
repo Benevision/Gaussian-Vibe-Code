@@ -9,7 +9,7 @@ from typing import Callable, Optional
 import numpy as np
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from ....studio import autoclean, coverage, formats
+from ....studio import autoclean, coverage, formats, turntable
 from ....studio.camera import UP_CHOICES
 from ....studio.edit import EditState, estimate_size
 from ....studio.projects import Project
@@ -476,7 +476,24 @@ class ViewerPage(Gtk.Box):
         m = group("Media")
         m.add(button_row("Screenshot", "Save 4K PNG…", self.screenshot_dialog,
                          subtitle="3840 × 2160, the current view"))
-        return scrolled(g, m)
+        v = group("Turntable video", "One full turn around the orbit centre, at the current distance and pitch.")
+        self.tt_res, self.tt_secs, self.tt_fps = 1080, 8, 30
+        v.add(combo_row("Resolution", [("720", "720p"), ("1080", "1080p"), ("2160", "4K")], "1080",
+                        lambda x: setattr(self, "tt_res", int(x)), "export.video"))
+        v.add(spin_row("Length", 3, 30, 1, self.tt_secs, lambda x: setattr(self, "tt_secs", int(x)),
+                       subtitle="Seconds for one turn"))
+        v.add(combo_row("Frame rate", [("24", "24 fps"), ("30", "30 fps"), ("60", "60 fps")], "30",
+                        lambda x: setattr(self, "tt_fps", int(x))))
+        self.tt_row = button_row("Render video", "Render…", self.turntable_dialog,
+                                 subtitle=turntable.describe_encoder())
+        v.add(self.tt_row)
+        self.tt_progress_row = plain_row(title="Rendering", subtitle="", visible=False)
+        self.tt_bar = Gtk.ProgressBar(valign=Gtk.Align.CENTER, hexpand=True, width_request=110)
+        self.tt_progress_row.add_suffix(self.tt_bar)
+        self.tt_progress_row.add_suffix(self._small_button("Cancel", self.turntable_cancel))
+        v.add(self.tt_progress_row)
+        self._tt = None
+        return scrolled(g, m, v)
 
     @staticmethod
     def _small_button(text, cb):
@@ -902,6 +919,116 @@ class ViewerPage(Gtk.Box):
                 msg = str(e)
                 GLib.idle_add(lambda: (self._busy(None), self.ctl.toast(f"Export failed: {msg}"), False)[-1])
         threading.Thread(target=work, daemon=True).start()
+
+    # ------------------------------------------------------------------ turntable video
+    def turntable_dialog(self) -> None:
+        if self.area.edit is None or self._tt is not None:
+            return
+        stem = self.path.name.split(".")[0] if self.path else "scene"
+        suffix = turntable.video_suffix() or ".mp4"
+        d = Gtk.FileDialog(title="Save turntable video", initial_name=f"{stem}-turntable{suffix}")
+        d.save(self.window, None, self._turntable_chosen)
+
+    def _turntable_chosen(self, dlg, res) -> None:
+        try:
+            f = dlg.save_finish(res)
+        except GLib.Error:
+            return
+        if f is not None and f.get_path():
+            self.start_turntable(Path(f.get_path()))
+
+    def start_turntable(self, path: Path) -> None:
+        if self.area.edit is None or not self.area.renderer.ready or self._tt is not None:
+            return
+        w, h = turntable.RESOLUTIONS[self.tt_res]
+        opts = turntable.TurntableOptions(width=w, height=h, fps=self.tt_fps, seconds=self.tt_secs)
+        try:
+            sink = turntable.open_sink(path, w, h, opts.fps)
+        except Exception as e:  # noqa: BLE001
+            self.ctl.toast(f"Video failed: {e}")
+            return
+        a = self.area
+        a.make_current()
+        frames = turntable.render_frames(a.renderer, a.camera, a.settings, opts, a.cloud.positions,
+                                         a.edit.hidden())
+        self._tt = {"ts": turntable.ThreadedSink(sink), "frames": frames, "frame": None, "done": 0, "opts": opts,
+                    "sink": sink, "cancel": False, "cloud": a.cloud}
+        a.suspended = True                  # the turntable owns the renderer's draw order until it finishes
+        self.tt_row.button.set_sensitive(False)
+        self.tt_progress_row.set_visible(True)
+        self.tt_progress_row.set_subtitle(f"0 / {opts.frames} frames")
+        self.tt_bar.set_fraction(0.0)
+        self._busy("Rendering the turntable video…")
+        GLib.idle_add(self._turntable_step)
+
+    def turntable_cancel(self) -> None:
+        if self._tt is not None:
+            self._tt["cancel"] = True
+
+    def _turntable_step(self) -> bool:
+        """One frame per main-loop turn: render (GL needs this thread), hand it to the encoder thread when it has
+        room (at most two frames wait), otherwise try again shortly."""
+        tt = self._tt
+        if tt is None:
+            return False
+        try:
+            if tt["cancel"] or self.area.cloud is not tt["cloud"]:
+                raise turntable.TurntableCancelled()
+            if tt["frame"] is None:
+                self.area.make_current()
+                tt["frame"] = next(tt["frames"], None)
+                if tt["frame"] is None:
+                    self._turntable_finish(None)
+                    return False
+            if not tt["ts"].offer(tt["frame"]):
+                GLib.timeout_add(10, self._turntable_step)
+                return False
+            tt["frame"] = None
+            tt["done"] += 1
+            n = tt["opts"].frames
+            self.tt_bar.set_fraction(tt["done"] / n)
+            self.tt_progress_row.set_subtitle(f"{tt['done']} / {n} frames")
+            self.spinner_label.set_text(f"Rendering the turntable video… {tt['done'] * 100 // n} %")
+            return True
+        except turntable.TurntableCancelled:
+            self._turntable_finish("cancelled")
+        except Exception as e:  # noqa: BLE001
+            self._turntable_finish(str(e) or type(e).__name__)
+        return False
+
+    def _turntable_finish(self, error: Optional[str]) -> None:
+        tt, self._tt = self._tt, None
+        tt["frame"] = None
+        tt["frames"].close()
+        self.area.suspended = False
+        self.area.camera_moved()            # re-sort for the viewer's own camera
+        self.spinner_label.set_text("Finishing the video…")
+
+        def work():
+            msg = error
+            try:
+                if error is None:
+                    tt["ts"].finish()
+                else:
+                    tt["ts"].abort()
+            except Exception as e:  # noqa: BLE001
+                msg = str(e) or type(e).__name__
+            GLib.idle_add(self._turntable_done, tt["sink"], msg)
+        threading.Thread(target=work, daemon=True, name="turntable-finish").start()
+
+    def _turntable_done(self, sink, error: Optional[str]) -> bool:
+        self._busy(None)
+        self.tt_row.button.set_sensitive(True)
+        self.tt_progress_row.set_visible(False)
+        if error == "cancelled":
+            self.ctl.toast("Turntable video cancelled")
+        elif error:
+            self.ctl.toast(f"Video failed: {error}")
+        elif sink.kind == "png":
+            self.ctl.toast(f"No video encoder available: saved {sink.count} PNG frames in {sink.path.name}/")
+        else:
+            self.ctl.toast(f"Saved {sink.path.name} ({sink.description})")
+        return False
 
     def screenshot_dialog(self) -> None:
         stem = self.path.stem if self.path else "scene"

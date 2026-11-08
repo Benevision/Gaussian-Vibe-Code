@@ -37,6 +37,7 @@ class ViewerArea(Gtk.GLArea):
         self.edit: Optional[EditState] = None
         self.cloud: Optional[GaussianCloud] = None
         self.gl_error: Optional[str] = None
+        self.suspended = False            # a turntable video is using the renderer: don't draw
         self.tool = "navigate"            # navigate | select
         self.brush_radius = 30.0
         self.rotate_speed = self.pan_speed = self.zoom_speed = self.fly_speed = 1.0
@@ -94,7 +95,7 @@ class ViewerArea(Gtk.GLArea):
             self.renderer.destroy()
 
     def _on_render(self, area, ctx) -> bool:
-        if not self.renderer.ready:
+        if not self.renderer.ready or self.suspended:
             return True
         if self._order_pending is not None:
             order, n = self._order_pending

@@ -65,6 +65,9 @@ class T(SplatWorkerApp):
             (8000, lambda: self.coverage_check()),
             (300, lambda: shot("2b-coverage")),
             (300, lambda: self.window.viewer_page.mode_row.set_selected(0)),
+            (300, lambda: self.turntable()),
+            (2500, lambda: shot("2c-turntable")),
+            (15000, lambda: self.turntable_check()),
             (300, lambda: self.window.show_section("projects")),
             (300, lambda: self.window.projects_page.select(self.proj.root)),
             (1500, lambda: shot("4-projects")),
@@ -125,6 +128,24 @@ class T(SplatWorkerApp):
         assert vp.coverage_unavailable() is None, vp.coverage_unavailable()
         assert vp._mode == "coverage" and vp.area.renderer.has_coverage, (vp._mode, vp.cov_info.get_text())
         print("coverage:", vp.cov_info.get_text(), flush=True)
+
+    def turntable(self):
+        vp = self.window.viewer_page
+        vp.insp_stack.set_visible_child_name("export")
+        vp.tt_res, vp.tt_secs, vp.tt_fps = 720, 1, 12
+        import shutil
+        shutil.rmtree(f"{OUT}/turntable-frames", ignore_errors=True)
+        vp.start_turntable(__import__("pathlib").Path(f"{OUT}/turntable.mp4"))
+        assert vp._tt is not None and vp.area.suspended
+
+    def turntable_check(self):
+        vp = self.window.viewer_page
+        assert vp._tt is None and not vp.area.suspended, "turntable still running"
+        out = __import__("pathlib").Path(OUT)
+        made = [p for p in (out / "turntable.mp4", out / "turntable.webm") if p.is_file()]
+        frames = sorted((out / "turntable-frames").glob("*.png")) if (out / "turntable-frames").is_dir() else []
+        assert made or len(frames) == 12, (made, len(frames))
+        print("turntable:", made or f"{len(frames)} PNG frames", flush=True)
 
     def offscreen(self):
         img = self.window.viewer_page.area.screenshot(640, 360)
