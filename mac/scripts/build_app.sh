@@ -9,8 +9,8 @@ BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 # SPLAT_BUILD_PATH: build somewhere else, e.g. while a command-line run uses the default .build binary
 # (relinking a binary that is running can crash it).
 BP=(); [ -n "${SPLAT_BUILD_PATH:-}" ] && BP=(--build-path "$SPLAT_BUILD_PATH")
-swift build -c "$CONFIG" --arch arm64 "${BP[@]}"
-BIN="$(swift build -c "$CONFIG" --arch arm64 "${BP[@]}" --show-bin-path)/SplatStudio"
+swift build -c "$CONFIG" --arch arm64 ${BP[@]+"${BP[@]}"}
+BIN="$(swift build -c "$CONFIG" --arch arm64 ${BP[@]+"${BP[@]}"} --show-bin-path)/SplatStudio"
 # SPLAT_OUT: output folder (default build/) — use another one while the app in build/ is running.
 OUT_DIR="${SPLAT_OUT:-build}"
 APP="$OUT_DIR/Splat Studio.app"
