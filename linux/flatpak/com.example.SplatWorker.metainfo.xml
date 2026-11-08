@@ -81,6 +81,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.4.4" date="2026-11-09">
+      <description>
+        <p>Undistorted camera solves (fisheye, wide-angle) now undistort the masks too, so moving-object and fixed-part masks still line up with the photos they mask.</p>
+      </description>
+    </release>
     <release version="1.4.3" date="2026-11-09">
       <description>
         <p>Fisheye footage (e.g. Arcturus stereo cameras) now solves: one camera per lens instead of one per frame, a fisheye starting focal length flagged so COLMAP can initialise (it rejects fisheye pairs without one) but still refined, and the undistorted frames are what training uses.</p>

@@ -99,6 +99,47 @@ def _undistort_cv2(rec: Reconstruction, image_dir: Path, out_images: Path, progr
     return Reconstruction(new_cams, rec.images, rec.points3D)
 
 
+def _distort_normalized(cam: Camera, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Apply ``cam``'s lens distortion to normalised image coordinates (COLMAP's models)."""
+    d = cam.distortion()
+    if cam.model in ("OPENCV_FISHEYE",):
+        k1, k2, k3, k4 = (list(d) + [0, 0, 0, 0])[:4]
+        r = np.sqrt(x * x + y * y)
+        th = np.arctan(r)
+        th2 = th * th
+        thd = th * (1 + k1 * th2 + k2 * th2 ** 2 + k3 * th2 ** 3 + k4 * th2 ** 4)
+        s = np.where(r > 1e-12, thd / np.maximum(r, 1e-12), 1.0)
+        return x * s, y * s
+    if cam.model in ("SIMPLE_RADIAL", "RADIAL", "OPENCV", "FULL_OPENCV"):
+        k1 = d[0] if len(d) > 0 else 0.0
+        k2 = d[1] if cam.model in ("RADIAL", "OPENCV", "FULL_OPENCV") and len(d) > 1 else 0.0
+        p1 = d[2] if cam.model in ("OPENCV", "FULL_OPENCV") and len(d) > 2 else 0.0
+        p2 = d[3] if cam.model in ("OPENCV", "FULL_OPENCV") and len(d) > 3 else 0.0
+        if cam.model == "RADIAL":
+            p1 = p2 = 0.0
+        r2 = x * x + y * y
+        radial = 1 + k1 * r2 + k2 * r2 * r2
+        return (x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x),
+                y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y)
+    return x, y
+
+
+def undistort_mask(mask: np.ndarray, src: Camera, dst: Camera) -> np.ndarray:
+    """The mask of an image seen by ``src`` (distorted) resampled into ``dst``'s undistorted pinhole image
+    (nearest neighbour; pixels whose ray falls outside the source image get 0 = ignore)."""
+    import cv2
+
+    fx, fy, cx, cy = dst.pinhole()
+    sfx, sfy, scx, scy = src.pinhole()
+    us, vs = np.meshgrid(np.arange(dst.width, dtype=np.float64) + 0.5, np.arange(dst.height, dtype=np.float64) + 0.5)
+    xd, yd = _distort_normalized(src, (us - cx) / fx, (vs - cy) / fy)
+    mx = (sfx * xd + scx - 0.5).astype(np.float32)        # COLMAP pixel centres are at +0.5, OpenCV's at integers
+    my = (sfy * yd + scy - 0.5).astype(np.float32)
+    if mask.shape[1] != src.width or mask.shape[0] != src.height:
+        mask = cv2.resize(mask, (src.width, src.height), interpolation=cv2.INTER_NEAREST)
+    return cv2.remap(mask, mx, my, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+
 def _undistort_colmap(colmap: str, sparse_dir: Path, image_dir: Path, work: Path, log_path: Optional[Path]) -> Tuple[Reconstruction, Path]:
     out = work / "undistorted"
     if out.exists():
@@ -124,6 +165,7 @@ def export_dataset(
     undistort: str = "auto",
     extra: Optional[dict] = None,
     up: Optional[np.ndarray] = None,
+    masks_dir: Optional[Path] = None,
 ) -> dict:
     """Write dataset.json + images/ + points3d.ply + sparse/0 into ``out_dir``.
 
@@ -137,6 +179,7 @@ def export_dataset(
     needs_undistort = any(c.has_distortion() for c in rec.cameras.values())
     method = "copy"
     src_images = image_dir
+    original = rec          # distorted cameras, for warping masks into the undistorted images
     if needs_undistort and export_images:
         colmap = find_executable("colmap") if undistort in ("auto", "colmap") else None
         if colmap:
@@ -161,6 +204,29 @@ def export_dataset(
             if k % 10 == 0:
                 progress(0.8 * (k + 1) / len(ims), f"copied {k + 1}/{len(ims)} images")
 
+    # Masks (moving objects, fixed parts of the frame, …) follow the images: undistorted the same way, so they
+    # still line up with what they mask. Written as masks/<image stem>.png.
+    mask_rel: Dict[str, str] = {}
+    if masks_dir is not None and Path(masks_dir).is_dir() and export_images and method != "copy":
+        import cv2
+
+        orig_by_name = {im.name: im for im in original.images.values()}
+        out_masks = out_dir / "masks"
+        for im in ims:
+            stem = Path(im.name).stem
+            src_mask = next((p for p in (Path(masks_dir) / f"{stem}.png", Path(masks_dir) / f"{Path(im.name).with_suffix('').as_posix()}.png") if p.is_file()), None)
+            o = orig_by_name.get(im.name) or orig_by_name.get(str(Path(im.name).with_suffix(".heic").as_posix()))
+            if src_mask is None or o is None:
+                continue
+            m = cv2.imread(str(src_mask), cv2.IMREAD_GRAYSCALE)
+            if m is None:
+                continue
+            warped = undistort_mask(m, original.cameras[o.camera_id], rec.cameras[im.camera_id])
+            dst = out_masks / f"{Path(im.name).with_suffix('').as_posix()}.png"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(dst), warped)
+            mask_rel[im.name] = dst.relative_to(out_dir).as_posix()
+
     cams = []
     c2ws = []
     for idx, im in enumerate(ims):
@@ -180,6 +246,7 @@ def export_dataset(
                 "cy": cy,
                 "cameraToWorld": [[float(v) for v in row] for row in c2w],
                 "holdout": False,
+                **({"mask": mask_rel[im.name]} if im.name in mask_rel else {}),
             }
         )
     c2ws_a = np.stack(c2ws) if c2ws else np.zeros((0, 4, 4))
@@ -200,8 +267,8 @@ def export_dataset(
     if len(xyz):
         write_points_ply(out_dir / "points3d.ply", xyz, rgb)
         ds["points"] = "points3d.ply"
-    if extra:
-        ds["splatprep"] = extra
+    if extra or method != "copy":
+        ds["splatprep"] = {**(extra or {}), "undistorted": method != "copy"}
     (out_dir / "dataset.json").write_text(json.dumps(ds, indent=2))
     sparse = out_dir / "sparse" / "0"
     if sparse.exists():

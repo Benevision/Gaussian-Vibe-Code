@@ -214,6 +214,7 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         log_path=out_dir / "splatprep.log",
         extra={"model": model_id, "mapper": stats.get("mapper"), "registeredPct": stats["registeredPct"]},
         up=known_up,
+        masks_dir=_resolve(workdir, req.get("masksDir")),
     )
     stats.update({"export": exp, "status": "ok"})
     if not req.get("keepWork", False):

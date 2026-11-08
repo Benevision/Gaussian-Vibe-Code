@@ -123,3 +123,21 @@ def test_fisheye_guesses_do_not_fix_the_focal_length(tmp_path):
     with sqlite3.connect(db) as c:
         c.executemany("INSERT INTO cameras VALUES (?, ?, ?)", [(3, 1, 1), (4, 1, 1)])     # PINHOLE with EXIF
     assert _prior_focal_fraction(db) == 0.5
+
+
+def test_masks_follow_the_undistortion():
+    import numpy as np
+
+    from splatprep.colmap_model import Camera
+    from splatprep.export import undistort_mask
+
+    pin = Camera(1, "PINHOLE", 64, 48, np.array([50.0, 50.0, 32.0, 24.0]))
+    m = np.zeros((48, 64), np.uint8); m[10:20, 30:40] = 255
+    same = undistort_mask(m, pin, pin)
+    assert (same == m).mean() > 0.99                     # no distortion: unchanged
+    fish = Camera(2, "OPENCV_FISHEYE", 64, 64, np.array([20.0, 20.0, 32.0, 32.0, 0, 0, 0, 0]))
+    out = Camera(3, "PINHOLE", 64, 64, np.array([20.0, 20.0, 32.0, 32.0]))
+    full = np.full((64, 64), 255, np.uint8)
+    w = undistort_mask(full, fish, out)
+    assert w[32, 32] == 255                              # centre still kept
+    assert w[0, 0] == 255 or w[0, 0] == 0                # corners: valid either way, but never garbage

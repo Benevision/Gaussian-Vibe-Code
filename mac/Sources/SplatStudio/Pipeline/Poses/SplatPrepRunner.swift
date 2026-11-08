@@ -266,6 +266,13 @@ struct SplatPrepPoseSolver: PoseSolver {
     /// - Parameter preferOutputImages: use splatprep's (undistorted) image copies instead of the original frames.
     static func readSolution(sfmDir: URL, frames: FrameSet, prefix: String, preferOutputImages: Bool = false) throws -> PoseSolution {
         let ds = try PreparedDataset.load(sfmDir)
+        // splatprep ≥ 2026-11-09 says whether it undistorted, and writes undistorted masks next to the images
+        let raw = (try? JSONSerialization.jsonObject(with: Data(contentsOf: sfmDir.appendingPathComponent("dataset.json")))) as? [String: Any]
+        let undistorted = (raw?["splatprep"] as? [String: Any])?["undistorted"] as? Bool ?? false
+        let rawMasks: [String: String] = Dictionary(((raw?["cameras"] as? [[String: Any]]) ?? []).compactMap { c in
+            guard let i = c["image"] as? String, let m = c["mask"] as? String else { return nil }
+            return (i, m)
+        }, uniquingKeysWith: { a, _ in a })
         var byBase: [String: IngestedFrame] = [:]
         for f in frames.frames { byBase[(f.image as NSString).lastPathComponent] = f; byBase[((f.image as NSString).lastPathComponent as NSString).deletingPathExtension] = f }
         var sol = PoseSolution()
@@ -277,6 +284,10 @@ struct SplatPrepPoseSolver: PoseSolver {
             let exported = FileManager.default.fileExists(atPath: sfmDir.appendingPathComponent(c.image).path)
             if exported && (preferOutputImages || c.width != f.width || c.height != f.height) {
                 p.image = "\(prefix)/\(c.image)"; p.width = c.width; p.height = c.height
+                if undistorted {
+                    p.undistorted = true
+                    p.mask = rawMasks[c.image].map { "\(prefix)/\($0)" }
+                }
             }
             sol.poses[f.image] = p
         }

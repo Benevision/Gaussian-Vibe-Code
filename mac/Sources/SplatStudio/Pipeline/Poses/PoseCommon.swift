@@ -12,6 +12,10 @@ struct SolvedPose: Sendable, Hashable {
     var image: String? = nil
     var width: Int? = nil
     var height: Int? = nil
+    /// The replacement image is undistorted (lens distortion removed): the frame's own masks, sky masks and depth
+    /// no longer line up with it. `mask` is the solver's undistorted copy of the frame's mask, when it made one.
+    var undistorted = false
+    var mask: String? = nil
 
     static func == (a: SolvedPose, b: SolvedPose) -> Bool { a.c2w == b.c2w && a.fx == b.fx && a.image == b.image }
     func hash(into h: inout Hasher) { h.combine(image); h.combine(fx) }
@@ -43,7 +47,9 @@ enum PoseAssembly {
             let fx = p.fx ?? f.focalPx ?? ImageUtil.defaultFocal(width: w, height: h)
             var c = DatasetCamera.make(id: i, image: p.image ?? f.image, width: w, height: h, fx: fx, fy: p.fy ?? p.fx ?? fx,
                                        cx: p.cx ?? f.cx ?? Float(w) / 2, cy: p.cy ?? f.cy ?? Float(h) / 2, c2w: p.c2w)
-            if p.image == nil || (p.width == f.width && p.height == f.height) {
+            if p.undistorted {
+                c.mask = p.mask       // the frame's own mask is in the distorted geometry
+            } else if p.image == nil || (p.width == f.width && p.height == f.height) {
                 c.mask = f.mask; c.sky = f.sky
                 c.depth = f.depth; c.depthWidth = f.depthWidth; c.depthHeight = f.depthHeight
             }
