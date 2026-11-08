@@ -19,7 +19,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 LONG_SIDE = 256
 
 
@@ -76,6 +76,32 @@ def _sample(img: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
             + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy)
 
 
+def backproject(depth: np.ndarray, rgb: Optional[np.ndarray], cam, stride: int = 2) -> Tuple[np.ndarray, np.ndarray]:
+    """World points (and colours) of a depth map of ``cam`` (any resolution; intrinsics scaled to it)."""
+    h, w = depth.shape
+    sx, sy = w / float(cam.width), h / float(cam.height)
+    fx, fy, cx, cy = cam.fx * sx, cam.fy * sy, cam.cx * sx, cam.cy * sy
+    ys, xs = np.mgrid[0:h:stride, 0:w:stride]
+    z = depth[ys, xs]
+    ok = z > 0
+    xs, ys, z = xs[ok], ys[ok], z[ok]
+    Xc = np.stack(((xs + 0.5 - cx) / fx * z, (ys + 0.5 - cy) / fy * z, z), 1)
+    c2w = np.asarray(cam.camera_to_world, dtype=np.float64)
+    Xw = Xc @ c2w[:3, :3].T + c2w[:3, 3]
+    col = rgb[ys, xs].astype(np.float32) / 255.0 if rgb is not None else np.full((len(z), 3), 0.5, np.float32)
+    return Xw.astype(np.float32), col
+
+
+def cache_key(cam) -> str:
+    """Cache file stem for a camera: changes when its photo, pose or intrinsics change (a re-solved dataset)."""
+    import hashlib
+
+    h = hashlib.sha1(str(cam.image).encode())
+    h.update(np.asarray(cam.camera_to_world, dtype=np.float64).round(6).tobytes())
+    h.update(np.array([cam.fx, cam.fy, cam.cx, cam.cy, cam.width, cam.height], dtype=np.float64).round(4).tobytes())
+    return f"{cam.id}-{h.hexdigest()[:12]}"
+
+
 class DepthPriors:
     """Per-camera prior depth maps (float32, ~256 px long side; 0 = no data)."""
 
@@ -100,7 +126,7 @@ class DepthPriors:
         cached = self._meta_ok()
         todo = []
         for c in cams:
-            f = self.cache_dir / f"{c.id}.npy"
+            f = self.cache_dir / f"{cache_key(c)}.npy"
             if cached and f.is_file():
                 try:
                     self.maps[c.id] = np.load(f)
@@ -112,6 +138,7 @@ class DepthPriors:
             if points is None or len(points) < 100:
                 self.log("depth priors: the dataset has too few 3D points to scale a depth model's output; skipped")
                 return len(self.maps)
+
             import torch
             from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
@@ -152,7 +179,7 @@ class DepthPriors:
                 # beyond 50× the median fitted depth is sky / noise, not a surface
                 depth[depth > 50 * np.median(z)] = 0
                 self.maps[c.id] = depth
-                np.save(self.cache_dir / f"{c.id}.npy", depth)
+                np.save(self.cache_dir / f"{cache_key(c)}.npy", depth)
                 fitted += 1
                 errs.append(err)
             del model
@@ -162,3 +189,27 @@ class DepthPriors:
                 self.log(f"depth priors: {fitted} of {len(todo)} photos fitted to the scene "
                          f"(median depth error vs its 3D points {100 * float(np.median(errs)):.0f} %)")
         return len(self.maps)
+
+    def init_points(self, ds, cams: List, total: int, seed: int = 0) -> Tuple[np.ndarray, np.ndarray]:
+        """About ``total`` coloured points back-projected from the prior maps (a dense start for training, like a
+        dense reconstruction), spread evenly over the photos."""
+        from PIL import Image
+
+        have = [c for c in cams if c.id in self.maps]
+        if not have or total <= 0:
+            return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32)
+        per = max(1, total // len(have))
+        rng = np.random.default_rng(seed)
+        xs, cs = [], []
+        for c in have:
+            d = self.maps[c.id]
+            try:
+                rgb = np.asarray(Image.open(ds.resolve(c.image)).convert("RGB").resize((d.shape[1], d.shape[0])))
+            except OSError:
+                rgb = None
+            p, col = backproject(d, rgb, c)
+            if len(p) > per:
+                k = rng.choice(len(p), per, replace=False)
+                p, col = p[k], col[k]
+            xs.append(p); cs.append(col)
+        return np.concatenate(xs), np.concatenate(cs)

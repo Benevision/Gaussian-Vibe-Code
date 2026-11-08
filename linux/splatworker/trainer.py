@@ -880,6 +880,19 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     scene_scale = float(ds.scene_extent)
     if resume is None:
         xyz, rgb = init_points(ds, cfg, region_box, log)
+        if priors is not None and priors.maps and cfg.priorInitPoints > 0:
+            px, pc = priors.init_points(ds, train_cams, cfg.priorInitPoints, seed=cfg.seed)
+            if region_box is not None and len(px):
+                keep = _in_box(px, *region_box)
+                px, pc = px[keep], pc[keep]
+            if len(px):
+                room = max(0, cfg.maxGaussians - len(xyz))
+                if len(px) > room:
+                    k = np.random.default_rng(cfg.seed).choice(len(px), room, replace=False)
+                    px, pc = px[k], pc[k]
+                xyz = np.concatenate([xyz, px]).astype(np.float32)
+                rgb = np.concatenate([rgb, pc]).astype(np.float32)
+                log(f"depth priors: added {len(px)} starting points back-projected from the predicted depth")
         n = xyz.shape[0]
         dist = _knn_mean_dist(xyz)
         dist = np.clip(dist, 1e-7, None)

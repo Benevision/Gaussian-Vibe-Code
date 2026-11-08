@@ -85,6 +85,9 @@ class TrainingConfig:
     # normalWeight > 0; "on"; "off". monoDepthWeight: depth-loss weight for those predicted maps (0 = normals only).
     depthPriors: str = "auto"
     monoDepthWeight: float = 0.0
+    # With depth priors: this many extra starting points back-projected from the predicted depth maps (a dense
+    # start where the camera solve's points are sparse). 0 = off.
+    priorInitPoints: int = 200000
     # Spread MCMC clones along the long axis (ImprovedGS / IGS+), as on the Mac. On by default: without it the
     # 30k schedule collapsed on large scenes once the splat budget filled (1,258-photo drone set: 16.3 dB at
     # step 1.4k → 12.5 dB at 9k; with it 16.5–16.9 dB and rising at 9k).
