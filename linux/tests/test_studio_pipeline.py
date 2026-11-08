@@ -31,6 +31,22 @@ from PIL import Image
 def run_request(req, workdir, progress):
     w = Path(workdir)
     out = w / req["outputDir"]
+    if req["task"] == "frames" and req.get("stereo"):
+        (out / "images").mkdir(parents=True)
+        rng = np.random.default_rng(0)
+        frames = []
+        for i in range(4):
+            tex = (rng.random((24, 48, 3)) * 255).astype(np.uint8)
+            Image.fromarray(tex[:, 8:40]).save(out / "images" / f"{i:06d}_L.png")
+            Image.fromarray(tex[:, 12:44]).save(out / "images" / f"{i:06d}_R.png")   # 4 px disparity
+            for eye, t in (("left", "L"), ("right", "R")):
+                frames.append({"image": f"images/{i:06d}_{t}.png", "width": 32, "height": 24, "group": i,
+                               "eye": eye, "focalPx": 30.0, "cx": 16.0, "cy": 12.0})
+        rig = {"baseline": req["stereo"].get("baseline", 0.05), "origin": "user", "parallel": True,
+               "lens": "pinhole"}
+        (out / "frames.json").write_text(json.dumps({"frames": frames, "rig": rig, "isMultiViewRig": False,
+                                                     "stereoLayout": "sideBySide", "request": req}))
+        return {"stats": {}}
     if req["task"] == "frames":
         (out / "images").mkdir(parents=True)
         for i in range(6):
@@ -38,6 +54,14 @@ def run_request(req, workdir, progress):
         progress({"stage": "frames", "progress": 1.0, "message": "6 frames"})
         return {"stats": {}}
     images = sorted((w / req["imagesDir"]).iterdir())
+    if req["task"] == "maskpreview":
+        out.mkdir(parents=True)
+        im = Image.open(w / req["imagesDir"] / req["previewImage"])
+        m = np.zeros((im.height, im.width), np.uint8)
+        x, y, _ = req["maskPrompts"][0]["points"][0]
+        m[max(0, int(y) - 3):int(y) + 3, max(0, int(x) - 3):int(x) + 3] = 255
+        Image.fromarray(m).save(out / "preview.png")
+        return {"stats": {}}
     if req["task"] == "masks":
         (out / "masks").mkdir(parents=True)
         for k, p in enumerate(images):
@@ -233,3 +257,144 @@ def test_capture_import_priors(tmp_path, monkeypatch):
     pri = load_priors(ds / "priors.json")
     assert len(pri) == 1
     np.testing.assert_allclose(pri[0].c2w[:3, :3], np.diag([1, -1, -1]))
+
+
+def test_360_photos_pipeline_rig_nadir_masks_and_manual_layer(server, tmp_path):
+    """360° photos folder → views cut here → nadir layer + the mask editor's layer stacked → rig solve."""
+    client, backend, _ = server
+    src = tmp_path / "pano"
+    src.mkdir()
+    rng = np.random.default_rng(3)
+    for i in range(3):
+        Image.fromarray((rng.random((48, 96, 3)) * 255).astype(np.uint8)).save(src / f"R{i}.jpg")
+    opts = ProjectOptions(name="Pano", source_kind="photos360", source=str(src), sky=False, views_360=4,
+                          max_image_size=24, holdout_every=0)
+    proj = Project.create(tmp_path / "projects", "Pano", opts.to_dict())
+    # a manual mask from the mask editor, made before "Prepare again": it must survive and be stacked
+    manual = proj.dataset_dir / importers.MANUAL_LAYER / "masks"
+    manual.mkdir(parents=True)
+    mm = np.full((24, 24), 255, np.uint8)
+    mm[:6, :6] = 0
+    Image.fromarray(mm).save(manual / "000001_v00.png")
+    out, events = run(client, proj, opts, train=False)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    assert [d["title"] for k, d in events if k == "stage"] == stage_titles(opts, train=False)
+    doc = json.loads((proj.dataset_dir / "dataset.json").read_text())
+    assert len(doc["cameras"]) == 3 * 8                     # 4 horizon + 2 up + 2 down views per photo
+    rig = doc["request"]["rig"]
+    assert rig["kind"] == "multiview" and len(rig["groups"]) == 3 and all(len(g) == 8 for g in rig["groups"])
+    assert doc["request"]["masksDir"] == "masks"
+    by = {Path(c["image"]).stem: c for c in doc["cameras"]}
+    assert "mask" in by["000000_v06"] and "mask" not in by["000000_v00"]     # nadir only on the downward views
+    m = np.asarray(Image.open(proj.dataset_dir / by["000001_v00"]["mask"]))
+    assert m[2, 2] == 0 and m[20, 20] == 255
+    assert manual.is_dir()
+
+
+def test_stereo_pipeline_rig_metric_scale_and_depth(server, tmp_path):
+    client, backend, _ = server
+    video = tmp_path / "in" / "pair_sbs.mp4"
+    video.parent.mkdir()
+    video.write_bytes(b"not really a video")
+    right = tmp_path / "in" / "right.mov"
+    right.write_bytes(b"x")
+    opts = ProjectOptions(name="St", source_kind="stereo", source=str(video), sky=False, stereo_depth=True,
+                          stereo_baseline_mm=50.0, stereo_layout="separateFiles", stereo_right=str(right),
+                          holdout_every=0)
+    proj = Project.create(tmp_path / "projects", "St", opts.to_dict())
+    out, events = run(client, proj, opts)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    assert [d["title"] for k, d in events if k == "stage"] == stage_titles(opts)
+    assert "Stereo depth" in stage_titles(opts)
+    ds = proj.dataset_dir
+    fr = json.loads((ds / "frames.json").read_text())
+    assert fr["request"]["stereo"] == {"layout": "separateFiles", "swapEyes": False, "baseline": 0.05,
+                                       "rightVideo": "_right-eye.mov"}
+    assert (proj.root / "source" / "_right-eye.mov").exists()
+    doc = json.loads((ds / "dataset.json").read_text())
+    rig = doc["request"]["rig"]
+    assert rig["kind"] == "multiview" and len(rig["groups"]) == 4
+    assert rig["groups"][0]["000000_R.png"] == {"R": np.eye(3).tolist(), "t": [0.05, 0.0, 0.0]}
+    cams = {Path(c["image"]).stem: c for c in doc["cameras"]}
+    # the fake solver put consecutive images 0.1 apart: ×0.5 makes L–R = 5 cm, right eyes re-derived from the left
+    pl = np.asarray(cams["000002_L"]["cameraToWorld"])[:3, 3]
+    pr = np.asarray(cams["000002_R"]["cameraToWorld"])[:3, 3]
+    assert np.linalg.norm(pr - pl) == pytest.approx(0.05) and pl[0] == pytest.approx(4 * 0.1 * 0.5)
+    left = cams["000001_L"]
+    assert left["depth"] == "depth/000001_L.bin" and "depth" not in cams["000001_R"]
+    z = np.fromfile(ds / left["depth"], "<f2").reshape(left["depthHeight"], left["depthWidth"])
+    # f = 30 px, b = 5 cm, d = 4 px → 0.375 m where the matcher found the texture
+    assert np.median(z[z > 0]) == pytest.approx(0.375, rel=0.05)
+    assert out is not None and out.is_file()
+
+
+def test_stereo_photos_folder_pipeline(server, tmp_path):
+    """A folder of side-by-side photos is split here (no frames job) and solved as a stereo rig."""
+    client, backend, _ = server
+    src = tmp_path / "sbs"
+    src.mkdir()
+    rng = np.random.default_rng(4)
+    for i in range(3):
+        tex = (rng.random((24, 40, 3)) * 255).astype(np.uint8)
+        Image.fromarray(np.concatenate([tex[:, 4:36], tex[:, 8:40]], 1)).save(src / f"S{i}.png")   # 64×24
+    opts = ProjectOptions(name="SP", source_kind="stereo", source=str(src), sky=False, stereo_baseline_mm=64,
+                          stereo_fov=60, holdout_every=0)
+    proj = Project.create(tmp_path / "projects", "SP", opts.to_dict())
+    out, events = run(client, proj, opts, train=False)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    ds = proj.dataset_dir
+    assert sorted(p.name for p in (ds / "images").iterdir())[:2] == ["000000_L.jpg", "000000_R.jpg"]
+    fr = json.loads((ds / "frames.json").read_text())
+    assert fr["stereoLayout"] == "sideBySide" and fr["rig"]["baseline"] == pytest.approx(0.064)
+    assert "request" not in fr                                  # split here, not by a worker frames job
+    assert fr["frames"][0]["focalPx"] == pytest.approx(16 / np.tan(np.radians(30)))
+    doc = json.loads((ds / "dataset.json").read_text())
+    assert len(doc["request"]["rig"]["groups"]) == 3
+    cams = {Path(c["image"]).stem: c for c in doc["cameras"]}
+    d = np.linalg.norm(np.asarray(cams["000001_R"]["cameraToWorld"])[:3, 3]
+                       - np.asarray(cams["000001_L"]["cameraToWorld"])[:3, 3])
+    assert d == pytest.approx(0.064)
+
+
+def test_mask_editor_jobs_on_the_local_worker(server, tmp_path):
+    """A SAM 2 click (maskpreview) and tracking (masks / sam2_track) as jobs of the local server."""
+    from conftest import make_dataset
+    from splatworker.studio.mask_edit import MaskEditModel, run_job, scratch_dir
+
+    client, backend, _ = server
+    ds = tmp_path / "proj" / "dataset"
+    make_dataset(ds, n_cams=3, width=32, height=24, depth=False, points=False)
+    m = MaskEditModel(ds)
+    m.add_point(10, 10, True)
+    dest = scratch_dir(ds)
+    run_job(client, ds, m.preview_request("_mp"), "click", dest, poll=0.02)
+    assert m.apply_object(dest / "preview.png") > 0 and not m.keep()[10, 10]
+    dest2 = scratch_dir(ds)
+    run_job(client, ds, m.track_request("_tr"), "track", dest2, poll=0.02)
+    assert m.apply_tracked(dest2 / "masks") == 2           # the fake marks every other image
+    m.save()
+    doc = json.loads((ds / "dataset.json").read_text())
+    assert sum("mask" in c for c in doc["cameras"]) == 2
+    assert client.get("/v1/datasets") == []
+
+
+def test_static_regions_stage(server, tmp_path):
+    client, backend, _ = server
+    photos = tmp_path / "drone"
+    photos.mkdir()
+    rng = np.random.default_rng(5)
+    for i in range(14):
+        img = (rng.random((48, 96, 3)) * 255).astype(np.uint8)
+        img[30:44, 4:30] = 0
+        img[35:38, 8:26] = 255
+        Image.fromarray(img).save(photos / f"D{i:03d}.png")
+    opts = ProjectOptions(name="D", source_kind="photos", source=str(photos), sky=False, mask_static=True,
+                          blur_rejection=False, max_image_size=0)
+    proj = Project.create(tmp_path / "projects", "D", opts.to_dict())
+    out, events = run(client, proj, opts, train=False)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    assert "Fixed parts of the frame" in [d["title"] for k, d in events if k == "stage"]
+    cams = json.loads((proj.dataset_dir / "dataset.json").read_text())["cameras"]
+    assert all("mask" in c for c in cams)
+    m = np.asarray(Image.open(proj.dataset_dir / cams[0]["mask"]))
+    assert m[36, 15] == 0 and m[10, 70] == 255

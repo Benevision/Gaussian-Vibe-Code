@@ -43,8 +43,10 @@ class PipelineError(RuntimeError):
 
 def stage_titles(o: ProjectOptions, train: bool = True) -> List[str]:
     s: List[str] = []
-    if o.source_kind in ("video", "video360"):
+    if o.source_kind in ("video", "video360", "stereo"):
         s.append("Extracting frames")
+    elif o.source_kind == "photos360":
+        s.append("Splitting 360° photos")
     elif o.source_kind in ("photos", "capture"):
         s.append("Preparing images")
     elif o.source_kind in ("colmap", "nerfstudio", "dataset"):
@@ -53,9 +55,13 @@ def stage_titles(o: ProjectOptions, train: bool = True) -> List[str]:
         for m in o.mask_models:
             if m != "none":
                 s.append(f"Masks ({m})")
+        if getattr(o, "mask_static", False):
+            s.append("Fixed parts of the frame")
         if o.sky:
             s.append("Finding the sky")
         s.append("Solving cameras")
+        if o.source_kind == "stereo" and getattr(o, "stereo_depth", False):
+            s.append("Stereo depth")
     s.append("Finalising dataset")
     if train:
         s.append("Training")
@@ -112,18 +118,31 @@ class LocalPipeline:
     def _progress(self, fraction: float, message: str = "") -> None:
         self.emit("progress", {"fraction": fraction, "message": message})
 
-    def _video_folder(self, video: Path) -> Path:
+    def _video_folder(self, video: Path, name: Optional[str] = None) -> Path:
         """A folder holding (a link to) the video that the server accepts as a dataset: the project's own
         ``source/`` (the video's folder may be too broad to register, e.g. the home folder)."""
         d = self.project.root / "source"
         d.mkdir(exist_ok=True)
-        dst = d / video.name
+        dst = d / (name or video.name)
+        if name and (dst.exists() or dst.is_symlink()):
+            dst.unlink()
         if not dst.exists():
             try:
                 os.link(video, dst)
             except OSError:
                 os.symlink(video.resolve(), dst)
         return d
+
+    def _stereo_frames(self, ds: Path) -> None:
+        from . import stereo
+
+        st = stereo.prepare_frames(ds, self.o.stereo_both_eyes)
+        b = st["baseline"]
+        self._log(f"stereo: {st['pairs']} pairs, {st['layout']}, "
+                  + (f"baseline {b * 1000:.1f} mm ({st['origin']})" if b else "baseline unknown")
+                  + (", fisheye" if st["lens"] == "fisheye" else "")
+                  + ("" if st["parallel"] else ", not a rectified pair (scale only, no rig / depth)")
+                  + (f", {st['droppedRight']} right-eye images left out" if st["droppedRight"] else ""))
 
     def _register(self, folder: Path) -> str:
         info = self.client.local_dataset(folder)
@@ -203,12 +222,28 @@ class LocalPipeline:
         imported = False
 
         # 1. source → images (or a finished dataset.json)
-        if o.source_kind in ("video", "video360"):
+        if o.source_kind == "stereo" and src.is_dir():           # a folder of SBS / over-under stereo photos
             self._stage("Extracting frames")
+            shutil.rmtree(ds / "masks", ignore_errors=True)
+            from . import stereo
+
+            st = stereo.split_photos(src, ds, o.stereo_layout, o.stereo_swap,
+                                     (o.stereo_baseline_mm or 0) / 1000.0 or None, o.stereo_fov or None,
+                                     o.max_image_size, progress=lambda f, m: (self._check(), self._progress(f, m)))
+            for r in st["rejected"][:20]:
+                self._log(f"skipped {r['item']}: {r['reason']}")
+            self._stereo_frames(ds)
+        elif o.source_kind in ("video", "video360", "stereo"):
+            self._stage("Extracting frames")
+            shutil.rmtree(ds / "masks", ignore_errors=True)        # stacked masks of an earlier run
             vid = self._register(self._video_folder(src))
             req = o.frames_request(src.name)
+            if o.source_kind == "stereo" and req["stereo"].get("rightVideo"):
+                self._video_folder(Path(o.stereo_right), req["stereo"]["rightVideo"])
             req["outputDir"] = f"_frames_{uuid.uuid4().hex[:6]}"
             self._process(vid, req, "frames", ds)
+            if o.source_kind == "stereo":
+                self._stereo_frames(ds)
             if (ds / "masks").is_dir():          # 360° nadir / rig masks: one more mask layer
                 layer = ds / "splatprep-masks" / "frames"
                 shutil.rmtree(layer, ignore_errors=True)
@@ -220,6 +255,13 @@ class LocalPipeline:
                                          progress=lambda f, m: (self._check(), self._progress(f, m)))
             if st["rejected"]:
                 self._log(f"rejected {len(st['rejected'])} blurry photos: {', '.join(st['rejected'][:10])}…")
+        elif o.source_kind == "photos360":
+            self._stage("Splitting 360° photos")
+            st = importers.import_photos360(src, ds, o.equirect_options(),
+                                            progress=lambda f, m: (self._check(), self._progress(f, m)))
+            self._log(f"{st['images']} views from {st['photos']} photos")
+            for r in st["rejected"][:20]:
+                self._log(f"skipped {r['item']}: {r['reason']}")
         elif o.source_kind == "capture":
             self._stage("Preparing images")
             importers.import_capture(src, ds, progress=self._progress)
@@ -256,6 +298,9 @@ class LocalPipeline:
             fr_layer = ds / "splatprep-masks" / "frames" / "masks"
             if fr_layer.is_dir():
                 layers.append(fr_layer)
+            importers.prune_mask_layers(ds, keep=[m for m in o.mask_models if m != "none"]
+                                        + (["frames"] if fr_layer.is_dir() else [])
+                                        + (["static"] if o.mask_static else []))
             for m in o.mask_models:
                 if m == "none":
                     continue
@@ -267,7 +312,21 @@ class LocalPipeline:
                 self._process(dataset_id, req, f"masks {m}", dest)
                 layers.append(dest / "masks")
                 self._check()
-            masks = importers.stack_masks(ds, layers) if layers else {}
+            if o.mask_static:
+                self._stage("Fixed parts of the frame")
+                from . import static_regions
+
+                reps = static_regions.apply(ds, progress=lambda f, m: (self._check(), self._progress(f, m)))
+                for r in reps:
+                    self._log(f"fixed parts: {r['camera']}: {r['staticFraction']:.1%} of the frame"
+                              + ("" if r["applied"] else " (not masked)"))
+                if (ds / static_regions.LAYER).is_dir():
+                    layers.append(ds / static_regions.LAYER)
+            manual = ds / importers.MANUAL_LAYER / "masks"
+            if manual.is_dir():                   # the mask editor's own layer survives "Prepare again"
+                layers.append(manual)
+            shutil.rmtree(ds / "masks", ignore_errors=True)
+            masks = importers.stack_masks(ds, layers, restore=importers.manual_restore_dirs(ds)) if layers else {}
             if layers:
                 self._log(f"masks: {len(masks)} photos have ignored areas")
             # 3. sky layer
@@ -294,9 +353,29 @@ class LocalPipeline:
             rig = importers.rig_from_frames(ds)
             if rig:
                 req["rig"] = rig
+            if o.source_kind == "stereo":
+                from . import stereo
+
+                srig = stereo.sfm_rig(ds)
+                if srig:
+                    req["rig"] = srig
+                if stereo.rig_info(ds).get("lens") == "fisheye" and o.camera_model == "auto":
+                    req["cameraModel"] = "fisheye"
             self._process(dataset_id, req, "camera solve", ds)
             if not (ds / "dataset.json").is_file():
                 raise PipelineError("camera solving produced no dataset.json")
+            if o.source_kind == "stereo":
+                st = stereo.apply_constraints(ds)
+                if st["scale"]:
+                    self._log(f"metric scale from the {stereo.rig_info(ds)['baseline'] * 1000:.1f} mm stereo "
+                              f"baseline: ×{st['scale']:.4f}; right eyes from the rig: {st['enforced']} "
+                              f"(+{st['added']} the solver missed)")
+                else:
+                    self._log("stereo: baseline unknown or too few registered pairs — the scale stays arbitrary")
+                if o.stereo_depth:
+                    self._stage("Stereo depth")
+                    d = stereo.compute_depth(ds, progress=self._progress, check=self._check)
+                    self._log(f"stereo depth: {d}")
         else:
             masks = {p.stem: f"masks/{p.name}" for p in (ds / "masks").glob("*.png")} if (ds / "masks").is_dir() else {}
 

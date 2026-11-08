@@ -64,8 +64,8 @@ def validate_request(request: Any) -> Dict[str, Any]:
     if not isinstance(request, dict):
         raise ProcessingError("request must be a JSON object")
     task = request.get("task")
-    if task not in ("sfm", "masks", "benchmark", "frames"):
-        raise ProcessingError("request.task must be one of 'sfm', 'masks', 'benchmark', 'frames'")
+    if task not in ("sfm", "masks", "benchmark", "frames", "maskpreview"):
+        raise ProcessingError("request.task must be one of 'sfm', 'masks', 'benchmark', 'frames', 'maskpreview'")
     req = dict(request)
     req["imagesDir"] = _safe_rel(req.get("imagesDir", "images"), "imagesDir")
     req["outputDir"] = _safe_rel(req.get("outputDir", "out"), "outputDir")
@@ -73,6 +73,18 @@ def validate_request(request: Any) -> Dict[str, Any]:
         req["priorPoses"] = _safe_rel(req["priorPoses"], "priorPoses")
     if task == "frames":
         req["video"] = _safe_rel(req.get("video"), "video")
+        st = req.get("stereo")
+        if st is not None:
+            if not isinstance(st, dict):
+                raise ProcessingError("request.stereo must be an object")
+            if st.get("rightVideo") is not None:
+                st = dict(st, rightVideo=_safe_rel(st["rightVideo"], "stereo.rightVideo"))
+            req["stereo"] = st
+    if task == "maskpreview":
+        if not isinstance(req.get("maskPrompts"), list) or not req["maskPrompts"]:
+            raise ProcessingError("request.maskPrompts must be a non-empty list for task 'maskpreview'")
+        if req.get("previewImage") is not None:
+            req["previewImage"] = _safe_rel(req["previewImage"], "previewImage")
     return req
 
 

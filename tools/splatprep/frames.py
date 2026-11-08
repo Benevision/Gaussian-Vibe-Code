@@ -11,6 +11,8 @@ Request keys (besides ``task`` / ``outputDir``):
   pickSharpest, analysisStride, skipSceneCuts, sceneCutThreshold, skipStaticFrames, staticThreshold,
   startTime, endTime, toneMapHDR, encoding).
 * ``equirect`` — the Mac's ``Equirect360Options`` for 360° footage; absent / null = ordinary video.
+* ``stereo`` — stereo footage (the Mac's ``StereoVideoIngest``): side-by-side, top-bottom, two streams in one
+  file or two files → ``images/<frame>_L`` / ``_R`` (see ``stereo.py``); absent / null = ordinary video.
 
 Decoding uses PyAV (bundled FFmpeg, frame-threaded); 360° views are resampled on the GPU with
 ``grid_sample`` when torch has one, else with OpenCV ``remap``.
@@ -223,8 +225,44 @@ def _focal35(container) -> Optional[float]:
     return None
 
 
+class _Secondary:
+    """The other eye's stream (dual-stream file or a second file): decoded lazily up to the time asked for,
+    holding at most two decoded frames (bounded memory)."""
+
+    def __init__(self, container, stream, offset: float, start: float):
+        stream.thread_type = "AUTO"
+        stream.codec_context.thread_count = 0
+        self.container, self.tb, self.offset = container, stream.time_base, float(offset)
+        if start + offset > 0:
+            container.seek(int((start + offset) / self.tb), stream=stream, backward=True)
+        self.it = container.decode(stream)
+        self.prev = self.pending = None          # (frame, t)
+        self.done = False
+
+    def at(self, t: float):
+        target = t + self.offset
+        while not self.done and (self.pending is None or self.pending[1] < target):
+            try:
+                f = next(self.it)
+            except StopIteration:
+                self.done = True
+                break
+            if f.pts is None:
+                continue
+            self.prev, self.pending = self.pending, (f, float(f.pts * self.tb))
+        cands = [c for c in (self.prev, self.pending) if c is not None]
+        if not cands:
+            return None
+        return min(cands, key=lambda c: abs(c[1] - target))[0]
+
+    def close(self) -> None:
+        self.prev = self.pending = None
+        self.container.close()
+
+
 def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[Dict[str, Any]], device: str,
-                   progress: ProgressFn, log: Callable[[str], None] = lambda m: None) -> Dict[str, Any]:
+                   progress: ProgressFn, log: Callable[[str], None] = lambda m: None,
+                   stereo: Optional[Dict[str, Any]] = None, right_video: Optional[Path] = None) -> Dict[str, Any]:
     try:
         import av
     except ImportError as e:
@@ -237,7 +275,47 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     images.mkdir(parents=True, exist_ok=True)
 
     container = av.open(str(video))
-    stream = container.streams.video[0]
+    # stereo: layout, calibration, which stream is the left eye (decoding is driven by the left eye)
+    st_layout = None
+    st_ana = False
+    rig: Dict[str, Any] = {}
+    cal = None
+    secondary: Optional[_Secondary] = None
+    primary_index = 0
+    if stereo is not None:
+        from . import stereo as stl
+
+        vs = container.streams.video
+        w0, h0 = vs[0].codec_context.width, vs[0].codec_context.height
+        same = len(vs) >= 2 and abs(vs[1].codec_context.width - w0) < 2 and abs(vs[1].codec_context.height - h0) < 2
+        try:
+            st_layout, st_ana, reason = stl.detect_layout(w0, h0, len(vs), same, video.name, stereo,
+                                                          right_video is not None)
+        except ValueError as e:
+            raise SplatPrepError(str(e)) from None
+        if st_layout == "dualStream" and len(vs) < 2:
+            raise SplatPrepError("dual-stream stereo needs two video streams in the file")
+        if st_layout == "separateFiles" and right_video is None:
+            raise SplatPrepError("stereo: the right-eye video (stereo.rightVideo) is missing")
+        rig = {"baseline": None, "origin": "default", "parallel": True, "lens": "pinhole"}
+        cal = stl.parse_offline_cal((container.metadata or {}).get("offlineCal")) if st_layout == "dualStream" else None
+        if cal is not None:
+            lc = next(c for c in cal["cameras"] if c["eye"] == "left")
+            rc = next(c for c in cal["cameras"] if c["eye"] == "right")
+            primary_index = lc["stream"]
+            rig.update(baseline=cal["baseline"], origin=cal["origin"], parallel=cal["parallel"], lens=cal["lens"],
+                       leftIntrinsics=lc["intrinsics"], rightIntrinsics=rc["intrinsics"],
+                       calibrationWidth=lc.get("width") or w0,
+                       calibration={"cameras": [{k: v for k, v in c.items() if k != "position"}
+                                                for c in cal["cameras"]]})
+            log(f"stereo calibration in the file: baseline {cal['baseline'] * 1000:.1f} mm, {cal['lens']} lens, "
+                f"left eye = stream {primary_index}" if cal["baseline"] else "stereo calibration in the file")
+        if stereo.get("baseline"):
+            rig.update(baseline=float(stereo["baseline"]), origin="user")
+        if stereo.get("horizontalFOV"):
+            rig["horizontalFOV"] = float(stereo["horizontalFOV"])
+        log(f"stereo layout {st_layout} ({reason})" + (", anamorphic" if st_ana else ""))
+    stream = container.streams.video[primary_index]
     stream.thread_type = "AUTO"
     stream.codec_context.thread_count = 0
     cc = stream.codec_context
@@ -252,6 +330,12 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     f35 = _focal35(container)
     if start > 0:
         container.seek(int(start / stream.time_base), stream=stream, backward=True)
+    if st_layout == "dualStream":
+        c2 = av.open(str(video))
+        secondary = _Secondary(c2, c2.streams.video[1 - primary_index], 0.0, start)
+    elif st_layout == "separateFiles":
+        c2 = av.open(str(right_video))
+        secondary = _Secondary(c2, c2.streams.video[0], float(stereo.get("rightTimeOffset") or 0.0), start)
 
     W, H = cc.width, cc.height
     views = remap = None
@@ -281,7 +365,7 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     tw = min(THUMB_MAX_WIDTH, W)
     th = max(8, int(round(H * tw / W)))
 
-    def write(frame, idx: int, sharp: float, t: float) -> List[Dict[str, Any]]:
+    def to_rgb(frame) -> np.ndarray:
         if hdr_curve:
             rgb = _tone_map(frame.to_ndarray(format="rgb48le"), hdr_curve)
         else:
@@ -289,16 +373,86 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
         k = _rotation(frame)
         if k:
             rgb = np.ascontiguousarray(np.rot90(rgb, k))
+        return rgb
+
+    def fit(rgb: np.ndarray) -> np.ndarray:
+        h, w = rgb.shape[:2]
+        ms = vo["maxImageSize"]
+        if ms and max(w, h) > ms:
+            import cv2
+
+            s = ms / max(w, h)
+            rgb = cv2.resize(rgb, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+        return rgb
+
+    eye_masks: Dict[Tuple[str, int, int], Optional[Path]] = {}
+
+    def eye_mask(eye: str, w: int, h: int) -> Optional[Path]:
+        """The fisheye image circle of a calibrated eye as a keep mask (written once per eye and size)."""
+        key = (eye, w, h)
+        if key not in eye_masks:
+            eye_masks[key] = None
+            cam = next((c for c in (cal or {}).get("cameras", []) if c["eye"] == eye), None)
+            if cam is not None and cam.get("width"):
+                from . import stereo as stl
+
+                m = stl.circle_mask(w, h, cam, w / float(cam["width"]))
+                if m is not None:
+                    import cv2
+
+                    (out_dir / "masks").mkdir(parents=True, exist_ok=True)
+                    p = out_dir / "masks" / f".eye{eye}{w}x{h}.png"
+                    cv2.imwrite(str(p), m)
+                    eye_masks[key] = p
+        return eye_masks[key]
+
+    def write_stereo(frame, idx: int, sharp: float, t: float) -> List[Dict[str, Any]]:
+        from . import stereo as stl
+
+        rgb = to_rgb(frame)
+        if st_layout in ("sideBySide", "topBottom"):
+            left, right = stl.split_eyes(rgb, st_layout, st_ana)
+        else:
+            sec = secondary.at(t)
+            if sec is None:
+                return []
+            left, right = rgb, to_rgb(sec)
+        del rgb
+        if stereo.get("swapEyes"):
+            left, right = right, left
+        out: List[Dict[str, Any]] = []
+        for eye, img, tag in (("left", left, "L"), ("right", right, "R")):
+            img = fit(img)
+            h, w = img.shape[:2]
+            name = f"{idx:06d}_{tag}"
+            pending.append(pool.submit(_write_image, images / f"{name}.{ext}", img, vo["encoding"]))
+            fr = {"image": f"images/{name}.{ext}", "width": w, "height": h, "sharpness": sharp,
+                  "source": str(video if eye == "left" or right_video is None else right_video), "timestamp": t,
+                  "group": idx, "eye": eye}
+            fk = stl.focal_for(rig, eye, w, h, f35)
+            if fk:
+                fr["focalPx"], fr["cx"], fr["cy"] = (float(v) for v in fk)
+            mp = eye_mask(eye, w, h) if cal else None
+            if mp is not None:
+                dst = out_dir / "masks" / f"{name}.png"
+                try:
+                    os.link(mp, dst)
+                except OSError:
+                    import shutil
+
+                    shutil.copyfile(mp, dst)
+                fr["mask"] = f"masks/{name}.png"
+            out.append(fr)
+        return out
+
+    def write(frame, idx: int, sharp: float, t: float) -> List[Dict[str, Any]]:
+        if st_layout is not None:
+            return write_stereo(frame, idx, sharp, t)
+        rgb = to_rgb(frame)
         out: List[Dict[str, Any]] = []
         if views is None:
+            rgb = fit(rgb)
             h, w = rgb.shape[:2]
-            ms = vo["maxImageSize"]
-            if ms and max(w, h) > ms:
-                import cv2
-
-                s = ms / max(w, h)
-                rgb = cv2.resize(rgb, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
-                h, w = rgb.shape[:2]
             name = f"{idx:06d}.{ext}"
             pending.append(pool.submit(_write_image, images / name, rgb, vo["encoding"]))
             fr = {"image": f"images/{name}", "width": w, "height": h, "sharpness": sharp, "source": str(video), "timestamp": t}
@@ -363,6 +517,8 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
             gray = frame.reformat(width=tw, height=th, format="gray", interpolation="POINT").to_ndarray()
             if gray.ndim == 3:
                 gray = gray[..., 0]
+            if st_layout in ("sideBySide", "topBottom"):          # judge sharpness on the left eye
+                gray = gray[: th // 2] if st_layout == "topBottom" else gray[:, : tw // 2]
             th32 = thumb32(gray)
             if vo["skipSceneCuts"] and state["last_thumb"] is not None and difference(state["last_thumb"], th32) > float(vo["sceneCutThreshold"]):
                 if best is not None:
@@ -386,18 +542,24 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
         for p in pending:
             p.result()
     finally:
+        best = None
         pool.shutdown(wait=True)
         container.close()
-    for p in view_masks:
+        if secondary is not None:
+            secondary.close()
+    for p in view_masks + list(eye_masks.values()):
         if p is not None:
             p.unlink(missing_ok=True)
     if not frames:
         raise SplatPrepError(f"no frames extracted from {video.name}")
     if views is None:
-        frames.sort(key=lambda f: f.get("timestamp") or 0)
+        frames.sort(key=lambda f: (f.get("timestamp") or 0, f.get("eye") or ""))
     fs = {"root": ".", "frames": frames, "rejected": rejected, "isMultiViewRig": views is not None}
+    if st_layout is not None:
+        fs.update(rig=rig, stereoLayout=st_layout)
     (out_dir / "frames.json").write_text(json.dumps(fs, indent=1))
     progress(1.0, f"{len(frames)} images from {state['out']} frames")
     return {"numFrames": state["out"], "numImages": len(frames), "numDecoded": decoded, "numRejected": len(rejected),
             "width": W, "height": H, "views": len(views or []), "toneMapped": bool(hdr_curve),
-            "resampler": remap.backend if remap else None}
+            "resampler": remap.backend if remap else None, "stereo": st_layout,
+            "baseline": rig.get("baseline") if st_layout else None}
