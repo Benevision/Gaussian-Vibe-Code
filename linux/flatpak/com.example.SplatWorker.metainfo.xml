@@ -73,6 +73,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.3.11" date="2026-11-08">
+      <description>
+        <p>Much faster camera solving for 360° video: views of the same 360° frame are matched and placed together as one camera rig with their known directions and lens, and mapped globally. On 60 frames (960 views) of a walk: every view placed, mapping in 2 minutes instead of 7, about a third as many image pairs to match.</p>
+      </description>
+    </release>
     <release version="1.3.10" date="2026-11-08">
       <description>
         <p>A PC on both ethernet and Wi-Fi announces its ethernet address first (and lists all addresses with their kind), so Splat Studio connects over the cable when it can.</p>

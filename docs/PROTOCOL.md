@@ -237,6 +237,13 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
   "singleCamera": true,
   "maxKeypoints": 4096,
   "resizeMax": 1600,
+  "rig": {"kind": "multiview",           // optional, 360° video cut into views (worker ≥ 1.3.11):
+          "groups": [{"000000_v00.jpg": R, …}, …],  // one dict per 360° frame in time order; R = rig_from_cam
+          "intrinsics": [fx, fy, cx, cy]},          // the views' exact pinhole intrinsics (fixed while mapping)
+                                         // → rig pairs (next frame: directions ≤ 50° apart; up to rigWindow (3)
+                                         // frames on: same direction; rigLoopPairs (2) retrieval pairs per view),
+                                         // then COLMAP rig mapping of whole frames (global unless mapper is
+                                         // colmap/pycolmap); useRig: false maps the views independently
   "priorPoses": "priors.json",           // optional: ARKit / known poses used as priors
   "priorMode": "auto" | "refine" | "solve", // auto: refine when ≥ 90 % of images have prior poses + intrinsics —
                                          // look-at pairs, triangulate with the priors, pose-only BA ×2 (no mapper,

@@ -335,3 +335,128 @@ def run_pycolmap_subprocess(database, image_dir, out_dir, log_path, fix_focal: b
     import subprocess
     cmd = [sys.executable, "-c", _PYCOLMAP_SCRIPT, str(database), str(image_dir), str(out_dir), "1" if fix_focal else "0"]
     run_logged(cmd, log_path, lambda line: None)
+
+
+# ---------------------------------------------------------------------------------------------- rigs
+
+_PYCOLMAP_RIG_SCRIPT = r"""
+import sys, pathlib, pycolmap
+db, img, out, cfg, mode, fix = sys.argv[1:7]
+fix = fix == "1"
+with pycolmap.Database.open(db) as d:
+    pycolmap.apply_rig_config(pycolmap.read_rig_config(cfg), d)
+print("rig applied", flush=True)
+
+def setattrs(o, **kw):
+    for k, v in kw.items():
+        if hasattr(o, k):
+            try:
+                setattr(o, k, v)
+            except Exception:
+                pass
+
+if mode == "global" and not hasattr(pycolmap, "global_mapping"):
+    mode = "incremental"   # pycolmap 3.12 has rigs but no global mapper
+    print("pycolmap has no global mapper; mapping incrementally", flush=True)
+if mode == "global":
+    opts = pycolmap.GlobalPipelineOptions()
+    setattrs(opts.mapper, refine_sensor_from_rig=False)
+    for ba in (getattr(opts.mapper, "bundle_adjustment", None),):
+        if ba is not None and fix:
+            setattrs(ba, refine_focal_length=False, refine_principal_point=False, refine_extra_params=False)
+    maps = pycolmap.global_mapping(database_path=db, image_path=img, output_path=out, options=opts)
+else:
+    opts = pycolmap.IncrementalPipelineOptions()
+    setattrs(opts, ba_refine_sensor_from_rig=False)
+    if fix:
+        setattrs(opts, ba_refine_focal_length=False, ba_refine_principal_point=False, ba_refine_extra_params=False)
+    maps = pycolmap.incremental_mapping(database_path=db, image_path=img, output_path=out, options=opts)
+for idx, rec in maps.items():
+    d = pathlib.Path(out) / str(idx)
+    d.mkdir(parents=True, exist_ok=True)
+    rec.write(str(d))
+print(f"Registered {max((len(r.images) for r in maps.values()), default=0)} images", flush=True)
+"""
+
+
+def pycolmap_supports_rigs() -> bool:
+    """pycolmap ≥ 3.12 (rigs; global mapping from 3.13), checked in a child interpreter (see isolation.py)."""
+    if not module_installed("pycolmap"):
+        return False
+    try:
+        out = subprocess.run([sys.executable, "-c", "import pycolmap as p; print(hasattr(p, 'apply_rig_config'), hasattr(p, 'global_mapping'))"],
+                             capture_output=True, text=True, timeout=120)
+        return out.stdout.strip().startswith("True")
+    except Exception:
+        return False
+
+
+def rig_mapping_available() -> Optional[str]:
+    """"colmap" (CLI with rig_configurator) or "pycolmap" when rig-aware mapping can run here, else None."""
+    force = os.environ.get("SPLATPREP_RIG_ENGINE")
+    colmap = find_executable("colmap")
+    if force != "pycolmap" and colmap and "rig_configurator" in colmap_commands(colmap):
+        return "colmap"
+    if force != "colmap" and pycolmap_supports_rigs():
+        return "pycolmap"
+    return None
+
+
+def run_rig_mapper(
+    database: Path,
+    image_dir: Path,
+    out_dir: Path,
+    rig_config: Path,
+    preference: str = "auto",
+    log_path: Optional[Path] = None,
+    progress: Optional[Callable[[float, str], None]] = None,
+    num_frames: int = 0,
+    fix_intrinsics: bool = True,
+) -> tuple[Reconstruction, str]:
+    """Map a rig set: whole frames are registered, view rotations (and known intrinsics) stay fixed.
+
+    ``auto`` / ``glomap`` → global mapping (rotation averaging + global positioning over frames);
+    ``colmap`` / ``pycolmap`` → incremental. Raises MapperUnavailable when neither COLMAP ≥ 3.12 nor a
+    rig-capable pycolmap is present (the caller then falls back to unrigged mapping)."""
+    progress = progress or (lambda f, m="": None)
+    engine = rig_mapping_available()
+    if engine is None:
+        raise MapperUnavailable("rig mapping needs COLMAP ≥ 3.12 or pycolmap ≥ 3.12")
+    pref = (preference or "auto").lower()
+    mode = "incremental" if pref in ("colmap", "pycolmap") else "global"
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    count = [0]
+
+    def on_line(line: str):
+        if re.search(r"Registering (image|frame) #?(\d+)", line):
+            count[0] += 1
+            if num_frames:
+                progress(min(0.95, count[0] / num_frames), f"registered {count[0]}/{num_frames} frames")
+
+    label = "global" if mode == "global" else "incremental"
+    if engine == "colmap":
+        colmap = find_executable("colmap")
+        progress(0.02, "applying the camera rig")
+        run_logged([colmap, "rig_configurator", "--database_path", database, "--rig_config_path", rig_config], log_path, None)
+        progress(0.05, f"{label} mapping of rig frames (COLMAP)")
+        if mode == "global":
+            cmd = [colmap, "global_mapper", "--database_path", database, "--image_path", image_dir, "--output_path", out_dir,
+                   "--GlobalMapper.refine_sensor_from_rig", "0"]
+            if fix_intrinsics:
+                cmd += ["--GlobalMapper.ba_refine_focal_length", "0", "--GlobalMapper.ba_refine_extra_params", "0"]
+        else:
+            cmd = [colmap, "mapper", "--database_path", database, "--image_path", image_dir, "--output_path", out_dir,
+                   "--Mapper.ba_refine_sensor_from_rig", "0"]
+            if fix_intrinsics:
+                cmd += ["--Mapper.ba_refine_focal_length", "0", "--Mapper.ba_refine_extra_params", "0"]
+        run_logged(cmd, log_path, on_line)
+    else:
+        progress(0.05, f"{label} mapping of rig frames (pycolmap)")
+        run_logged([sys.executable, "-c", _PYCOLMAP_RIG_SCRIPT, str(database), str(image_dir), str(out_dir), str(rig_config),
+                    mode, "1" if fix_intrinsics else "0"], log_path, on_line)
+    rec = read_largest_model(out_dir)
+    if rec is None or not rec.images:
+        raise SplatPrepError("rig mapping produced no reconstruction")
+    progress(1.0, f"registered {len(rec.images)} images")
+    return rec, f"rig-{label}:{engine}"

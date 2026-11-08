@@ -221,7 +221,19 @@ class FeatureMatchBackend(Backend):
             ctx.request = {**ctx.request, "singleCamera": False, "cameraModel": "pinhole"}
             pairs = lookat_pairs(prior_c2w, k=int(ctx.opt("refineNeighbors", 10)), window=int(ctx.opt("refineWindow", 4)))
             pinfo = {"strategy": "lookat", "resolved": "lookat", "numPairs": len(pairs)}
-        else:
+        rig = None
+        if not refine:
+            from ..rig import parse_rig
+
+            rig = parse_rig(ctx.request, ctx.names) if ctx.opt("useRig", True) else None
+        if rig is not None:
+            from ..pairs import global_descriptors
+            from ..rig import rig_pairs
+
+            ctx.progress.update("pairs", 0.3, f"rig: {rig.num_frames} frames × {rig.num_sensors} views")
+            D = global_descriptors(ctx.paths, ctx.work_dir)[0] if int(ctx.opt("rigLoopPairs", 2)) > 0 else None
+            pairs, pinfo = rig_pairs(rig, D, window=int(ctx.opt("rigWindow", 3)), loop_k=int(ctx.opt("rigLoopPairs", 2)))
+        elif not refine:
             pairs, pinfo = select_pairs(
                 ctx.names,
                 ctx.paths,
@@ -268,7 +280,7 @@ class FeatureMatchBackend(Backend):
             raise MapperUnavailable(avail.reason)
 
         db_path = ctx.work_dir / "database.db"
-        write_database(db_path, ctx, kps_colmap, sizes, raw, inliers, Fs)
+        write_database(db_path, ctx, kps_colmap, sizes, raw, inliers, Fs, rig=rig)
         write_pairs_txt(ctx.work_dir / "pairs.txt", ctx.names, pairs)
         if refine:
             from ..mapper import find_executable
@@ -279,6 +291,31 @@ class FeatureMatchBackend(Backend):
             rec, rinfo = refine_poses(cli, db_path, ctx.image_dir, ctx.priors,
                                       ctx.work_dir / "refine", ctx.log_path, ctx.progress.sub("mapping"))
             info.update({"mapper": "prior-refine", "priorRefine": rinfo})
+            return SfMOutput(rec, matching, info)
+        if rig is not None:
+            from ..mapper import rig_mapping_available, run_rig_mapper
+            from ..rig import link_tree, write_rig_config
+
+            if rig_mapping_available():
+                tree = link_tree(rig, ctx.image_dir, ctx.work_dir / "rig_images")
+                cfg = write_rig_config(rig, ctx.work_dir / "rig.json")
+                rec, mapper = run_rig_mapper(db_path, tree, ctx.work_dir / "sparse", cfg, ctx.opt("mapper", "auto"),
+                                             ctx.log_path, ctx.progress.sub("mapping"), rig.num_frames,
+                                             fix_intrinsics=rig.intrinsics is not None)
+                back = rig.original_name()
+                for im in rec.images.values():
+                    im.name = back.get(im.name, im.name)
+                info.update({"mapper": mapper, "rig": {"frames": rig.num_frames, "views": rig.num_sensors}})
+                return SfMOutput(rec, matching, info)
+            # No rig-capable mapper: map the views as separate photos (database names are the rig names).
+            info["rigFallback"] = "no COLMAP/pycolmap with rig support; mapped views independently"
+            tree = link_tree(rig, ctx.image_dir, ctx.work_dir / "rig_images")
+            rec, mapper = run_mapper(db_path, tree, ctx.work_dir / "sparse", ctx.opt("mapper", "auto"), ctx.log_path,
+                                     ctx.progress.sub("mapping"), len(ctx.names))
+            back = rig.original_name()
+            for im in rec.images.values():
+                im.name = back.get(im.name, im.name)
+            info["mapper"] = mapper
             return SfMOutput(rec, matching, info)
         rec, mapper = run_mapper(
             db_path,
@@ -350,15 +387,32 @@ def write_database(
     raw: Dict[Pair, np.ndarray],
     inliers: Dict[Pair, np.ndarray],
     Fs: Dict[Pair, np.ndarray],
+    rig=None,
 ) -> List[int]:
     model = camera_model_name(ctx.request)
     single = bool(ctx.opt("singleCamera", True))
     db = COLMAPDatabase.create(db_path)
     cam_for_size: Dict[Tuple[int, int], int] = {}
+    cam_for_sensor: Dict[int, int] = {}
     ids = []
     for i, name in enumerate(ctx.names):
         w, h = sizes[i]
         prior = ctx.priors.get(name)
+        if rig is not None:
+            # one camera per rig sensor (COLMAP rigs identify sensors by camera); the views' exact pinhole
+            # intrinsics when Splat Studio sent them
+            s = rig.sensor[i]
+            if s not in cam_for_sensor:
+                if rig.intrinsics:
+                    fx, fy, cx, cy = rig.intrinsics
+                    cam_for_sensor[s] = db.add_camera(CAMERA_MODEL_IDS["PINHOLE"], w, h, np.array([fx, fy, cx, cy], float), True)
+                else:
+                    params, has_prior = initial_camera_params(model, w, h, prior, exif_focal_px(ctx.image_dir / name, w, h))
+                    cam_for_sensor[s] = db.add_camera(CAMERA_MODEL_IDS[model], w, h, params, has_prior)
+            iid = db.add_image(rig.db_names[i], cam_for_sensor[s])
+            db.add_keypoints(iid, kps_colmap[i].astype(np.float32))
+            ids.append(iid)
+            continue
         if single and (w, h) in cam_for_size:
             cid = cam_for_size[(w, h)]
         else:

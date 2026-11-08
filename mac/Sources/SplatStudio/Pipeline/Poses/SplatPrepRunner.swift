@@ -64,6 +64,9 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
         var pairs: [[String]]? = nil
         /// Multiview: groups of {image basename: camera-to-rig rotation (row-major 3x3)}.
         var groups: [[String: [[Float]]]]? = nil
+        /// Multiview: the views' exact pinhole intrinsics [fx, fy, cx, cy] (all views share them). splatprep ≥
+        /// 2026-11-08 then registers whole frames with these fixed instead of guessing a focal length.
+        var intrinsics: [Float]? = nil
     }
 
     init(task: Task) { self.task = task }
@@ -233,7 +236,12 @@ struct SplatPrepPoseSolver: PoseSolver {
         } else if frames.isMultiViewRig {
             var groups: [Int: [String: [[Float]]]] = [:]
             for f in frames.frames { if let g = f.group, let R = f.rotationToRig { groups[g, default: [:]][(f.image as NSString).lastPathComponent] = R } }
-            r.rig = .init(kind: "multiview", groups: groups.keys.sorted().map { groups[$0]! })
+            var hint = ProcessingRequest.RigHint(kind: "multiview", groups: groups.keys.sorted().map { groups[$0]! })
+            if let f = frames.frames.first, let fp = f.focalPx,
+               frames.frames.allSatisfy({ $0.focalPx == fp && $0.width == f.width && $0.height == f.height }) {
+                hint.intrinsics = [fp, fp, f.cx ?? Float(f.width) / 2, f.cy ?? Float(f.height) / 2]
+            }
+            r.rig = hint
         }
         return r
     }
