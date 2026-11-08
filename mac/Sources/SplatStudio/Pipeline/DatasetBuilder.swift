@@ -355,14 +355,14 @@ enum DatasetBuilder {
                 // retrieval matching, because a frame's views are interleaved in file order.
                 choice = .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
             } else if fisheye {
-                // "auto", not "sequential", for video too: splatprep then pairs neighbouring frames AND adds loop-closure
-                // pairs between similar distant frames. Plain sequential matching broke the full Arcturus video into
-                // two pieces at one hard stretch (464 of 990 frames registered); auto registered 958.
                 // Object Capture returns pinhole cameras for fisheye frames (the distortion ends up in the scene).
-                choice = .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
+                // Sequential matching for video: "auto" adds loop-closure pairs, and on the Arcturus garden video those
+                // linked look-alike fences and foliage — 958 of 990 frames "registered" but cameras spread over 6,000
+                // units with 27 jumps (training 12 dB) vs sequential's clean 464 frames (2026-11-09).
+                choice = .splatprep(featureModelId: "superpoint_lightglue", matching: sequential ? "sequential" : "auto", mapper: "auto")
             } else {
                 choice = ObjectCapturePoseSolver.isSupported ? .objectCapture
-                    : .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
+                    : .splatprep(featureModelId: "superpoint_lightglue", matching: sequential ? "sequential" : "auto", mapper: "auto")
             }
         }
         var sol: PoseSolution
