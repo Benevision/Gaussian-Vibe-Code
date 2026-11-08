@@ -9,7 +9,7 @@ struct RasterParams {
     float4 bg;             // rgb background, w unused
     uint absGrad; uint hasDepth; uint numGaussians; uint step;
     float ssimWeight; float depthWeight; float invNumPixels; float pad;
-    uint sky; uint pad1; uint pad2; uint pad3;   // sky = 1: dL/dT_final per pixel comes from skyDT (learned skybox)
+    uint sky; float normalWeight; uint pad2; uint pad3;   // sky = 1: dL/dT_final per pixel comes from skyDT (learned skybox)
 };
 
 // ---------------------------------------------------------------- preprocess (forward)
@@ -541,6 +541,99 @@ kernel void loss_grad(device const float* planes [[buffer(0)]], device const flo
     if (lane == 0) atomic_fetch_add_explicit(stats + 3, dl, memory_order_relaxed);
 }
 
+// ---------------------------------------------------------------- depth-normal consistency (DN-Splatter / Spirula idea)
+// Normals from the rendered depth by central differences, compared with normals from the sensor depth (LiDAR /
+// stereo) at the same place: L = w·[(1−c)/2 + sqrt((1−c)/2)], c = cos(angle), averaged over valid pixels.
+// Each pixel's loss depends on its 4 neighbours' depths; gradients are written per neighbour slot (nbuf, 4 planes)
+// and gathered into the depth-gradient plane by normal_gather (no atomics).
+static inline float3 nrm_ray(float u, float v, float fx, float fy, float cx, float cy) { return float3((u - cx) / fx, (v - cy) / fy, 1.0f); }
+
+kernel void normal_loss(device const float* img [[buffer(0)]], device const float* finalT [[buffer(1)]],
+                        device const float* depthTarget [[buffer(2)]], constant uint2& depthSize [[buffer(3)]],
+                        constant RasterParams& rp [[buffer(4)]], device const uchar4* target [[buffer(5)]],
+                        constant float4& K [[buffer(6)]], device float* nbuf [[buffer(7)]],
+                        device atomic<float>* stats [[buffer(8)]],
+                        uint2 p [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+    bool inb = p.x < rp.width && p.y < rp.height;
+    float lossOut = 0, validOut = 0;
+    if (inb) {
+        uint W = rp.width, H = rp.height, hw = W * H, pid = p.y * W + p.x;
+        for (uint k = 0; k < 4; k++) nbuf[k * hw + pid] = 0.0f;
+        bool ok = p.x > 0 && p.y > 0 && p.x + 1 < W && p.y + 1 < H && target[pid].w > 127;
+        // rendered: the 4 neighbours, opaque (T < 0.1) and on one surface (within 5 % of each other)
+        uint il = pid - 1, ir = pid + 1, iu = pid - W, id = pid + W;
+        float Dl = 0, Dr = 0, Du = 0, Dd = 0;
+        if (ok) {
+            Dl = img[3*hw + il]; Dr = img[3*hw + ir]; Du = img[3*hw + iu]; Dd = img[3*hw + id];
+            ok = finalT[il] < 0.1f && finalT[ir] < 0.1f && finalT[iu] < 0.1f && finalT[id] < 0.1f
+                 && Dl > 0 && Dr > 0 && Du > 0 && Dd > 0;
+            float lo = min(min(Dl, Dr), min(Du, Dd)), hi = max(max(Dl, Dr), max(Du, Dd));
+            ok = ok && hi < 1.1f * lo;
+        }
+        // sensor normal at the matching sensor pixel, from its 4 neighbours in the sensor grid
+        float3 t = float3(0);
+        if (ok) {
+            uint SW = depthSize.x, SH = depthSize.y;
+            uint dx = min(SW - 1, p.x * SW / W), dy = min(SH - 1, p.y * SH / H);
+            ok = dx > 0 && dy > 0 && dx + 1 < SW && dy + 1 < SH;
+            if (ok) {
+                float sl = depthTarget[dy * SW + dx - 1], sr = depthTarget[dy * SW + dx + 1];
+                float su = depthTarget[(dy - 1) * SW + dx], sd = depthTarget[(dy + 1) * SW + dx];
+                float s0 = depthTarget[dy * SW + dx];
+                ok = sl > 0 && sr > 0 && su > 0 && sd > 0 && s0 > 0 && isfinite(sl + sr + su + sd + s0)
+                     && abs(sl - s0) < 0.05f * s0 && abs(sr - s0) < 0.05f * s0 && abs(su - s0) < 0.05f * s0 && abs(sd - s0) < 0.05f * s0;
+                if (ok) {
+                    float sx = float(SW) / float(W), sy = float(SH) / float(H);
+                    float fx = K.x * sx, fy = K.y * sy, cx = (K.z + 0.5f) * sx - 0.5f, cy = (K.w + 0.5f) * sy - 0.5f;
+                    float u = float(dx), v = float(dy);
+                    float3 e1 = nrm_ray(u + 1, v, fx, fy, cx, cy) * sr - nrm_ray(u - 1, v, fx, fy, cx, cy) * sl;
+                    float3 e2 = nrm_ray(u, v + 1, fx, fy, cx, cy) * sd - nrm_ray(u, v - 1, fx, fy, cx, cy) * su;
+                    float3 m = cross(e1, e2);
+                    float lm = length(m);
+                    ok = lm > 1e-12f;
+                    if (ok) t = m / lm;
+                }
+            }
+        }
+        if (ok) {
+            float u = float(p.x), v = float(p.y);
+            float3 ar = nrm_ray(u + 1, v, K.x, K.y, K.z, K.w), al = nrm_ray(u - 1, v, K.x, K.y, K.z, K.w);
+            float3 ad = nrm_ray(u, v + 1, K.x, K.y, K.z, K.w), au = nrm_ray(u, v - 1, K.x, K.y, K.z, K.w);
+            float3 e1 = ar * Dr - al * Dl, e2 = ad * Dd - au * Du;
+            float3 m = cross(e1, e2);
+            float lm = length(m);
+            if (lm > 1e-12f) {
+                float3 n = m / lm;
+                float c = clamp(dot(n, t), -1.0f, 1.0f);
+                float h = max(0.5f * (1.0f - c), 0.0f);
+                float sq = sqrt(h + 1e-4f);
+                lossOut = h + sq; validOut = 1;
+                float dLdc = rp.normalWeight * rp.invNumPixels * (-0.5f - 0.25f / sq);
+                float3 gm = dLdc * (t - c * n) / lm;          // dL/dm
+                float3 g1 = cross(e2, gm), g2 = cross(gm, e1); // dL/de1, dL/de2
+                nbuf[0 * hw + pid] = -dot(g1, al);   // → left neighbour's depth
+                nbuf[1 * hw + pid] =  dot(g1, ar);   // → right
+                nbuf[2 * hw + pid] = -dot(g2, au);   // → up
+                nbuf[3 * hw + pid] =  dot(g2, ad);   // → down
+            }
+        }
+    }
+    lossOut = simd_sum(lossOut); validOut = simd_sum(validOut);
+    if (lane == 0) { atomic_fetch_add_explicit(stats + 6, lossOut, memory_order_relaxed); atomic_fetch_add_explicit(stats + 7, validOut, memory_order_relaxed); }
+}
+
+kernel void normal_gather(device float* gradImg [[buffer(0)]], device const float* nbuf [[buffer(1)]],
+                          constant RasterParams& rp [[buffer(2)]], uint2 p [[thread_position_in_grid]]) {
+    if (p.x >= rp.width || p.y >= rp.height) return;
+    uint W = rp.width, hw = W * rp.height, q = p.y * W + p.x;
+    float g = 0;
+    if (p.x + 1 < W) g += nbuf[0 * hw + q + 1];        // right neighbour's "left" slot
+    if (p.x > 0) g += nbuf[1 * hw + q - 1];            // left neighbour's "right" slot
+    if (p.y + 1 < rp.height) g += nbuf[2 * hw + q + W];
+    if (p.y > 0) g += nbuf[3 * hw + q - W];
+    gradImg[3 * hw + q] += g;
+}
+
 // ---------------------------------------------------------------- per-photo appearance (exposure / white balance)
 // corrected = M · rendered + b, with M (3×3, row-major) and b (3) learned per training photo, so differing
 // auto-exposure / white balance between photos doesn't get baked into the scene as haze or colour noise.
@@ -845,6 +938,7 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
                                 device float* gradStats [[buffer(14)]],  // per gaussian: accum, count, maxRadius
                                 constant float4& reg [[buffer(15)]],     // x: opacityReg/N, y: scaleReg/(3N), z: anisotropyReg/N, w: max axis ratio
                                 constant float2& big [[buffer(16)]],     // x: bigSplatReg/N, y: largest allowed tan(half-angle)
+                                constant float& flatReg [[buffer(17)]],  // flatnessReg/N
                                 uint i [[thread_position_in_grid]]) {
     if (i >= cam.count) return;
     float o = 1.0f / (1.0f + exp(-opLogit[i]));
@@ -863,6 +957,15 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
             float r = s[ia] / max(s[im], 1e-12f);
             if (r > reg.w) { gls[ia] += reg.z * r; }
         }
+    }
+    // Flatness: share of the smallest axis in the splat's size (s_min² / Σ s²) → discs, whose shortest axis is a
+    // well-defined surface normal. d share / d log s_k = 2·share·(δ_k,min − share_k).
+    if (flatReg > 0.0f) {
+        float3 e = s * s;
+        float E = max(e.x + e.y + e.z, 1e-30f);
+        uint im = e.x <= e.y ? (e.x <= e.z ? 0u : 2u) : (e.y <= e.z ? 1u : 2u);
+        float sh = e[im] / E;
+        for (uint k = 0; k < 3; k++) gls[k] += flatReg * 2.0f * sh * ((k == im ? 1.0f : 0.0f) - e[k] / E);
     }
     float3 gp = float3(0);
     float4 gq = float4(0);

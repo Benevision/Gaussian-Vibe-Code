@@ -80,6 +80,12 @@ enum CLI {
             print(canonicalJSON(r.videoOptions)); print(canonicalJSON(r.equirect))
             exit(0)
         }
+        if let root = value("--fisheye-check") {
+            // --fisheye-check <dir with frames.json>: does the frame set look like circular fisheye footage?
+            do { print(try FrameSet.load(URL(fileURLWithPath: root)).looksCircularFisheye ? "circular fisheye" : "not fisheye") }
+            catch { print("error: \(error.localizedDescription)") }
+            exit(0)
+        }
         if let ds = value("--budget"), let mb = value("--available-mb").flatMap(UInt64.init) {
             // What an iPhone / Mac worker with that much free memory would train (TrainKit.budget).
             do {
@@ -119,7 +125,8 @@ enum CLI {
                         lastPrint = s.step
                         print(String(format: "  step %6d/%d  loss %.4f  psnr %5.2f  eval %@  splats %8d  %4.0f it/s  eta %@  transient %.1f%%",
                                      s.step, s.totalSteps, s.loss, s.psnr, s.evalPSNR.map { String(format: "%5.2f", $0) } ?? "  -  ",
-                                     s.numGaussians, s.itersPerSecond, formatDuration(s.eta), s.transientFraction * 100))
+                                     s.numGaussians, s.itersPerSecond, formatDuration(s.eta), s.transientFraction * 100)
+                                     + (s.normalCoverage > 0 ? String(format: "  normal %.3f on %.0f%%", s.normalLoss, s.normalCoverage * 100) : ""))
                         fflush(stdout)
                     }
                 }
@@ -367,6 +374,13 @@ enum CLI {
                              r.perView.min() ?? 0, r.perView.max() ?? 0))
                 if !r.failed.isEmpty { print("  not rendered: " + r.failed.joined(separator: ", ")) }
                 if a.contains("--per-view") { for (n, p) in zip(r.names, r.perView) { print(String(format: "  %@ %.2f", n, p)) } }
+                if a.contains("--geometry") {
+                    // vs the dataset's sensor depth (LiDAR / stereo) on held-out views
+                    if let gs = try t.evaluateGeometry(cloud: g) {
+                        print(String(format: "geometry: depth AbsRel %.4f, within 5 %% %.1f %%, normal error mean %.1f° median %.1f° (%d views)",
+                                     gs.absRel, gs.delta105 * 100, gs.normalMeanDeg, gs.normalMedianDeg, gs.views))
+                    } else { print("geometry: no held-out view has a depth map") }
+                }
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }

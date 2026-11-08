@@ -230,6 +230,50 @@ def progressive_scale(step: int, densify_stop: int) -> float:
     return 1.0
 
 
+def depth_normals(torch, depth, K, k: int = 1, rel_tol: float = 0.05):
+    """Camera-space normals of a depth map (H, W) by central differences over ``k`` pixels, and where they are
+    valid: all four neighbours present and on one surface (within ``rel_tol`` of the centre). Same construction
+    as the Mac's normal_loss kernel, so both see the same normals: cross(right − left, down − up)."""
+    H, W = depth.shape
+    dev = depth.device
+    ys, xs = torch.meshgrid(torch.arange(H, device=dev, dtype=depth.dtype), torch.arange(W, device=dev, dtype=depth.dtype),
+                            indexing="ij")
+    X = torch.stack(((xs - K[0, 2]) / K[0, 0] * depth, (ys - K[1, 2]) / K[1, 1] * depth, depth), -1)
+    n = torch.zeros(H, W, 3, device=dev, dtype=depth.dtype)
+    valid = torch.zeros(H, W, dtype=torch.bool, device=dev)
+    if H <= 2 * k or W <= 2 * k:
+        return n, valid
+    c = depth[k:-k, k:-k]
+    l, r = depth[k:-k, :-2 * k], depth[k:-k, 2 * k:]
+    u, d = depth[:-2 * k, k:-k], depth[2 * k:, k:-k]
+    e1 = X[k:-k, 2 * k:] - X[k:-k, :-2 * k]
+    e2 = X[2 * k:, k:-k] - X[:-2 * k, k:-k]
+    m = torch.cross(e1, e2, dim=-1)
+    ln = m.norm(dim=-1, keepdim=True)
+    ok = (c > 0) & (l > 0) & (r > 0) & (u > 0) & (d > 0) & (ln[..., 0] > 1e-12)
+    for nb in (l, r, u, d):
+        ok = ok & (torch.abs(nb - c) < rel_tol * c.clamp_min(1e-9))
+    n[k:-k, k:-k] = m / ln.clamp_min(1e-12)
+    valid[k:-k, k:-k] = ok
+    return n, valid
+
+
+def normal_consistency_loss(torch, rendered_depth, alpha, sensor_depth, K, sensor_width: int):
+    """(1−c)/2 + sqrt((1−c)/2) between rendered-depth normals and sensor-depth normals, summed over pixels where
+    both are valid and the render is opaque, divided by the pixel count (as on the Mac)."""
+    W = rendered_depth.shape[1]
+    k = max(1, int(round(W / max(int(sensor_width or W), 1))))   # one sensor pixel either side
+    nt, vt = depth_normals(torch, sensor_depth, K, k=k)
+    nr, vr = depth_normals(torch, rendered_depth, K, k=1, rel_tol=0.10)
+    valid = vt & vr & (alpha > 0.9)
+    if not valid.any():
+        return None
+    c = (nr * nt.detach()).sum(-1).clamp(-1, 1)
+    h = (0.5 * (1 - c)).clamp_min(0)
+    per = h + torch.sqrt(h + 1e-4)
+    return per[valid].sum() / rendered_depth.numel()
+
+
 def downscale_view(torch, img, alpha, depth, K, scale: float):
     """Image (H,W,3), alpha (H,W,1)|None, depth (H,W)|None and intrinsics K scaled by ``scale``."""
     import torch.nn.functional as F
@@ -719,15 +763,42 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     has_depth = any(c.depth for c in train_cams)
     depth_weight = cfg.effective_depth_weight(has_depth)
 
-    from .dataset import view_header
+    from .dataset import resize_nearest, view_header
     from .viewstore import ViewStore, available_ram, choose_mode, view_bytes
 
     all_cams = train_cams + eval_cams
+    # No sensor depth: predicted (monocular) depth, fitted to the scene, for the depth-normal loss.
+    priors = None
+    if not has_depth and cfg.normalWeight > 0 and cfg.depthPriors in ("auto", "on"):
+        from . import depthprior
+
+        if depthprior.available():
+            pts = None
+            if ds.points:
+                try:
+                    pts, _ = read_point_cloud(ds.resolve(ds.points))
+                except Exception as e:  # noqa: BLE001
+                    log(f"depth priors: could not read the dataset's points ({e})")
+            priors = depthprior.DepthPriors(ds.root / "depth-prior", log)
+            try:
+                got = priors.compute(ds, all_cams, pts, device=str(dev), should_stop=progress.should_stop,
+                                     status=lambda m: progress.status(message=m))
+                log(f"depth priors: {got} of {len(all_cams)} photos have a predicted depth map")
+            except Exception as e:  # noqa: BLE001 — a missing model download etc. must not fail the training
+                log(f"depth priors unavailable ({type(e).__name__}: {e}); training without them")
+                priors = None
+        elif cfg.depthPriors == "on":
+            log("depth priors: the depth model isn't installed on this worker (install the processing models)")
+
+    def with_prior(v: LoadedView) -> LoadedView:
+        if priors is not None and v.depth is None and v.camera.id in priors.maps:
+            v.depth = resize_nearest(priors.maps[v.camera.id], v.width, v.height).astype(np.float32)
+        return v
     headers = [view_header(ds, c, cfg.maxImageSize) for c in all_cams]
     est = sum(view_bytes(v) for v in headers)
     ram = available_ram()
     mode = choose_mode(est, ram)
-    load = lambda h: load_view(ds, h.camera, cfg.maxImageSize, load_depth_maps=depth_weight > 0)  # noqa: E731
+    load = lambda h: with_prior(load_view(ds, h.camera, cfg.maxImageSize, load_depth_maps=depth_weight > 0 or cfg.normalWeight > 0))  # noqa: E731
     if mode == "disk":
         views: List[LoadedView] = headers
     else:
@@ -735,7 +806,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         for i, c in enumerate(all_cams):
             if progress.should_stop():
                 raise TrainingCancelled()
-            views.append(load_view(ds, c, cfg.maxImageSize, load_depth_maps=depth_weight > 0))
+            views.append(with_prior(load_view(ds, c, cfg.maxImageSize, load_depth_maps=depth_weight > 0 or cfg.normalWeight > 0)))
             if i % 20 == 0:
                 progress.status(message=f"loading images {i + 1}/{len(all_cams)}")
     train_views = views[:len(train_cams)]
@@ -1068,7 +1139,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             store.prefetch([train_views[i] for i in order[-6:]])
         img, alpha, depth_gt, K, w2c = to_dev(v)
         sh_degree = min(step // cfg.shDegreeInterval, cfg.shDegree)
-        use_depth = depth_weight > 0 and depth_gt is not None
+        use_depth = (depth_weight > 0 or cfg.normalWeight > 0) and depth_gt is not None
 
         width, height = v.width, v.height
         if cfg.progressiveResolution:
@@ -1114,7 +1185,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if use_depth:
             ed = renders[0, ..., 3]
             valid = (depth_gt > 0) & torch.isfinite(depth_gt)
-            if valid.any():
+            dw = depth_weight if v.camera.depth else cfg.monoDepthWeight   # predicted maps: their own weight
+            if dw > 0 and valid.any():
                 derr = torch.abs(ed - depth_gt)
                 if cfg.depthEdgeAware:
                     # DN-Splatter: trust depth less at image edges (exp(-|∇I|) of the photo, as on the Mac)
@@ -1123,11 +1195,20 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                     gx[:, 1:-1] = (g[:, 2:] - g[:, :-2]) * 0.5
                     gy[1:-1, :] = (g[2:, :] - g[:-2, :]) * 0.5
                     derr = derr * torch.exp(-10.0 * torch.sqrt(gx * gx + gy * gy))
-                loss = loss + depth_weight * derr[valid].sum() / valid.sum().clamp_min(1)
+                loss = loss + dw * derr[valid].sum() / valid.sum().clamp_min(1)
+            if cfg.normalWeight > 0 and step >= cfg.normalStart:
+                sw = v.camera.depth_width or (priors.maps[v.camera.id].shape[1] if priors is not None and v.camera.id in priors.maps else 0)
+                nl = normal_consistency_loss(torch, ed, alphas[0, ..., 0], depth_gt, K, sw)
+                if nl is not None:
+                    loss = loss + cfg.normalWeight * nl
         if opacity_reg > 0:
             loss = loss + opacity_reg * torch.sigmoid(params["opacities"]).mean()
         if scale_reg > 0:
             loss = loss + scale_reg * torch.exp(params["scales"]).mean()
+        if cfg.flatnessReg > 0:
+            # flat discs: the smallest axis's share of the splat's size (s_min² / Σ s²), as on the Mac
+            e2 = torch.exp(2.0 * params["scales"])
+            loss = loss + cfg.flatnessReg * (e2.min(dim=1).values / e2.sum(dim=1).clamp_min(1e-30)).mean()
         if cfg.anisotropyReg > 0:
             # Penalise needle splats (longest / shortest axis above the limit), as on the Mac.
             # Needle penalty: longest / MIDDLE axis (flat discs — two long axes, one tiny — are the normal

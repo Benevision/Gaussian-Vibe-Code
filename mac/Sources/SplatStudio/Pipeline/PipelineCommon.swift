@@ -176,6 +176,44 @@ struct FrameSet: Codable, Sendable {
 
     struct Rejection: Codable, Hashable, Sendable { var item: String; var reason: String }
 
+    /// Circular fisheye footage (the image circle inside a black frame, e.g. Arcturus / dual-fisheye stereo
+    /// cameras): its corners are black in every sampled frame while the centre isn't. Such frames need a fisheye
+    /// camera model — a pinhole solve "succeeds" but bakes the lens distortion into the scene.
+    var looksCircularFisheye: Bool {
+        let picks = stride(from: 0, to: frames.count, by: max(1, frames.count / 5)).prefix(5)
+        var votes = 0, seen = 0
+        for i in picks {
+            guard let img = try? ImageUtil.load(root.appendingPathComponent(frames[i].image), maxSize: 64) else { continue }
+            seen += 1
+            if Self.circularFisheye(img) { votes += 1 }
+        }
+        return seen > 0 && votes * 2 > seen
+    }
+
+    static func circularFisheye(_ img: CGImage) -> Bool {
+        let w = img.width, h = img.height
+        guard w >= 16, h >= 16, abs(Double(w) / Double(h) - 1) < 0.35 else { return false }
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: ImageUtil.sRGB,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        /// (mean, max) brightness of a region.
+        func stats(_ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int) -> (Double, Int) {
+            var s = 0, n = 0, mx = 0
+            for y in y0..<y1 { for x in x0..<x1 {
+                let k = (y * w + x) * 4, v = max(Int(px[k]), Int(px[k + 1]), Int(px[k + 2]))
+                s += v; n += 1; mx = max(mx, v)
+            } }
+            return (n > 0 ? Double(s) / Double(n) : 0, mx)
+        }
+        let c = max(2, w / 10), r = max(2, h / 10)
+        let corners = [stats(0, 0, c, r), stats(w - c, 0, w, r), stats(0, h - r, c, h), stats(w - c, h - r, w, h)]
+        // The image circle may be cut off at one side (lens circle larger than the frame), so two black corners
+        // are enough — but they must be uniformly black (masked lens border), not just dark scenery.
+        let black = corners.filter { $0.0 < 10 && $0.1 < 40 }.count
+        return black >= 2 && stats(w / 3, h / 3, 2 * w / 3, 2 * h / 3).0 > 30
+    }
+
     static let fileName = "frames.json"
     func save() throws {
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]

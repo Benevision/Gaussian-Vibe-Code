@@ -81,6 +81,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.4.1" date="2026-11-09">
+      <description>
+        <p>New, off by default while being measured: depth-normal consistency (normalWeight) keeps flat surfaces flat using the photos' depth maps; photos without sensor depth can get depth predicted by Depth Anything V2 (fitted to the scene's 3D points); flatnessReg pushes splats towards flat discs.</p>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-11-08">
       <description>
         <p>SplatWork Node becomes a full studio, and keeps working for your Mac.</p>

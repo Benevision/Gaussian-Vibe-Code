@@ -154,6 +154,11 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `transientMaxViewGap` | float | 15 | transient masking is skipped when the median nearest-view gap (degrees, view angle + camera offset at scene scale) exceeds this |
 | `depthEdgeAware` | bool | true | depth loss weighted by exp(−10·|∇I|) of the target image |
 | `anisotropyReg` | float | 0.1 | penalty on max(longest/shortest axis − `anisotropyMaxRatio`, 0) per splat |
+| `normalWeight` | float | 0 | depth-normal consistency: normals of the rendered depth (central differences) vs normals of the photo's depth map, loss (1−c)/2 + √((1−c)/2), summed over valid opaque pixels / pixel count |
+| `normalStart` | int | 1000 | step at which the normal loss starts |
+| `flatnessReg` | float | 0 | per-splat penalty on the smallest axis's share s_min² / Σ s² (flat discs) |
+| `depthPriors` | string | `"auto"` | Linux worker: photos without sensor depth get a monocular depth map (Depth Anything V2 Small) fitted to the dataset's points, for the normal loss. `auto` = when no training photo has depth and `normalWeight` > 0; `on`; `off` |
+| `monoDepthWeight` | float | 0 | depth-loss weight for those predicted maps (0 = normals only) |
 | `anisotropyMaxRatio` | float | 10 | axis ratio above which the needle penalty applies |
 | `appearanceCorrection` | bool | true | per-photo colour correction: rendered RGB → M·rgb + b (3×3 + 3 per training image), seeded from camera `exposure`, used only in the loss |
 | `bilateralGrid` | bool | false | per-photo *local* colour correction (16×16 image cells × 8 brightness levels of 3×4 colour transforms per training image), used only in the loss; mean over photos pinned to identity; replaces `appearanceCorrection` when on. `bilateralGridLR` (2e-3), `bilateralGridTV` (10) |

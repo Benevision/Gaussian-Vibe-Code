@@ -9,7 +9,7 @@ struct RasterParams {
     var bg = SIMD4<Float>()
     var absGrad: UInt32 = 0, hasDepth: UInt32 = 0, numGaussians: UInt32 = 0, step: UInt32 = 0
     var ssimWeight: Float = 0.2, depthWeight: Float = 0, invNumPixels: Float = 0, pad: Float = 0
-    var sky: UInt32 = 0, pad1: UInt32 = 0, pad2: UInt32 = 0, pad3: UInt32 = 0
+    var sky: UInt32 = 0, normalWeight: Float = 0, pad2: UInt32 = 0, pad3: UInt32 = 0
 }
 
 struct AdamParams {
@@ -32,6 +32,7 @@ struct TrainerStatus: Sendable, Equatable {
     var itersPerSecond: Double = 0
     /// Fraction of pixels currently ignored as moving / transient (robust training).
     var transientFraction: Float = 0
+    var normalLoss: Float = 0, normalCoverage: Float = 0
     var shDegree = 0
     var phase = "Starting"
 }
@@ -99,6 +100,7 @@ final class MetalTrainer: @unchecked Sendable {
     private var tileCapacity = 0
     // per-pixel
     private var ranges: MTLBuffer!, img: MTLBuffer!, finalT: MTLBuffer!, nContrib: MTLBuffer!, gradImg: MTLBuffer!
+    private var normalBuf: MTLBuffer?
     private var planes: MTLBuffer!, tmp: MTLBuffer!, mu: MTLBuffer!, dmaps: MTLBuffer!
     private let stats: MTLBuffer
     // transient robustness
@@ -143,6 +145,8 @@ final class MetalTrainer: @unchecked Sendable {
     private let outlierCount: MTLBuffer
     private var transientThreshold: Float = -1
     private(set) var transientFraction: Float = 0
+    /// Depth-normal loss per valid pixel (smoothed) and the fraction of pixels it covers.
+    private(set) var normalLoss: Float = 0, normalCoverage: Float = 0
     private let emptyDepth: MTLBuffer
     private var maxPixels = 0
     private let sorter: GPURadixSort
@@ -641,6 +645,28 @@ final class MetalTrainer: @unchecked Sendable {
         enc.memoryBarrier(scope: .buffers)
     }
 
+    /// Depth-normal consistency against the view's sensor depth (config.normalWeight, from config.normalStart).
+    private func encodeNormalLoss(_ enc: MTLComputeCommandEncoder, v: TrainView, rp: inout RasterParams) {
+        guard config.normalWeight > 0, step >= config.normalStart, let depth = v.depth else { return }
+        let w = v.width, h = v.height
+        if normalBuf == nil || normalBuf!.length < w * h * 16 { normalBuf = ctx.buffer(w * h * 16, label: "normal grads") }
+        var r = rp; r.normalWeight = config.normalWeight
+        var K = SIMD4<Float>(v.camera.fx, v.camera.fy, v.camera.cx, v.camera.cy)
+        var ds = v.depthSize
+        enc.setBuffer(img, offset: 0, index: 0); enc.setBuffer(finalT, offset: 0, index: 1)
+        enc.setBuffer(depth, offset: 0, index: 2); enc.setBytes(&ds, length: 8, index: 3)
+        enc.setBytes(&r, length: MemoryLayout<RasterParams>.stride, index: 4)
+        enc.setBuffer(v.target, offset: 0, index: 5)
+        enc.setBytes(&K, length: 16, index: 6)
+        enc.setBuffer(normalBuf, offset: 0, index: 7); enc.setBuffer(stats, offset: 0, index: 8)
+        dispatch2D(enc, "normal_loss", w, h)
+        enc.memoryBarrier(scope: .buffers)
+        enc.setBuffer(gradImg, offset: 0, index: 0); enc.setBuffer(normalBuf, offset: 0, index: 1)
+        enc.setBytes(&r, length: MemoryLayout<RasterParams>.stride, index: 2)
+        dispatch2D(enc, "normal_gather", w, h)
+        enc.memoryBarrier(scope: .buffers)
+    }
+
     // MARK: training step
 
     private func nextView() -> TrainView {
@@ -817,6 +843,7 @@ final class MetalTrainer: @unchecked Sendable {
             enc.memoryBarrier(scope: .buffers)
         }
         encodeLossGrad(enc, v: v, rp: &rp)
+        encodeNormalLoss(enc, v: v, rp: &rp)
         if robust && step >= transientStartStep && transientThreshold > 0 {
             var thr = transientThreshold
             enc.setComputePipelineState(ctx.pipeline("transient_weights"))
@@ -899,6 +926,8 @@ final class MetalTrainer: @unchecked Sendable {
         enc.setBytes(&reg, length: 16, index: 15)
         var big = SIMD2<Float>(config.bigSplatReg / Float(max(n, 1)), max(config.bigSplatMaxAngle, 0.01))
         enc.setBytes(&big, length: 8, index: 16)
+        var flat = config.flatnessReg / Float(max(n, 1))
+        enc.setBytes(&flat, length: 4, index: 17)
         enc.dispatch1D(ctx.pipeline("preprocess_backward"), count: n)
         enc.memoryBarrier(scope: .buffers)
         split("5 preprocess backward")
@@ -952,6 +981,7 @@ final class MetalTrainer: @unchecked Sendable {
         let psnr = mse > 0 ? -10 * log10(mse) : 99
         if Self.debugAppearance, !(loss.isFinite) { print("non-finite loss at step \(step): l1 \(l1) ssim \(ssim) mse \(mse) view \(apIndex ?? -1) size \(v.width)x\(v.height)") }
         if transientEnabled { updateTransientThreshold(pixels: v.width * v.height) }
+        if s[7] > 0 { normalLoss = normalLoss * 0.95 + (s[6] / s[7]) * 0.05; normalCoverage = normalCoverage * 0.95 + s[7] / Float(v.width * v.height) * 0.05 }
         if let ai = apIndex, !v.holdout { updateAppearance(view: ai) }
         if let bi = bgIndex { updateBilagrid(view: bi) }
         return (loss, psnr)
@@ -1131,6 +1161,63 @@ final class MetalTrainer: @unchecked Sendable {
             else { failed.append(v.camera.image) }   // nothing rendered (e.g. every splat behind / outside the view)
         }
         return (per.isEmpty ? 0 : per.reduce(0, +) / Float(per.count), per, names, failed)
+    }
+
+    /// Geometry against the dataset's depth maps (LiDAR / stereo) on the held-out views: the rendered expected depth
+    /// (opaque pixels only) vs the sensor depth, and surface normals from both depth maps. Lower is better for all
+    /// but `delta`. Flat walls and floors that render wavy or with floaters show up in the normal error.
+    struct GeometryScore { var absRel: Float; var delta105: Float; var normalMeanDeg: Float; var normalMedianDeg: Float; var views: Int }
+
+    func evaluateGeometry(cloud g: GaussianCloud) throws -> GeometryScore? {
+        load(g)
+        useSkybox(of: g)
+        step = config.shDegreeInterval * (config.shDegree + 1)
+        let set = (evalViews.isEmpty ? Array(trainViews.prefix(8)) : evalViews).filter { $0.depth != nil }
+        var relSum = 0.0, relN = 0, deltaN = 0, angles: [Float] = [], used = 0
+        for v in set {
+            paramLock.lock(); defer { paramLock.unlock() }
+            guard (try renderUnlocked(view: v)) != nil, let dbuf = v.depth else { continue }
+            let w = v.width, h = v.height, hw = w * h
+            let planes = img.contents().bindMemory(to: Float.self, capacity: hw * 4)
+            let T = finalT.contents().bindMemory(to: Float.self, capacity: hw)
+            let dw = Int(v.depthSize.x), dh = Int(v.depthSize.y)
+            let sensor = dbuf.contents().bindMemory(to: Float.self, capacity: dw * dh)
+            // Rendered depth sampled at the sensor grid (nearest render pixel to each sensor pixel centre).
+            var rend = [Float](repeating: .nan, count: dw * dh)
+            for y in 0..<dh { for x in 0..<dw {
+                let px = min(w - 1, Int((Float(x) + 0.5) * Float(w) / Float(dw))), py = min(h - 1, Int((Float(y) + 0.5) * Float(h) / Float(dh)))
+                let pid = py * w + px, a = 1 - T[pid]
+                if a > 0.5 { rend[y * dw + x] = planes[3 * hw + pid] / a }
+            } }
+            for i in 0..<(dw * dh) {
+                let t = sensor[i], r = rend[i]
+                guard t > 0, t.isFinite, r.isFinite, r > 0 else { continue }
+                relSum += Double(abs(r - t) / t); relN += 1
+                if max(r / t, t / r) < 1.05 { deltaN += 1 }
+            }
+            // Normals by central differences on the sensor grid (intrinsics scaled to it).
+            let fx = v.camera.fx * Float(dw) / Float(w), fy = v.camera.fy * Float(dh) / Float(h)
+            let cx = (v.camera.cx + 0.5) * Float(dw) / Float(w) - 0.5, cy = (v.camera.cy + 0.5) * Float(dh) / Float(h) - 0.5
+            func point(_ z: Float, _ x: Int, _ y: Int) -> SIMD3<Float> { SIMD3((Float(x) - cx) / fx * z, (Float(y) - cy) / fy * z, z) }
+            func normal(_ d: (Int) -> Float, _ x: Int, _ y: Int) -> SIMD3<Float>? {
+                let zl = d(y * dw + x - 1), zr = d(y * dw + x + 1), zu = d((y - 1) * dw + x), zd = d((y + 1) * dw + x), z0 = d(y * dw + x)
+                guard [zl, zr, zu, zd, z0].allSatisfy({ $0 > 0 && $0.isFinite }) else { return nil }
+                // skip depth discontinuities: only smooth neighbourhoods (surfaces), within 5 % of the centre
+                guard [zl, zr, zu, zd].allSatisfy({ abs($0 - z0) < 0.05 * z0 }) else { return nil }
+                let n = simd_cross(point(zr, x + 1, y) - point(zl, x - 1, y), point(zd, x, y + 1) - point(zu, x, y - 1))
+                let l = simd_length(n); return l > 0 ? n / l : nil
+            }
+            for y in 1..<(dh - 1) { for x in 1..<(dw - 1) {
+                guard let ns = normal({ sensor[$0] }, x, y), let nr = normal({ rend[$0] }, x, y) else { continue }
+                angles.append(acos(min(1, abs(simd_dot(ns, nr)))) * 180 / .pi)
+            } }
+            used += 1
+        }
+        guard relN > 0 else { return nil }
+        angles.sort()
+        return GeometryScore(absRel: Float(relSum / Double(relN)), delta105: Float(deltaN) / Float(relN),
+                             normalMeanDeg: angles.isEmpty ? .nan : angles.reduce(0, +) / Float(angles.count),
+                             normalMedianDeg: angles.isEmpty ? .nan : angles[angles.count / 2], views: used)
     }
 
     func evaluate() throws -> Float {
@@ -1537,6 +1624,7 @@ final class MetalTrainer: @unchecked Sendable {
                 status.eta = Double(config.iterations - step) / max(status.itersPerSecond, 1e-6)
                 status.shDegree = activeSHDegree
                 status.transientFraction = transientFraction
+                status.normalLoss = normalLoss; status.normalCoverage = normalCoverage
                 status.phase = step < config.densifyStop ? "Optimising & densifying" : "Refining"
                 onStatus(status)
             }

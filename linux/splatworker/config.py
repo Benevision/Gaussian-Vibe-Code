@@ -75,6 +75,16 @@ class TrainingConfig:
     depthEdgeAware: bool = True
     anisotropyReg: float = 0.1
     anisotropyMaxRatio: float = 10.0
+    # Depth-normal consistency (rendered-depth normals vs sensor-depth normals) and the flat-disc regulariser,
+    # as on the Mac
+    normalWeight: float = 0.0
+    normalStart: int = 1000
+    flatnessReg: float = 0.0
+    # Photos without sensor depth: predict depth with a monocular model (Depth Anything V2 Small), fitted to the
+    # dataset's 3D points, for the depth-normal loss. "auto" = when no training photo has sensor depth and
+    # normalWeight > 0; "on"; "off". monoDepthWeight: depth-loss weight for those predicted maps (0 = normals only).
+    depthPriors: str = "auto"
+    monoDepthWeight: float = 0.0
     # Spread MCMC clones along the long axis (ImprovedGS / IGS+), as on the Mac. On by default: without it the
     # 30k schedule collapsed on large scenes once the splat budget filled (1,258-photo drone set: 16.3 dB at
     # step 1.4k → 12.5 dB at 9k; with it 16.5–16.9 dB and rising at 9k).

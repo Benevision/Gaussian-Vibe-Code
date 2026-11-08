@@ -339,12 +339,23 @@ enum DatasetBuilder {
     static func solvePoses(_ frames: inout FrameSet, _ o: PrepOptions, worker: WorkerClient?, priors: String?, sequential: Bool = false,
                            progress: PipelineProgressHandler?) async throws -> PoseSolution {
         var choice = o.poseSolver
+        var cameraModel = o.sfmCameraModel
+        let fisheye = !frames.isMultiViewRig && frames.looksCircularFisheye
+        if fisheye && (cameraModel == "pinhole" || cameraModel == "auto") {
+            // Circular fisheye: solve with a fisheye model; splatprep then trains on undistorted copies.
+            cameraModel = "fisheye"
+            progress?(PipelineProgress(stage: "Camera solving", fraction: -1,
+                                       message: "fisheye footage: solving with a fisheye camera model and undistorting"))
+        }
         if choice == .automatic || choice == .fromCapture {
             if frames.isMultiViewRig {
                 // 360° footage: Object Capture is built for photographing one object and placed only 1,041 of
                 // 9,824 views of a 360 walk-through. Learned SfM (on the worker when one is in use) handles it;
                 // retrieval matching, because a frame's views are interleaved in file order.
                 choice = .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
+            } else if fisheye {
+                // Object Capture returns pinhole cameras for fisheye frames (the distortion ends up in the scene).
+                choice = .splatprep(featureModelId: "superpoint_lightglue", matching: sequential ? "sequential" : "auto", mapper: "auto")
             } else {
                 choice = ObjectCapturePoseSolver.isSupported ? .objectCapture
                     : .splatprep(featureModelId: "superpoint_lightglue", matching: sequential ? "sequential" : "auto", mapper: "auto")
@@ -353,7 +364,7 @@ enum DatasetBuilder {
         var sol: PoseSolution
         switch choice {
         case .splatprep(let feat, let matching, let mapper):
-            var sp = SplatPrepPoseSolver(features: feat, matching: matching, mapper: mapper, cameraModel: o.sfmCameraModel)
+            var sp = SplatPrepPoseSolver(features: feat, matching: matching, mapper: mapper, cameraModel: cameraModel)
             sp.priorPoses = priors
             sp.resizeMax = o.maxImageSize
             if o.compute != .thisMac, let worker {

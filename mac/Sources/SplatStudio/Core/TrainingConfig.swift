@@ -94,6 +94,14 @@ struct TrainingConfig: Codable, Equatable {
     /// stacking them on top of it. +2.2 dB held-out on a 649-photo bedroom capture (+3.4 dB together with
     /// moving-object masking off).
     var longAxisSplit = true
+    /// Depth-normal consistency: surface normals of the rendered depth are pulled towards normals of the photo's
+    /// sensor depth (LiDAR / stereo), so flat walls and floors train flat instead of bumpy. Needs depth maps.
+    var normalWeight: Float = 0
+    /// Step at which the normal loss starts (the scene needs a rough shape first).
+    var normalStart = 1000
+    /// Pushes splats towards flat discs (penalises the smallest axis's share of the splat's size), which gives each
+    /// splat a clear surface normal. 0 = off.
+    var flatnessReg: Float = 0
     var region: Region? = nil
     var cameraIds: [Int]? = nil
 
@@ -121,6 +129,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.skybox, &skybox); d(.skyboxResolution, &skyboxResolution); d(.skyAlphaWeight, &skyAlphaWeight)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         d(.optimizerPrecision, &optimizerPrecision)
+        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
     }
