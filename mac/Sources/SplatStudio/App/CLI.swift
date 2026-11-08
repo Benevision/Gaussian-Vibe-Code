@@ -330,7 +330,7 @@ enum CLI {
                 cfg.shDegree = value("--sh").flatMap(Int.init) ?? g.shDegree
                 cfg.antialiased = a.contains("--aa") ? true : (a.contains("--no-aa") ? false : g.antialiased)
                 cfg.maxImageSize = value("--max-size").flatMap(Int.init) ?? 1600
-                cfg.randomInitCount = 10; cfg.depthWeight = 0
+                cfg.randomInitCount = 10; cfg.depthWeight = 0; cfg.depthPriors = "off"
                 let t = MetalTrainer(dataset: ds, config: cfg)
                 try t.prepare { _ in }
                 if a.contains("--peak-clean") {

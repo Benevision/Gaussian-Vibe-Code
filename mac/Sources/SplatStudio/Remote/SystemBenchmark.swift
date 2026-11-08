@@ -81,6 +81,7 @@ enum SystemBenchmark {
         c.densifyStart = 200; c.densifyStop = 1500; c.shDegree = 3; c.shDegreeInterval = 300
         c.evalInterval = 0; c.previewInterval = 0
         c.appearanceCorrection = false; c.transientMasking = false; c.depthWeight = 0
+        c.normalWeight = 0; c.depthPriors = "off"   // a speed test: comparable with results from before these losses
         c.seed = 7
         return c
     }

@@ -546,7 +546,7 @@ final class AppModel {
             let r = Result { () -> AutoClean.Plan in
                 var cfg = TrainingConfig()
                 cfg.shDegree = g.shDegree; cfg.antialiased = g.antialiased
-                cfg.randomInitCount = 10; cfg.depthWeight = 0
+                cfg.randomInitCount = 10; cfg.depthWeight = 0; cfg.depthPriors = "off"
                 let t = MetalTrainer(dataset: ds, config: cfg)
                 try t.prepare { _ in }
                 let c = try t.contributionCensus(cloud: g, viewThreshold: AutoClean.peakThreshold) { f in
