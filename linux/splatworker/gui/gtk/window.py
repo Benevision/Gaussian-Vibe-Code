@@ -13,6 +13,7 @@ from ..server_process import FAILED, RUNNING, STARTING, STOPPED, STOPPING
 from .common import (action_row, alert, append_text, copy_text, icon_button, label, run_in_thread,
                      scrolled_page, text_view, toast)
 from .help_page import HelpPage
+from .studio.shell import StudioShell
 from .widgets import GpuRow, JobRow, empty_clients_row, qr_available, show_job_log, show_qr
 
 POLL_MS = 2000
@@ -25,9 +26,9 @@ STATE_TEXT = {
 }
 
 
-class MainWindow(Adw.ApplicationWindow):
+class MainWindow(StudioShell, Adw.ApplicationWindow):
     def __init__(self, app, state):
-        super().__init__(application=app, title=APP_NAME, default_width=920, default_height=760)
+        super().__init__(application=app, title=APP_NAME, default_width=1320, default_height=860)
         self.app = app
         self.state = state
         self._updating = False
@@ -40,8 +41,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.toasts = Adw.ToastOverlay()
         self.set_content(self.toasts)
-        view = Adw.ToolbarView()
-        self.toasts.set_child(view)
+        view = Adw.ToolbarView()     # "Queue & Worker" page: the worker's own status / jobs / log / connect
 
         header = Adw.HeaderBar()
         self.stack = Adw.ViewStack()
@@ -90,6 +90,7 @@ class MainWindow(Adw.ApplicationWindow):
             bp.add_setter(bottom, "reveal", True)
             self.add_breakpoint(bp)
 
+        self.toasts.set_child(self.build_studio(view, menu))
         self.refresh_static()
         self._render(self.state.poll(with_gpus=True))
         GLib.timeout_add(POLL_MS, self._tick)
@@ -303,6 +304,14 @@ class MainWindow(Adw.ApplicationWindow):
               "cancelled first. Results the Mac already downloaded are not affected.",
               (("cancel", "Cancel", "default"), ("delete", "Delete", "destructive")), answer)
 
+    def _job_prioritize(self, job_id: str) -> None:
+        port, token = self.state.running_port, self.state.token()
+        def work():
+            from ...studio.client import Client as C
+
+            C(f"http://127.0.0.1:{port}", token).prioritize(job_id)
+        run_in_thread(work, self._after_job_action)
+
     def _after_job_action(self, _result, error) -> None:
         if error is not None:
             toast(self.toasts, f"Failed: {getattr(error, 'message', error)}")
@@ -484,7 +493,8 @@ class MainWindow(Adw.ApplicationWindow):
             seen.add(jid)
             row = self._job_rows.get(jid)
             if row is None:
-                row = JobRow(jid, self._job_cancel, self._job_delete, self._job_log, self._job_export)
+                row = JobRow(jid, self._job_cancel, self._job_delete, self._job_log, self._job_export,
+                             self._job_prioritize)
                 self._job_rows[jid] = row
                 self.jobs_group.add(row)
             row.update(j)

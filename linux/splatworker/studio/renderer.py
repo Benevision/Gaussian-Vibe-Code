@@ -17,7 +17,7 @@ Must be used with a current GL ≥ 4.3 core context.
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import numpy as np

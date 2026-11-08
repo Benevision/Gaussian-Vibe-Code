@@ -23,7 +23,8 @@ STATE_ICONS = {
 
 class JobRow(Adw.ActionRow):
     def __init__(self, job_id: str, on_cancel: Callable[[str], None], on_delete: Callable[[str, str], None],
-                 on_log: Callable[[str, str], None], on_export: Callable[[str, str, str], None]):
+                 on_log: Callable[[str, str], None], on_export: Callable[[str, str, str], None],
+                 on_prioritize: Optional[Callable[[str], None]] = None):
         super().__init__()
         self.set_use_markup(False)
         self.job_id = job_id
@@ -41,7 +42,9 @@ class JobRow(Adw.ActionRow):
                                    lambda *_: on_log(self.job_id, self.view.title))
         self.delete_btn = icon_button("user-trash-symbolic", "Delete the job and its files",
                                       lambda *_: on_delete(self.job_id, self.view.title))
-        for b in (self.export_btn, self.cancel_btn, self.log_btn, self.delete_btn):
+        self.next_btn = icon_button("go-top-symbolic", "Run next: move to the front of the queue",
+                                    lambda *_: on_prioritize(self.job_id) if on_prioritize else None)
+        for b in (self.next_btn, self.export_btn, self.cancel_btn, self.log_btn, self.delete_btn):
             self.add_suffix(b)
 
     def update(self, status: dict) -> None:
@@ -50,7 +53,10 @@ class JobRow(Adw.ActionRow):
             return
         self.view = v
         self.set_title(v.title)
-        self.set_subtitle(v.detail)
+        origin = status.get("origin")
+        src = "" if not origin else (" · from this PC (Studio)" if origin == "local" else f" · from {origin}")
+        self.set_subtitle(v.detail + src)
+        self.next_btn.set_visible(v.state == "queued")
         self.icon.set_from_icon_name(STATE_ICONS.get(v.state, "content-loading-symbolic"))
         self.progress.set_fraction(v.fraction)
         self.progress.set_text(f"{v.fraction * 100:.0f} %" if v.state != "queued" else "waiting")
