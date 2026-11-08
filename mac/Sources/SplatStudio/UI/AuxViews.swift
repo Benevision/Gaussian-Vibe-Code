@@ -115,6 +115,12 @@ struct WorkersView: View {
                     WorkerRow(endpoint: w, browser: browser)
                     WorkerJobsList(endpoint: w, model: model)
                 }
+                if !browser.hidden.isEmpty {
+                    HStack {
+                        Text("\(browser.hidden.count) discovered worker\(browser.hidden.count == 1 ? "" : "s") hidden").font(.caption).foregroundStyle(.secondary)
+                        Button("Show again") { browser.unhideAll() }.buttonStyle(.link).font(.caption)
+                    }.padding(.horizontal, 6)
+                }
             }
             BenchmarkBox()
             GroupBox("Add manually") {
@@ -216,7 +222,7 @@ private struct WorkerRow: View {
             Image(systemName: "server.rack").font(.title2).foregroundStyle(color(h?.status))
             VStack(alignment: .leading, spacing: 2) {
                 Text(endpoint.name).font(.headline)
-                Text("\(endpoint.host):\(endpoint.port)\(endpoint.isManual ? " · manual" : " · Bonjour")").font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text("\(endpoint.host):\(endpoint.port)\(endpoint.linkKind.map { " · \($0 == "wifi" ? "Wi-Fi" : $0)" } ?? "")\(endpoint.isManual ? " · manual" : " · Bonjour")").font(.caption.monospaced()).foregroundStyle(.secondary)
                 if let info = h?.info {
                     ForEach(info.gpus ?? [], id: \.self) { g in Text("\(g.name) · \(g.memoryMB.map { "\($0 / 1024) GB" } ?? "")").font(.caption) }
                     Text("\(info.backend ?? "") · \((info.capabilities ?? []).joined(separator: ", "))\(info.busy == true ? " · busy" : "")").font(.caption).foregroundStyle(.secondary)
@@ -240,7 +246,13 @@ private struct WorkerRow: View {
             Spacer()
             Text(statusText(h?.status)).font(.callout).foregroundStyle(color(h?.status))
             Button { Task { await browser.checkHealth(endpoint.id) } } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
-            if endpoint.isManual { Button { browser.removeManual(endpoint.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless) }
+            if endpoint.isManual {
+                Button { browser.removeManual(endpoint.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+                    .help("Remove this worker")
+            } else {
+                Button { browser.hide(endpoint.id) } label: { Image(systemName: "eye.slash") }.buttonStyle(.borderless)
+                    .help("Remove this discovered worker from the list (e.g. to add it manually by its ethernet IP). “Show again” brings it back.")
+            }
         }
         .padding(6)
     }

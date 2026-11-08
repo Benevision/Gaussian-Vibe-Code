@@ -15,6 +15,9 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     var capabilities: [String]?
     /// Importable splatprep models, e.g. ["superpoint_lightglue", …]
     var models: [String]?
+    /// Worker ≥ 1.3.10: LAN addresses, preferred first (`kind` "ethernet" or "wifi").
+    struct Address: Codable, Hashable, Sendable { var address: String; var kind: String? }
+    var addresses: [Address]?
 
     var canTrain: Bool { capabilities?.contains("train") ?? true }
     var canProcess: Bool { capabilities?.contains("process") ?? false }

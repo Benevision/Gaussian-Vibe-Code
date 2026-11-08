@@ -61,6 +61,22 @@ class ApiError(Exception):
         self.message = message
 
 
+_IF_CACHE: dict = {"at": 0.0, "value": []}
+
+
+def _lan_interfaces() -> list:
+    """(address, kind) pairs from discovery.local_ipv4_interfaces, cached for a minute (polled by /v1/info)."""
+    if time.monotonic() - _IF_CACHE["at"] > 60:
+        try:
+            from .discovery import local_ipv4_interfaces
+
+            _IF_CACHE["value"] = local_ipv4_interfaces()
+        except Exception:  # noqa: BLE001
+            _IF_CACHE["value"] = []
+        _IF_CACHE["at"] = time.monotonic()
+    return _IF_CACHE["value"]
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -624,6 +640,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             "capabilities": caps,
             "models": models,
             "auth": settings.token is not None,
+            # LAN addresses, preferred first (ethernet, then Wi-Fi) — the Mac switches to the first that answers
+            "addresses": [{"address": a, "kind": k} for a, k in _lan_interfaces() if k != "virtual"],
         }
 
     # ------------------------------------------------------------ runtime

@@ -13,12 +13,46 @@ struct WorkerEndpoint: Codable, Hashable, Identifiable, Sendable {
     var isManual: Bool
     /// Bonjour TXT record (`version`, `gpu`, `auth`).
     var txt: [String: String] = [:]
+    /// Other addresses of the same worker (address → "ethernet"/"wifi"), from its TXT `addrs` or `/v1/info`.
+    var alternates: [String: String] = [:]
 
     var baseURL: URL {
         let h = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host   // IPv6 literal
         return URL(string: "http://\(h):\(port)")!
     }
     var requiresAuth: Bool { txt["auth"] == "1" }
+    /// "ethernet" / "wifi" for the address in use, when the worker said.
+    var linkKind: String? { alternates[host] }
+
+    enum CodingKeys: String, CodingKey { case id, name, host, port, isManual, txt, alternates }
+    init(id: String, name: String, host: String, port: Int, isManual: Bool, txt: [String: String] = [:]) {
+        self.id = id; self.name = name; self.host = host; self.port = port; self.isManual = isManual; self.txt = txt
+        self.alternates = WorkerEndpoint.parseAddrs(txt["addrs"])
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id); name = try c.decode(String.self, forKey: .name)
+        host = try c.decode(String.self, forKey: .host); port = try c.decode(Int.self, forKey: .port)
+        isManual = try c.decode(Bool.self, forKey: .isManual)
+        txt = try c.decodeIfPresent([String: String].self, forKey: .txt) ?? [:]
+        alternates = try c.decodeIfPresent([String: String].self, forKey: .alternates) ?? [:]
+    }
+
+    /// TXT `addrs` = "192.168.0.113:ethernet,192.168.0.120:wifi" (worker ≥ 1.3.10).
+    static func parseAddrs(_ s: String?) -> [String: String] {
+        var out: [String: String] = [:]
+        for part in (s ?? "").split(separator: ",") {
+            let kv = part.split(separator: ":", maxSplits: 1).map(String.init)
+            if kv.count == 2, !kv[0].isEmpty { out[kv[0]] = kv[1] }
+        }
+        return out
+    }
+
+    /// The address to use: an ethernet address if the worker has one, else nil (keep the current one).
+    static func preferredAddress(current: String, alternates: [String: String]) -> String? {
+        if alternates[current] == "ethernet" { return nil }
+        return alternates.filter { $0.value == "ethernet" }.keys.sorted().first
+    }
     var gpuName: String? { txt["gpu"] }
 }
 
@@ -52,10 +86,14 @@ final class WorkerBrowser {
     private var resolving: [String: NWConnection] = [:]
     private var healthTimer: Task<Void, Never>?
     private let defaultsKey = "SplatStudio.manualWorkers"
+    private let hiddenKey = "SplatStudio.hiddenWorkers"
+    /// Discovered workers the user removed (by Bonjour id); they stay hidden until shown again.
+    private(set) var hidden: Set<String> = []
     private let queue = DispatchQueue(label: "SplatStudio.WorkerBrowser")
 
     init() {
         if let d = UserDefaults.standard.data(forKey: defaultsKey), let m = try? JSONDecoder().decode([WorkerEndpoint].self, from: d) { manual = m }
+        hidden = Set(UserDefaults.standard.stringArray(forKey: hiddenKey) ?? [])
         rebuild()
     }
 
@@ -108,7 +146,11 @@ final class WorkerBrowser {
             seen.insert(id)
             var txt: [String: String] = [:]
             if case let .bonjour(record) = md { txt = record.dictionary }
-            if var existing = discovered[id] { existing.txt = txt; discovered[id] = existing; continue }
+            if var existing = discovered[id] {
+                existing.txt = txt
+                existing.alternates.merge(WorkerEndpoint.parseAddrs(txt["addrs"])) { _, new in new }
+                discovered[id] = existing; continue
+            }
             resolve(ep, id: id, name: name, txt: txt)
         }
         for id in discovered.keys where !seen.contains(id) { discovered.removeValue(forKey: id); health.removeValue(forKey: id) }
@@ -175,12 +217,28 @@ final class WorkerBrowser {
         persist(); rebuild()
     }
 
+    /// Removes a Bonjour-discovered worker from the list (e.g. to add it manually by its ethernet address).
+    func hide(_ id: String) {
+        hidden.insert(id)
+        health.removeValue(forKey: id)
+        UserDefaults.standard.set(Array(hidden), forKey: hiddenKey)
+        rebuild()
+    }
+
+    /// Shows all hidden discovered workers again.
+    func unhideAll() {
+        hidden.removeAll()
+        UserDefaults.standard.set([String](), forKey: hiddenKey)
+        rebuild()
+        Task { await refreshHealth() }
+    }
+
     private func persist() {
         if let d = try? JSONEncoder().encode(manual) { UserDefaults.standard.set(d, forKey: defaultsKey) }
     }
 
     private func rebuild() {
-        workers = (Array(discovered.values) + manual).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        workers = (discovered.values.filter { !hidden.contains($0.id) } + manual).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     // MARK: Tokens
@@ -199,7 +257,10 @@ final class WorkerBrowser {
 
     /// A client for the worker at this base URL (as recorded in a project's `RemoteStore`).
     func client(forBaseURL url: String) -> WorkerClient? {
-        guard let w = workers.first(where: { $0.baseURL.absoluteString == url }) else { return nil }
+        // also by any other address of the same worker (a discovered worker may have moved to its ethernet address)
+        let host = URL(string: url)?.host
+        guard let w = workers.first(where: { $0.baseURL.absoluteString == url })
+                ?? workers.first(where: { w in host.map { w.alternates[$0] != nil } ?? false }) else { return nil }
         return WorkerClient(endpoint: w, token: token(for: w.id))
     }
 
@@ -224,13 +285,48 @@ final class WorkerBrowser {
             let info = try await client.info(timeout: 4)
             h.info = info; h.status = .online
             h.latencyMs = Date().timeIntervalSince(t0) * 1000
+            await learnAddresses(id, info: info)
         } catch let e as WorkerError where e.status == 401 {
             h.status = .unauthorized
         } catch {
-            h.status = .offline(error.localizedDescription)
+            // A discovered worker on two networks: if this address stopped answering, try its others.
+            if let moved = await switchToWorkingAddress(id, excluding: w.host) {
+                h.info = moved; h.status = .online
+                h.latencyMs = Date().timeIntervalSince(t0) * 1000
+            } else {
+                h.status = .offline(error.localizedDescription)
+            }
         }
         h.checkedAt = Date()
         health[id] = h
+    }
+
+    /// Records the worker's addresses and moves a discovered worker onto ethernet when that address answers.
+    /// Manually added workers keep the address the user typed.
+    private func learnAddresses(_ id: String, info: WorkerInfo) async {
+        guard var w = discovered[id] else { return }
+        for a in info.addresses ?? [] { w.alternates[a.address] = a.kind ?? w.alternates[a.address] ?? "" }
+        discovered[id] = w
+        guard let target = WorkerEndpoint.preferredAddress(current: w.host, alternates: w.alternates) else { return }
+        var probe = w; probe.host = target
+        if (try? await WorkerClient(endpoint: probe, token: token(for: id)).info(timeout: 2)) != nil {
+            discovered[id]?.host = target
+            rebuild()
+        }
+    }
+
+    private func switchToWorkingAddress(_ id: String, excluding bad: String) async -> WorkerInfo? {
+        guard let w = discovered[id] else { return nil }
+        let order = w.alternates.keys.filter { $0 != bad }.sorted { (w.alternates[$0] == "ethernet" ? 0 : 1, $0) < (w.alternates[$1] == "ethernet" ? 0 : 1, $1) }
+        for a in order {
+            var probe = w; probe.host = a
+            if let info = try? await WorkerClient(endpoint: probe, token: token(for: id)).info(timeout: 2) {
+                discovered[id]?.host = a
+                rebuild()
+                return info
+            }
+        }
+        return nil
     }
 }
 
