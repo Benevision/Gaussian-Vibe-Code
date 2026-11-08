@@ -10,6 +10,17 @@ A Gaussian-splatting suite for Apple silicon: view, create, edit and export 3D G
 | [`tools/`](tools/) | **splatprep** — learned feature matching/SfM, moving-object masking (OWLv2 + SAM 2 tracking, click-to-mask server) and benchmark harness (Mac MPS or Linux CUDA) | 77 tests pass; models installed and running on this Mac; benchmark in progress |
 | [`docs/`](docs/) | [User guide](docs/USER_GUIDE.md) · [Settings reference](docs/SETTINGS.md) · [Architecture](docs/ARCHITECTURE.md) · [Protocols & formats](docs/PROTOCOL.md) | |
 
+## Download
+
+Ready-built releases are on the [Releases page](https://github.com/Benevision/Gaussian-Vibe-Code/releases):
+
+* **Splat Studio for Mac** (Apple silicon, macOS 15+) — `.dmg`, drag to Applications. Not notarized yet: the first
+  time, right-click the app → **Open**.
+* **Splat Worker for Linux** (NVIDIA GPU) — single-file `.flatpak`: `flatpak install --user SplatWorker-*.flatpak`.
+
+Releases are cut by pushing a tag (`git tag -a v1.4.0 -m "…" && git push origin v1.4.0`); see
+`.github/workflows/release.yml`.
+
 ## Quick start (Mac)
 
 ```bash

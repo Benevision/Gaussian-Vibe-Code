@@ -3,12 +3,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
+# SPLAT_VERSION: marketing version (e.g. 1.4.0, set by the release workflow from the tag); build number = commit count.
+VERSION="${SPLAT_VERSION:-1.0}"
+BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 # SPLAT_BUILD_PATH: build somewhere else, e.g. while a command-line run uses the default .build binary
 # (relinking a binary that is running can crash it).
 BP=(); [ -n "${SPLAT_BUILD_PATH:-}" ] && BP=(--build-path "$SPLAT_BUILD_PATH")
 swift build -c "$CONFIG" --arch arm64 "${BP[@]}"
 BIN="$(swift build -c "$CONFIG" --arch arm64 "${BP[@]}" --show-bin-path)/SplatStudio"
-APP="build/Splat Studio.app"
+# SPLAT_OUT: output folder (default build/) — use another one while the app in build/ is running.
+OUT_DIR="${SPLAT_OUT:-build}"
+APP="$OUT_DIR/Splat Studio.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/SplatStudio"
@@ -25,8 +30,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.example.splatstudio</string>
   <key>CFBundleExecutable</key><string>SplatStudio</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -42,4 +47,4 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed"
-echo "Built $APP"
+echo "Built $APP ($VERSION, build $BUILD)"
