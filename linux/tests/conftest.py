@@ -132,6 +132,14 @@ class FakeBackend(Backend):
             return run_processing(ctx.dataset_dir, ctx.spec, ctx.job_dir,
                                   progress_cb=ctx.status, log=ctx.log,
                                   should_stop=ctx.cancel_event.is_set)
+        if ctx.kind == "census":
+            self.started.set()
+            from splatworker.studio.formats import load
+
+            n = load(ctx.spec["plyPath"], with_skybox=False).count
+            np.savez(ctx.job_dir / "census.npz", peak=np.linspace(0, 1, n, dtype=np.float32),
+                     views=np.arange(n, dtype=np.uint32))
+            return {"splats": n}
         ctx.status(state="loading", message="loading dataset")
         ctx.log("fake trainer loading")
         self.started.set()

@@ -76,7 +76,7 @@ def test_info(client):
     assert isinstance(info["gpus"], list)
     assert info["backend"].startswith("gsplat")
     assert info["busy"] is False and info["queueLength"] == 0
-    assert info["capabilities"] == ["train", "process", "chain", "stream"]
+    assert info["capabilities"] == ["train", "process", "chain", "stream", "priority", "census"]
     assert info["models"] == ["superpoint_lightglue"]
 
 

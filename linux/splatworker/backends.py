@@ -29,7 +29,7 @@ class JobFailed(RuntimeError):
 @dataclass
 class JobContext:
     job_id: str
-    kind: str                      # "train" | "process"
+    kind: str                      # "train" | "process" | "census"
     job_dir: Path
     dataset_dir: Path              # root of the uploaded dataset
     spec: Dict[str, Any]           # TrainingConfig dict (train) or ProcessingRequest (process)
@@ -85,6 +85,10 @@ class SubprocessBackend(Backend):
             args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), device, q, cancel)
         elif ctx.kind == "process":
             from .processing import subprocess_entry
+
+            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.device_index, q, cancel)
+        elif ctx.kind == "census":
+            from .census import subprocess_entry
 
             args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), ctx.device_index, q, cancel)
         else:

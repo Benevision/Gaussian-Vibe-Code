@@ -51,7 +51,8 @@ ACTIVE_STATES = ("loading", "training", "running")
 FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
-               "datasetId", "createdAt", "gpu", "outputDatasetId")
+               "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin")
+LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
 class ApiError(Exception):
@@ -141,7 +142,7 @@ class Job:
         with self.lock:
             for k, v in fields.items():
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
-                         "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu"):
+                         "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -233,8 +234,8 @@ class JobManager:
 
     # ---------------------------------------------------------------- queue
     def submit(self, kind: str, dataset_id: str, name: str, payload_key: str,
-               payload: Dict[str, Any], total_steps: int) -> Job:
-        prefix = "j" if kind == "train" else "p"
+               payload: Dict[str, Any], total_steps: int, priority: int = 0, origin: Optional[str] = None) -> Job:
+        prefix = {"train": "j", "census": "c"}.get(kind, "p")
         job_id = prefix + uuid.uuid4().hex[:11]
         job_dir = self.settings.jobs_dir / job_id
         job_dir.mkdir(parents=True)
@@ -245,6 +246,7 @@ class JobManager:
             "numGaussians": 0 if kind == "train" else None,
             "elapsedSeconds": 0.0, "etaSeconds": None, "previewStep": None,
             "message": "queued", "datasetId": dataset_id, "createdAt": _now_iso(), "gpu": None,
+            "priority": int(priority), "origin": origin,
         }
         job = Job(job_dir, spec, status)
         job.persist()
@@ -303,6 +305,18 @@ class JobManager:
         else:
             shutil.rmtree(job.dir, ignore_errors=True)
 
+    def prioritize(self, job_id: str) -> Job:
+        """Move a queued job to the front: priority above every other queued job."""
+        job = self.get(job_id)
+        with self.cond:
+            if job.state != "queued":
+                raise ApiError(409, "only queued jobs can be moved")
+            top = max([int(self.jobs[j].status.get("priority") or 0) for j in self.queue if j in self.jobs] + [0])
+            job.update(persist=True, priority=top + 1)
+            job.log(f"moved to the front of the queue (priority {top + 1})")
+            self.cond.notify()
+        return job
+
     def dataset_in_use(self, dataset_id: str) -> bool:
         return any(j.spec.get("datasetId") == dataset_id and j.state not in FINAL_STATES
                    for j in self.jobs.values())
@@ -313,12 +327,15 @@ class JobManager:
             while True:
                 if self.stopping:
                     return None
-                while self.queue:
-                    job_id = self.queue.popleft()
-                    job = self.jobs.get(job_id)
-                    if job is not None and job.state == "queued":
-                        self.running[device] = job_id
-                        return job
+                # drop stale entries, then take the highest priority (ties: oldest first). Nothing running is
+                # ever pre-empted; priority only decides which queued job a free GPU takes next.
+                live = [j for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
+                self.queue = collections.deque(live)
+                if live:
+                    best = max(live, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
+                    self.queue.remove(best)
+                    self.running[device] = best
+                    return self.jobs[best]
                 self.cond.wait(timeout=1.0)
 
     def _worker_loop(self, device: Optional[int]) -> None:
@@ -367,7 +384,7 @@ class JobManager:
         kind = job.spec["kind"]
         ctx = JobContext(
             job_id=job.id, kind=kind, job_dir=job.dir, dataset_dir=dataset_dir,
-            spec=job.spec.get("config" if kind == "train" else "request") or {},
+            spec=job.spec.get({"train": "config", "census": "census"}.get(kind, "request")) or {},
             device_index=device, status=status, log=job.log, preview=preview,
             cancel_event=job.cancel_event,
         )
@@ -391,6 +408,11 @@ class JobManager:
                 return
             extra = {k: stats[k] for k in ("numGaussians", "psnr", "loss") if stats.get(k) is not None}
             job.update(step=job.status.get("totalSteps"), **extra)
+        elif kind == "census":
+            if not (job.dir / "census.npz").is_file():
+                self._finish(job, "failed", "census finished without census.npz")
+                return
+            job.update(step=job.status.get("totalSteps"))
         else:
             out = job.dir / "output"
             if not out.is_dir():
@@ -430,9 +452,16 @@ def dataset_root(settings: ServerSettings, dataset_id: str) -> Optional[Path]:
     if not meta.is_file():
         return None
     try:
-        rel = json.loads(meta.read_text(encoding="utf-8")).get("root", "files")
+        m = json.loads(meta.read_text(encoding="utf-8"))
+        rel = m.get("root", "files")
     except Exception:
         return None
+    if m.get("external"):
+        # a folder of Splat Studio on this PC (POST /v1/datasets/local), used in place
+        if not settings.allow_local_datasets:
+            return None
+        root = Path(m["external"]).resolve()
+        return root if root.is_dir() else None
     root = (d / rel).resolve()
     if d.resolve() not in root.parents:
         return None
@@ -640,6 +669,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         if "process" in caps or "frames" in caps:
             caps = caps + ["chain"]       # outputDatasetId, /v1/datasets/compose, /v1/datasets/{id}/archive.zip
             caps = caps + ["stream"]      # ≥ 1.3.13: training images streamed from disk when RAM is short
+        caps = caps + ["priority"]        # ≥ 1.4.0: POST /v1/jobs/{id}/prioritize, JobStatus.priority / origin
+        if "train" in caps:
+            caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)
+        if settings.allow_local_datasets:
+            caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (loopback only)
         try:
             models = backend.models() if "process" in caps else []
         except Exception:
@@ -664,6 +698,19 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     # ------------------------------------------------------------ runtime
     from .runtime_install import RuntimeInstaller
     installer = RuntimeInstaller()
+
+    def _origin(request: Request) -> str:
+        host = request.client.host if request.client else ""
+        return "local" if host in LOOPBACK else host
+
+    def _priority(request: Request, body: Dict[str, Any]) -> int:
+        """Only clients on this PC (the Studio) may ask to go first; remote jobs always queue at 0."""
+        if _origin(request) != "local":
+            return 0
+        p = body.get("priority", 0)
+        if not isinstance(p, int) or isinstance(p, bool):
+            raise ApiError(400, "priority must be an integer")
+        return max(0, min(p, 1000))
 
     @app.get("/v1/runtime")
     def runtime_status():
@@ -785,6 +832,34 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         log.info("dataset %s composed from %s", info["datasetId"], [l["datasetId"] for l in layers])
         return {"datasetId": info["datasetId"], "hasDatasetJson": info["hasDatasetJson"], "bytes": info["bytes"]}
 
+    @app.post("/v1/datasets/local")
+    async def register_local_dataset(request: Request):
+        """``{"path": "/abs/folder"}`` → a dataset that IS that folder (nothing copied). Loopback clients only, and
+        only when the server runs with ``--allow-local-datasets`` (the desktop app on this PC)."""
+        if not settings.allow_local_datasets:
+            raise ApiError(403, "local datasets are disabled on this worker")
+        if _origin(request) != "local":
+            raise ApiError(403, "local datasets can only be registered from this computer")
+        body = await json_body(request)
+        path = body.get("path")
+        if not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path:
+            raise ApiError(400, "path must be an absolute folder path")
+        root = Path(path).resolve()
+        if not root.is_dir():
+            raise ApiError(404, "folder not found")
+        dataset_id = _new_dataset_id()
+        d = settings.datasets_dir / dataset_id
+        d.mkdir(parents=True)
+        info: Dict[str, Any] = {"datasetId": dataset_id, "createdAt": _now_iso(), "external": str(root),
+                                "local": True}
+        try:
+            _describe_dataset(root, info)
+        except DatasetError as e:
+            info["hasDatasetJson"] = False
+            info["datasetError"] = str(e)
+        _write_json_atomic(d / "meta.json", info)
+        return {k: v for k, v in info.items() if k != "external"} | {"path": str(root)}
+
     @app.get("/v1/datasets")
     def list_datasets():
         out = []
@@ -846,7 +921,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         # Keep only keys the client sent, so context-dependent defaults resolve in the trainer.
         cfg_dict = {k: v for k, v in cfg.to_dict().items() if k in cfg.explicit}
         job = manager.submit("train", dataset_id, _name(body, dataset_id), "config", cfg_dict,
-                             total_steps=cfg.iterations)
+                             total_steps=cfg.iterations, priority=_priority(request, body),
+                             origin=_origin(request))
         return {"jobId": job.id}
 
     @app.post("/v1/process")
@@ -860,8 +936,45 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         from .processing import PROGRESS_SCALE
 
         job = manager.submit("process", dataset_id, _name(body, f"{req['task']} {dataset_id}"),
-                             "request", req, total_steps=PROGRESS_SCALE)
+                             "request", req, total_steps=PROGRESS_SCALE, priority=_priority(request, body),
+                             origin=_origin(request))
         return {"jobId": job.id}
+
+    @app.post("/v1/census")
+    async def create_census_job(request: Request):
+        """Auto clean census: ``{"datasetId", "jobId": <completed train job>}`` or, from this PC only,
+        ``{"datasetId", "plyPath": "/abs/scene.ply"}``. Result: ``GET /v1/jobs/{id}/census.npz``."""
+        body = await json_body(request)
+        dataset_id, root = _require_dataset(body)
+        if not (root / "dataset.json").is_file():
+            raise ApiError(400, "the census needs a dataset with dataset.json (the photos' cameras)")
+        if body.get("jobId"):
+            src = manager.get(str(body["jobId"]))
+            ply = src.dir / "result.ply"
+            if not ply.is_file():
+                raise ApiError(409, "that job has no result.ply")
+        elif body.get("plyPath"):
+            if _origin(request) != "local":
+                raise ApiError(403, "plyPath can only be used from this computer")
+            ply = Path(str(body["plyPath"]))
+            if not ply.is_absolute() or not ply.is_file():
+                raise ApiError(404, "plyPath not found")
+        else:
+            raise ApiError(400, "jobId or plyPath is required")
+        try:
+            n_cams = len(parse_dataset(root, check_files=False).cameras)
+        except DatasetError as e:
+            raise ApiError(400, f"invalid dataset: {e}")
+        spec = {"plyPath": str(ply.resolve())}
+        if isinstance(body.get("maxImageSize"), int):
+            spec["maxImageSize"] = body["maxImageSize"]
+        job = manager.submit("census", dataset_id, _name(body, f"census {dataset_id}"), "census", spec,
+                             total_steps=max(n_cams, 1), priority=_priority(request, body), origin=_origin(request))
+        return {"jobId": job.id}
+
+    @app.post("/v1/jobs/{job_id}/prioritize")
+    def prioritize_job(job_id: str):
+        return manager.prioritize(job_id).snapshot()
 
     @app.get("/v1/jobs")
     def list_jobs():
@@ -929,6 +1042,11 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         if job.state != "completed" or not path.is_file():
             raise ApiError(404, f"result not available (job is {job.state})")
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}.ply")
+
+    @app.get("/v1/jobs/{job_id}/census.npz")
+    def get_census(job_id: str):
+        path = _job_file(job_id, "census.npz")
+        return FileResponse(path, media_type="application/octet-stream", filename="census.npz")
 
     @app.get("/v1/jobs/{job_id}/sky.png")
     def get_sky(job_id: str):

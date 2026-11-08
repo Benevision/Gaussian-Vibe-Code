@@ -317,6 +317,8 @@ class ServerSettings:
     max_extracted_bytes: int = 40 * 1024 ** 3  # total uncompressed size
     max_files: int = 100_000
     max_compression_ratio: float = 200.0       # per entry (zip bomb guard)
+    # Splat Studio on this PC: loopback clients may register a local folder as a dataset (no upload/copy).
+    allow_local_datasets: bool = False
 
     def __post_init__(self) -> None:
         self.data_dir = Path(self.data_dir).expanduser().resolve()
