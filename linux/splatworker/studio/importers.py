@@ -82,6 +82,19 @@ def import_photos(src: Path, dataset_dir: Path, max_size: int = 1600, blur_rejec
     return {"images": len(written) - len(rejected), "rejected": rejected}
 
 
+def import_photos360(src: Path, dataset_dir: Path, options: Dict, progress: Progress = _noop) -> Dict:
+    """Folder of 2:1 equirectangular photos → perspective views + ``frames.json`` (one rig group per photo);
+    nadir keep-masks go to the ``splatprep-masks/frames`` layer, like the 360° video path's."""
+    from . import equirect
+
+    files = list_images(src)
+    if not files:
+        raise ValueError(f"no photos in {src}")
+    layer = Path(dataset_dir) / "splatprep-masks" / "frames"
+    shutil.rmtree(layer, ignore_errors=True)
+    return equirect.split_photos(files, dataset_dir, options, layer / "masks", progress)
+
+
 def import_capture(bundle: Path, dataset_dir: Path, progress: Progress = _noop) -> Dict:
     """``.splatcapture`` → images/ + priors.json. The manifest itself is splatprep's prior format (ARKit poses,
     column-major, converted with c2w · diag(1, −1, −1, 1)); frames without tracking are left out."""
@@ -196,9 +209,41 @@ def import_colmap(project: Path, dataset_dir: Path, images: Optional[Path] = Non
 
 # ------------------------------------------------------------------------------------------- mask stacking
 
-def stack_masks(dataset_dir: Path, layers: List[Path], dilate: int = 4, out_name: str = "masks") -> Dict[str, str]:
+MANUAL_LAYER = "splatprep-masks/manual"       # the mask editor's layer: masks/ (255 keep) + restore/ (255 = keep)
+PIPELINE_LAYERS = ("frames", "static", "manual")
+
+
+def manual_restore_dirs(dataset_dir: Path) -> List[Path]:
+    d = Path(dataset_dir) / MANUAL_LAYER / "restore"
+    return [d] if d.is_dir() else []
+
+
+def mask_layers(dataset_dir: Path) -> List[Path]:
+    """Every mask layer of a dataset (``splatprep-masks/<layer>/masks``), the mask editor's own last."""
+    root = Path(dataset_dir) / "splatprep-masks"
+    if not root.is_dir():
+        return []
+    ls = sorted((p / "masks" for p in root.iterdir() if (p / "masks").is_dir()),
+                key=lambda p: (p.parent.name == "manual", p.parent.name))
+    return ls
+
+
+def prune_mask_layers(dataset_dir: Path, keep: List[str]) -> None:
+    """Drop model layers of an earlier run that this run doesn't make (the editor's ``manual`` layer stays)."""
+    root = Path(dataset_dir) / "splatprep-masks"
+    if not root.is_dir():
+        return
+    for p in root.iterdir():
+        if p.is_dir() and p.name not in keep and p.name != "manual":
+            shutil.rmtree(p, ignore_errors=True)
+
+
+def stack_masks(dataset_dir: Path, layers: List[Path], dilate: int = 4, out_name: str = "masks",
+                restore: Optional[List[Path]] = None, only: Optional[List[str]] = None) -> Dict[str, str]:
     """AND every layer's ``<stem>.png`` (255 = keep) into ``dataset_dir/masks/<stem>.png``; ignored areas grow by
-    ``dilate`` px. Returns {image stem: relative mask path} for images that have any ignored pixel."""
+    ``dilate`` px; then ``restore`` layers (255 = keep whatever the others say: the editor's "paint back") are
+    ORed in. ``only`` limits the work to those stems (the mask editor re-stacks just the edited images).
+    Returns {image stem: relative mask path} for images that have any ignored pixel."""
     from PIL import Image, ImageFilter
 
     dataset_dir = Path(dataset_dir)
@@ -209,7 +254,16 @@ def stack_masks(dataset_dir: Path, layers: List[Path], dilate: int = 4, out_name
         if not Path(layer).is_dir():
             continue
         for p in Path(layer).glob("*.png"):
-            stems.setdefault(p.stem, []).append(p)
+            if only is None or p.stem in only:
+                stems.setdefault(p.stem, []).append(p)
+    restores: Dict[str, Path] = {}
+    for d in restore or []:
+        for p in Path(d).glob("*.png"):
+            restores[p.stem] = p
+    if only is not None:
+        for stem in only:
+            if stem not in stems:                  # no layer masks it any more
+                (out / f"{stem}.png").unlink(missing_ok=True)
     result: Dict[str, str] = {}
     for stem, files in stems.items():
         keep = None
@@ -227,6 +281,16 @@ def stack_masks(dataset_dir: Path, layers: List[Path], dilate: int = 4, out_name
         img = Image.fromarray(keep.astype(np.uint8) * 255)
         if dilate > 0:
             img = img.filter(ImageFilter.MinFilter(2 * dilate + 1))
+        if stem in restores:
+            r = Image.open(restores[stem]).convert("L")
+            if r.size != img.size:
+                r = r.resize(img.size, Image.NEAREST)
+            arr = np.asarray(img) >= 128
+            arr |= np.asarray(r) >= 128
+            if arr.all():
+                (out / f"{stem}.png").unlink(missing_ok=True)
+                continue
+            img = Image.fromarray(arr.astype(np.uint8) * 255)
         dst = out / f"{stem}.png"
         tmp = dst.with_name(dst.name + ".tmp.png")
         img.save(tmp)

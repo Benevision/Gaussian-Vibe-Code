@@ -6,6 +6,7 @@ SettingsCatalog ids so the Settings Reference documents every control.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -79,7 +80,8 @@ FEATURES = [("superpoint_lightglue", "SuperPoint + LightGlue"), ("aliked_lightgl
             ("vggt", "VGGT (feed-forward)")]
 MASK_MODELS = [("none", "None"), ("person", "Remove people & pets"), ("sam2_auto", "Remove moving things")]
 SOURCE_KINDS = {
-    "photos": "Photos folder", "video": "Video", "video360": "360° video", "capture": "iPhone / headset capture",
+    "photos": "Photos folder", "video": "Video", "video360": "360° video", "photos360": "360° photos folder",
+    "stereo": "Stereo footage", "capture": "iPhone / headset capture",
     "colmap": "COLMAP project", "nerfstudio": "Nerfstudio transforms.json", "dataset": "Prepared dataset",
 }
 
@@ -107,6 +109,14 @@ class ProjectOptions:
     views_360: int = 8                       # source.360views
     fov_360: float = 90.0                    # source.360fov
     drop_nadir_360: bool = True              # source.360dropNadir
+    stereo_layout: str = "auto"              # auto | sideBySide | topBottom | dualStream | separateFiles
+    stereo_right: str = ""                   # the right-eye video (separateFiles)
+    stereo_swap: bool = False                # swap left and right
+    stereo_baseline_mm: float = 0.0          # rig baseline (0 = from the file's calibration, else unknown)
+    stereo_fov: float = 0.0                  # horizontal FOV of one eye in degrees (0 = calibration / metadata)
+    stereo_both_eyes: bool = True            # right-eye images train too
+    stereo_depth: bool = False               # block-matching depth for the left eye
+    mask_static: bool = False                # mask.staticRegions: mask fixed parts of the frame
     holdout_every: int = 25                  # source.holdout (0 = none)
     solver: str = "learned"                  # sfm.solver: learned | poses (use poses from the source)
     features: str = "superpoint_lightglue"   # sfm.features
@@ -140,15 +150,32 @@ class ProjectOptions:
             vo["targetFrameCount"] = int(self.target_frames)
         req: Dict[str, Any] = {"task": "frames", "video": video_name, "outputDir": "out", "videoOptions": vo}
         if self.source_kind == "video360":
-            n = max(3, int(self.views_360))
-            req["equirect"] = {"fovDegrees": float(self.fov_360),
-                               "outputSize": min(int(self.max_image_size or 1600), 2400),
-                               "rings": [{"pitch": 0, "count": n},
-                                         {"pitch": 35, "count": max(2, n // 2), "yawOffset": 180.0 / n},
-                                         {"pitch": -35, "count": max(2, n // 2), "yawOffset": 180.0 / n}],
-                               "includeNadir": not self.drop_nadir_360,
-                               "maskBelowLatitude": -60.0 if self.drop_nadir_360 else None}
+            req["equirect"] = self.equirect_options()
+        if self.source_kind == "stereo":
+            req["stereo"] = self.stereo_options()
         return req
+
+    def equirect_options(self) -> Dict[str, Any]:
+        """The Mac's ``Equirect360Options`` for 360° video (worker) and 360° photos (this side)."""
+        n = max(3, int(self.views_360))
+        return {"fovDegrees": float(self.fov_360), "outputSize": min(int(self.max_image_size or 1600), 2400),
+                "rings": [{"pitch": 0, "count": n},
+                          {"pitch": 35, "count": max(2, n // 2), "yawOffset": 180.0 / n},
+                          {"pitch": -35, "count": max(2, n // 2), "yawOffset": 180.0 / n}],
+                "includeNadir": not self.drop_nadir_360,
+                "maskBelowLatitude": -60.0 if self.drop_nadir_360 else None}
+
+    def stereo_options(self) -> Dict[str, Any]:
+        """splatprep ``frames`` request ``stereo`` (PROTOCOL.md §4): how the two eyes are stored."""
+        so: Dict[str, Any] = {"layout": self.stereo_layout or "auto", "swapEyes": bool(self.stereo_swap)}
+        if self.stereo_layout == "separateFiles" or self.stereo_right:
+            so["layout"] = "separateFiles"
+            so["rightVideo"] = "_right-eye" + (Path(self.stereo_right).suffix or ".mp4")
+        if self.stereo_baseline_mm:
+            so["baseline"] = float(self.stereo_baseline_mm) / 1000.0
+        if self.stereo_fov:
+            so["horizontalFOV"] = float(self.stereo_fov)
+        return so
 
     def mask_request(self, model: str, out: str) -> Dict[str, Any]:
         return {"task": "masks", "imagesDir": "images", "outputDir": out, "maskModel": model,

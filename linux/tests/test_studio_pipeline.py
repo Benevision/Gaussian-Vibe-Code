@@ -233,3 +233,57 @@ def test_capture_import_priors(tmp_path, monkeypatch):
     pri = load_priors(ds / "priors.json")
     assert len(pri) == 1
     np.testing.assert_allclose(pri[0].c2w[:3, :3], np.diag([1, -1, -1]))
+
+
+def test_360_photos_pipeline_rig_nadir_masks_and_manual_layer(server, tmp_path):
+    """360° photos folder → views cut here → nadir layer + the mask editor's layer stacked → rig solve."""
+    client, backend, _ = server
+    src = tmp_path / "pano"
+    src.mkdir()
+    rng = np.random.default_rng(3)
+    for i in range(3):
+        Image.fromarray((rng.random((48, 96, 3)) * 255).astype(np.uint8)).save(src / f"R{i}.jpg")
+    opts = ProjectOptions(name="Pano", source_kind="photos360", source=str(src), sky=False, views_360=4,
+                          max_image_size=24, holdout_every=0)
+    proj = Project.create(tmp_path / "projects", "Pano", opts.to_dict())
+    # a manual mask from the mask editor, made before "Prepare again": it must survive and be stacked
+    manual = proj.dataset_dir / importers.MANUAL_LAYER / "masks"
+    manual.mkdir(parents=True)
+    mm = np.full((24, 24), 255, np.uint8)
+    mm[:6, :6] = 0
+    Image.fromarray(mm).save(manual / "000001_v00.png")
+    out, events = run(client, proj, opts, train=False)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    assert [d["title"] for k, d in events if k == "stage"] == stage_titles(opts, train=False)
+    doc = json.loads((proj.dataset_dir / "dataset.json").read_text())
+    assert len(doc["cameras"]) == 3 * 8                     # 4 horizon + 2 up + 2 down views per photo
+    rig = doc["request"]["rig"]
+    assert rig["kind"] == "multiview" and len(rig["groups"]) == 3 and all(len(g) == 8 for g in rig["groups"])
+    assert doc["request"]["masksDir"] == "masks"
+    by = {Path(c["image"]).stem: c for c in doc["cameras"]}
+    assert "mask" in by["000000_v06"] and "mask" not in by["000000_v00"]     # nadir only on the downward views
+    m = np.asarray(Image.open(proj.dataset_dir / by["000001_v00"]["mask"]))
+    assert m[2, 2] == 0 and m[20, 20] == 255
+    assert manual.is_dir()
+
+
+def test_static_regions_stage(server, tmp_path):
+    client, backend, _ = server
+    photos = tmp_path / "drone"
+    photos.mkdir()
+    rng = np.random.default_rng(5)
+    for i in range(14):
+        img = (rng.random((48, 96, 3)) * 255).astype(np.uint8)
+        img[30:44, 4:30] = 0
+        img[35:38, 8:26] = 255
+        Image.fromarray(img).save(photos / f"D{i:03d}.png")
+    opts = ProjectOptions(name="D", source_kind="photos", source=str(photos), sky=False, mask_static=True,
+                          blur_rejection=False, max_image_size=0)
+    proj = Project.create(tmp_path / "projects", "D", opts.to_dict())
+    out, events = run(client, proj, opts, train=False)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    assert "Fixed parts of the frame" in [d["title"] for k, d in events if k == "stage"]
+    cams = json.loads((proj.dataset_dir / "dataset.json").read_text())["cameras"]
+    assert all("mask" in c for c in cams)
+    m = np.asarray(Image.open(proj.dataset_dir / cams[0]["mask"]))
+    assert m[36, 15] == 0 and m[10, 70] == 255

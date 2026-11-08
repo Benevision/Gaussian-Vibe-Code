@@ -11,8 +11,10 @@ from ....studio.projects import Project
 from .devices_page import train_on_row
 from .rows import combo_row, group, plain_row, spin_row, switch_row, training_settings_expander
 
-FOLDER_SOURCES = ("photos", "colmap", "dataset")
-VIDEO_SOURCES = ("video", "video360")
+FOLDER_SOURCES = ("photos", "photos360", "colmap", "dataset")
+VIDEO_SOURCES = ("video", "video360", "stereo")
+STEREO_LAYOUTS = [("auto", "Detect"), ("sideBySide", "Side by side"), ("topBottom", "Over / under"),
+                  ("dualStream", "Two video streams in one file"), ("separateFiles", "Two files (left, right)")]
 
 
 class NewProjectDialog(Adw.Window):
@@ -23,9 +25,9 @@ class NewProjectDialog(Adw.Window):
         self.ctl = controller
         self.on_created = on_created
         self.o = ProjectOptions(name="", source_kind=kind or "photos", source=source or "")
-        if self.o.source_kind == "video360":
+        if self.o.source_kind in ("video360", "photos360"):
             self.o.max_image_size = 1600
-        if self.o.source_kind in ("photos", "video", "video360"):
+        if self.o.source_kind in ("photos", "video", "video360", "photos360", "stereo"):
             self.o.sky = True
         self.parent_dir = controller.projects_root
 
@@ -89,7 +91,27 @@ class NewProjectDialog(Adw.Window):
         ]
         self.photo_rows = [switch_row("Reject blurry photos", o.blur_rejection,
                                       lambda v: setattr(o, "blur_rejection", v), "source.blurRejection")]
-        for r in self.video_rows + self.r360_rows + self.photo_rows:
+        self.right_row = plain_row(title="Right-eye video", subtitle=o.stereo_right or "Nothing chosen yet")
+        self.right_row.set_use_markup(False)
+        rb = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+        rb.connect("clicked", lambda *_: self._choose_right())
+        self.right_row.add_suffix(rb)
+        self.stereo_rows = [
+            combo_row("Stereo layout", STEREO_LAYOUTS, o.stereo_layout, self._stereo_layout, "source.stereoLayout"),
+            self.right_row,
+            switch_row("Swap left and right", o.stereo_swap, lambda v: setattr(o, "stereo_swap", v),
+                       subtitle="Some cameras store the right eye first."),
+            spin_row("Baseline (mm)", 0, 1000, 1, o.stereo_baseline_mm,
+                     lambda v: setattr(o, "stereo_baseline_mm", v), 1, "source.stereoBaseline",
+                     subtitle="0 = read it from the file's calibration (Arcturus Vision), else the scale stays "
+                              "arbitrary."),
+            spin_row("Eye field of view (°)", 0, 180, 1, o.stereo_fov, lambda v: setattr(o, "stereo_fov", v),
+                     subtitle="Horizontal, one eye. 0 = from calibration / metadata, else the solver estimates it."),
+            switch_row("Train on both eyes", o.stereo_both_eyes, lambda v: setattr(o, "stereo_both_eyes", v),
+                       subtitle="Right-eye images become training cameras too (double the coverage)."),
+            switch_row("Stereo depth", o.stereo_depth, lambda v: setattr(o, "stereo_depth", v), "source.stereoDepth"),
+        ]
+        for r in self.video_rows + self.r360_rows + self.photo_rows + self.stereo_rows:
             prep.add(r)
         prep.add(spin_row("Hold out every Nth image", 0, 100, 1, o.holdout_every,
                           lambda v: setattr(o, "holdout_every", int(v)), setting_id="source.holdout"))
@@ -123,6 +145,8 @@ class NewProjectDialog(Adw.Window):
             r = switch_row(title, model in o.mask_models, lambda v, m=model: self._mask(m, v), "mask.model")
             masks.add(r)
             self.mask_switches[model] = r
+        masks.add(switch_row("Mask fixed parts of the frame", o.mask_static, lambda v: setattr(o, "mask_static", v),
+                             "mask.staticRegions"))
         masks.add(switch_row("Sky → learned skybox", o.sky, lambda v: setattr(o, "sky", v), "mask.sky"))
         masks.add(switch_row("Invert mask", o.mask_invert, lambda v: setattr(o, "mask_invert", v), "mask.invert"))
         self.masks_group = masks
@@ -159,9 +183,12 @@ class NewProjectDialog(Adw.Window):
         for r in self.video_rows:
             r.set_visible(video)
         for r in self.r360_rows:
-            r.set_visible(kind == "video360")
+            r.set_visible(kind in ("video360", "photos360"))
         for r in self.photo_rows:
             r.set_visible(kind == "photos")
+        for r in self.stereo_rows:
+            r.set_visible(kind == "stereo")
+        self.right_row.set_visible(kind == "stereo" and self.o.stereo_layout == "separateFiles")
         posed = kind in ("colmap", "nerfstudio", "dataset")
         self.cams_group.set_visible(not posed)
         self.masks_group.set_visible(not posed)
@@ -171,9 +198,32 @@ class NewProjectDialog(Adw.Window):
         if kind == "capture":
             self.o.matching = "sequential"
         self.path_row.set_title({"photos": "Photos folder", "video": "Video file", "video360": "360° video file",
+                                 "photos360": "Folder of 360° photos (2:1 equirectangular)",
+                                 "stereo": "Stereo video (left eye for two files)",
                                  "capture": ".splatcapture folder", "colmap": "COLMAP project folder",
                                  "nerfstudio": "transforms.json", "dataset": "Dataset folder"}[kind])
         self._valid()
+
+    def _stereo_layout(self, v: str) -> None:
+        self.o.stereo_layout = v
+        if v != "separateFiles":
+            self.o.stereo_right = ""
+        self.right_row.set_visible(self.o.source_kind == "stereo" and v == "separateFiles")
+        self._valid()
+
+    def _choose_right(self) -> None:
+        d = Gtk.FileDialog(title="Right-eye video")
+        d.open(self, None, self._right_picked)
+
+    def _right_picked(self, dlg, res) -> None:
+        try:
+            f = dlg.open_finish(res)
+        except GLib.Error:
+            return
+        if f is not None and f.get_path():
+            self.o.stereo_right = f.get_path()
+            self.right_row.set_subtitle(self.o.stereo_right)
+            self._valid()
 
     def _choose(self) -> None:
         kind = self.o.source_kind
@@ -218,6 +268,8 @@ class NewProjectDialog(Adw.Window):
         if ok:
             p = Path(self.o.source)
             ok = p.exists()
+        if ok and self.o.source_kind == "stereo" and self.o.stereo_layout == "separateFiles":
+            ok = bool(self.o.stereo_right) and Path(self.o.stereo_right).is_file()
         self.create_btn.set_sensitive(ok)
         return ok
 
