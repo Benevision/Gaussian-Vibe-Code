@@ -61,6 +61,8 @@ class T(SplatWorkerApp):
             (300, lambda: self.window.show_section("projects")),
             (300, lambda: self.window.projects_page.select(self.proj.root)),
             (1500, lambda: shot("4-projects")),
+            (300, lambda: self.fake_pause()),
+            (1200, lambda: shot("4b-projects-paused")),
             (300, lambda: self.window.show_section("worker")),
             (1200, lambda: shot("5-worker")),
             (300, lambda: self.window.show_section("inbox")),
@@ -119,6 +121,27 @@ class T(SplatWorkerApp):
                                "numGaussians": min(1_500_000, step * 150), "elapsedSeconds": step / 30,
                                "etaSeconds": (30000 - step) / 30, "gpu": "NVIDIA GeForce RTX 4080"})
         run.handle("log", "== Training")
+        self.run = run
         self.window.studio.changed()
+
+    def fake_pause(self):
+        page = self.window.projects_page
+        assert page.panel.pause_btn.get_label() == "Pause" and page.panel.ckpt_btn.get_visible()
+        self.run.handle("job", {"kind": "train", "state": "paused", "step": 9000, "totalSteps": 30000,
+                                "message": "paused at step 9,000", "checkpointStep": 9000,
+                                "numGaussians": 1_350_000, "elapsedSeconds": 300, "gpu": "NVIDIA GeForce RTX 4080"})
+        assert page.panel.pause_btn.get_label() == "Resume", page.panel.pause_btn.get_label()
+        from splatworker.gui.gtk.widgets import JobRow
+        noop = lambda *a: None  # noqa: E731
+        row = JobRow("j1", noop, noop, noop, noop, noop, noop)
+        row.update({"jobId": "j1", "kind": "train", "state": "training", "step": 5, "totalSteps": 10})
+        assert row.pause_btn.get_visible() and not row.resume_btn.get_visible()
+        row.update({"jobId": "j1", "kind": "train", "state": "paused", "step": 5, "totalSteps": 10,
+                    "message": "paused at step 5"})
+        assert row.resume_btn.get_visible() and not row.pause_btn.get_visible() and row.cancel_btn.get_visible()
+        assert "paused at step 5" in row.get_subtitle()
+        row.update({"jobId": "j1", "kind": "process", "state": "training", "step": 5, "totalSteps": 10})
+        assert not row.pause_btn.get_visible()          # running processing jobs can't pause
+        print("paused panel ok", flush=True)
 
 T().run([sys.argv[0]])

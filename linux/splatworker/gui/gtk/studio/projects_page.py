@@ -12,7 +12,7 @@ from ....studio.pipeline import stage_titles
 from ....studio.presets import PRESETS, ProjectOptions
 from ....studio.projects import Project, list_projects
 from ...formatting import count, duration
-from ..common import alert, append_text, label, text_view
+from ..common import alert, append_text, label, run_in_thread, text_view
 from .rows import combo_row, group, plain_row
 
 
@@ -73,10 +73,26 @@ class Chart(Gtk.DrawingArea):
 
 
 class TrainingPanel(Gtk.Box):
-    def __init__(self):
+    """Live dashboard of the project's training job, with Pause / Resume and Save checkpoint (as on the Mac)."""
+
+    def __init__(self, on_pause: Optional[Callable[[dict], None]] = None,
+                 on_checkpoint: Optional[Callable[[dict], None]] = None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.job: Optional[dict] = None
+        self.busy = False                   # a pause / resume / checkpoint request is on its way
+        top = Gtk.Box(spacing=6)
         self.status = label("", ("heading",))
-        self.append(self.status)
+        self.status.set_hexpand(True)
+        top.append(self.status)
+        self.pause_btn = Gtk.Button(label="Pause", tooltip_text="Pause training: the state is saved and the GPU "
+                                    "is free for other jobs until you resume")
+        self.pause_btn.connect("clicked", lambda *_: on_pause and self.job and on_pause(self.job))
+        self.ckpt_btn = Gtk.Button(label="Save checkpoint", tooltip_text="Save the splats as they are now to the "
+                                   "project's results (training carries on)")
+        self.ckpt_btn.connect("clicked", lambda *_: on_checkpoint and self.job and on_checkpoint(self.job))
+        top.append(self.pause_btn)
+        top.append(self.ckpt_btn)
+        self.append(top)
         self.bar = Gtk.ProgressBar(show_text=True)
         self.append(self.bar)
         grid = Gtk.Grid(column_spacing=24, row_spacing=4)
@@ -97,14 +113,31 @@ class TrainingPanel(Gtk.Box):
     def update(self, s: Optional[dict], history) -> None:
         if not s:
             return
+        self.job = s
         total = s.get("totalSteps") or 0
         step = s.get("step") or 0
         state = s.get("state", "")
+        msg = s.get("message") or ""
+        pausing = msg == "pausing" or msg == "saving the training state"
         self.status.set_text({"queued": "Waiting for the GPU (other jobs first)", "loading": "Loading the photos…",
-                              "training": "Training", "completed": "Finished", "failed": "Failed",
-                              "cancelled": "Stopped"}.get(state, state) + (f" — {s.get('message')}"
-                                                                           if state == "queued" or state == "loading"
-                                                                           else ""))
+                              "training": "Pausing…" if pausing else "Training", "paused": "Paused",
+                              "completed": "Finished", "failed": "Failed",
+                              "cancelled": "Stopped"}.get(state, state) + (f" — {msg}"
+                                                                           if state in ("queued", "loading", "paused")
+                                                                           and msg else ""))
+        if state == "paused" and msg.lower().startswith("paused"):
+            self.status.set_text(msg[:1].upper() + msg[1:])      # "Paused at step 9,000"
+        running = state in ("queued", "loading", "training")
+        self.pause_btn.set_visible(running or state == "paused")
+        self.pause_btn.set_label("Resume" if state == "paused" else "Pause")
+        if state == "paused":
+            self.pause_btn.add_css_class("suggested-action")
+        else:
+            self.pause_btn.remove_css_class("suggested-action")
+        self.pause_btn.set_sensitive(not self.busy and not pausing)
+        self.ckpt_btn.set_visible(state in ("training", "paused"))
+        self.ckpt_btn.set_sensitive(not self.busy and not pausing and (state == "training" or
+                                                                       s.get("checkpointStep") is not None))
         self.bar.set_fraction(step / total if total else 0)
         self.bar.set_text(f"{100 * step / total:.0f} %" if total else "")
         now = time.monotonic()
@@ -200,7 +233,7 @@ class ProjectsPage(Gtk.Box):
         self._stage_rows = []
         box.append(self.stages)
         self.train_group = group("Live training")
-        self.panel = TrainingPanel()
+        self.panel = TrainingPanel(self._pause_resume, self._save_checkpoint)
         self.panel.set_margin_top(6)
         self.train_group.add(self.panel)
         box.append(self.train_group)
@@ -396,6 +429,52 @@ class ProjectsPage(Gtk.Box):
                 return False
             return True
         GLib.timeout_add(300, later)
+
+    def _job_client(self):
+        run = self.ctl.run_for(self.current.root) if self.current else None
+        return run.pipeline.client if run is not None else self.ctl.client()
+
+    def _pause_resume(self, job: dict) -> None:
+        client, job_id, resume = self._job_client(), job.get("jobId"), job.get("state") == "paused"
+        if client is None or not job_id:
+            return
+        self.panel.busy = True
+        self.panel.pause_btn.set_sensitive(False)
+
+        def done(_r, error):
+            self.panel.busy = False
+            if error is not None:
+                self.ctl.toast(f"Couldn't {'resume' if resume else 'pause'}: {getattr(error, 'message', error)}")
+            else:
+                self.ctl.toast("Resumed: back in the queue" if resume else
+                               "Pausing… the training state is saved and the GPU freed")
+            self.panel.update(self.panel.job, self.panel.chart.history)
+        run_in_thread(lambda: client.resume(job_id) if resume else client.pause(job_id), done)
+
+    def _save_checkpoint(self, job: dict) -> None:
+        """Current splats → outputs/<name>-<time>-step<N>.ply (listed under Results, opens in the viewer)."""
+        client, job_id, project = self._job_client(), job.get("jobId"), self.current
+        if client is None or not job_id or project is None:
+            return
+        self.panel.busy = True
+        self.panel.ckpt_btn.set_sensitive(False)
+        self.ctl.toast("Saving a checkpoint…")
+
+        def dest(step: int) -> Path:
+            p = project.new_output_path()
+            return p.with_name(f"{p.stem}-step{step}{p.suffix}")
+
+        def done(result, error):
+            self.panel.busy = False
+            if error is not None:
+                self.ctl.toast(f"Couldn't save a checkpoint: {getattr(error, 'message', error)}")
+            else:
+                path, step = result
+                self.ctl.toast(f"Checkpoint at step {step:,} saved: {path.name}")
+            self.panel.update(self.panel.job, self.panel.chart.history)
+            if self.current is project:
+                self._render()
+        run_in_thread(lambda: client.checkpoint(job_id, dest), done)
 
     def _stop(self) -> None:
         run = self.ctl.run_for(self.current.root) if self.current else None

@@ -18,13 +18,15 @@ STATE_ICONS = {
     "completed": "emblem-ok-symbolic",
     "failed": "dialog-error-symbolic",
     "cancelled": "process-stop-symbolic",
+    "paused": "media-playback-pause-symbolic",
 }
 
 
 class JobRow(Adw.ActionRow):
     def __init__(self, job_id: str, on_cancel: Callable[[str], None], on_delete: Callable[[str, str], None],
                  on_log: Callable[[str, str], None], on_export: Callable[[str, str, str], None],
-                 on_prioritize: Optional[Callable[[str], None]] = None):
+                 on_prioritize: Optional[Callable[[str], None]] = None,
+                 on_pause: Optional[Callable[[str, bool], None]] = None):
         super().__init__()
         self.set_use_markup(False)
         self.job_id = job_id
@@ -44,7 +46,17 @@ class JobRow(Adw.ActionRow):
                                       lambda *_: on_delete(self.job_id, self.view.title))
         self.next_btn = icon_button("go-top-symbolic", "Run next: move to the front of the queue",
                                     lambda *_: on_prioritize(self.job_id) if on_prioritize else None)
-        for b in (self.next_btn, self.export_btn, self.cancel_btn, self.log_btn, self.delete_btn):
+        # pause (False) / resume (True): a queued job is held back, a running training job saves its state and
+        # frees the GPU (worker capability "pause")
+        self.pause_btn = icon_button("media-playback-pause-symbolic", "Pause: frees the GPU until you resume",
+                                     lambda *_: on_pause(self.job_id, False) if on_pause else None)
+        self.resume_btn = icon_button("media-playback-start-symbolic", "Resume: back into the queue",
+                                      lambda *_: on_pause(self.job_id, True) if on_pause else None)
+        self.pause_btn.set_visible(False)
+        self.resume_btn.set_visible(False)
+        self._can_pause = on_pause is not None
+        for b in (self.next_btn, self.pause_btn, self.resume_btn, self.export_btn, self.cancel_btn, self.log_btn,
+                  self.delete_btn):
             self.add_suffix(b)
 
     def update(self, status: dict) -> None:
@@ -55,13 +67,21 @@ class JobRow(Adw.ActionRow):
         self.set_title(v.title)
         origin = status.get("origin")
         src = "" if not origin else (" · from this PC (Studio)" if origin == "local" else f" · from {origin}")
-        self.set_subtitle(v.detail + src)
+        msg = status.get("message") or ""
+        paused = f" · {msg}" if v.state == "paused" and msg else ""
+        self.set_subtitle(v.detail + paused + src)
         self.next_btn.set_visible(v.state == "queued")
         self.icon.set_from_icon_name(STATE_ICONS.get(v.state, "content-loading-symbolic"))
         self.progress.set_fraction(v.fraction)
         self.progress.set_text(f"{v.fraction * 100:.0f} %" if v.state != "queued" else "waiting")
-        self.progress.set_visible(v.state in ("queued", "loading", "training"))
-        self.cancel_btn.set_visible(v.can_cancel)
+        self.progress.set_visible(v.state in ("queued", "loading", "training", "paused"))
+        if v.state == "paused":
+            self.progress.set_text("paused")
+        msg = status.get("message") or ""
+        self.pause_btn.set_visible(self._can_pause and (v.state == "queued" or (
+            v.kind == "train" and v.state in ("loading", "training") and msg not in ("pausing", "cancelling"))))
+        self.resume_btn.set_visible(self._can_pause and v.state == "paused")
+        self.cancel_btn.set_visible(v.can_cancel or v.state == "paused")
         self.export_btn.set_visible(v.export is not None)
         if v.is_error:
             self.add_css_class("error")

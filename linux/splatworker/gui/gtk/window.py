@@ -323,6 +323,16 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             C(f"http://127.0.0.1:{port}", token, local_secret=self.state.local_secret).prioritize(job_id)
         run_in_thread(work, self._after_job_action)
 
+    def _job_pause(self, job_id: str, resume: bool) -> None:
+        """Pause / resume any job on this PC's queue: the desktop app may (it owns the GPU, PROTOCOL.md §4)."""
+        port, token = self.state.running_port, self.state.token()
+        def work():
+            from ...studio.client import Client as C
+
+            c = C(f"http://127.0.0.1:{port}", token, local_secret=self.state.local_secret)
+            c.resume(job_id) if resume else c.pause(job_id)
+        run_in_thread(work, self._after_job_action)
+
     def _after_job_action(self, _result, error) -> None:
         if error is not None:
             toast(self.toasts, f"Failed: {getattr(error, 'message', error)}")
@@ -594,7 +604,7 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             row = self._job_rows.get(jid)
             if row is None:
                 row = JobRow(jid, self._job_cancel, self._job_delete, self._job_log, self._job_export,
-                             self._job_prioritize)
+                             self._job_prioritize, self._job_pause)
                 self._job_rows[jid] = row
                 self.jobs_group.add(row)
             row.update(j)
