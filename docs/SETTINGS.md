@@ -1,6 +1,6 @@
 # SplatWork — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
@@ -12,7 +12,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 13 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
-- [Training — losses & regularisation](#training--losses--regularisation) — 17 settings
+- [Training — losses & regularisation](#training--losses--regularisation) — 20 settings
 - [Compute & networking](#compute--networking) — 9 settings
 - [Export](#export) — 5 settings
 
@@ -1373,6 +1373,9 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 | [Ignore moving objects](#ignore-moving-objects) | Off | – | Easy |
 | [Moving-object sensitivity](#moving-object-sensitivity) | 3× | 2–8 | Advanced |
 | [Edge-aware depth](#edge-aware-depth) | On | – | Advanced |
+| [Flat surfaces (depth normals)](#flat-surfaces-depth-normals) | 0 | 0–0.5 | Advanced |
+| [Predicted depth](#predicted-depth) | Auto | – | Advanced |
+| [Flat splats](#flat-splats) | 0 | 0–0.1 | Advanced |
 | [Needle-splat penalty](#needle-splat-penalty) | 0.1 | 0–1 | Advanced |
 | [Big-splat penalty](#big-splat-penalty) | 10 | 0–30 | Advanced |
 | [Needle ratio limit](#needle-ratio-limit) | 10 | 2–50 | Advanced |
@@ -1469,6 +1472,63 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 **When to change it**
 
 - Only matters when the dataset has depth.
+
+### Flat surfaces (depth normals)
+
+> Makes walls, floors and tables train flat by matching surface directions to the photos' depth maps.
+
+| | |
+|---|---|
+| **Default** | 0 |
+| **Range** | 0–0.5 |
+| **Mode** | Advanced |
+| **ID** | `train.normalWeight` |
+
+**How it works.** Depth maps say where surfaces are, but splats can still sit at the right distance in a bumpy, wavy layer.
+
+- This computes the surface direction (normal) of the rendered depth at every pixel and pulls it towards the direction measured from the photo's depth map (LiDAR / stereo, or — on a Linux worker — depth predicted by a depth model for photos without a depth sensor).
+- The idea is the one Spirula Studio uses with its MoGe priors.
+- Weighted down at photo edges like edge-aware depth.
+- Needs depth maps; 0 turns it off.
+
+### Predicted depth
+
+> Photos without a depth sensor get depth from a depth model, so flat surfaces still train flat.
+
+| | |
+|---|---|
+| **Default** | Auto |
+| **Mode** | Advanced |
+| **ID** | `train.depthPriors` |
+
+**How it works.** When no training photo has LiDAR or stereo depth, Depth Anything V2 Small (Apple's Core ML version on this Mac, 48 MB downloaded once; the same model on a Linux worker) predicts depth for every photo.
+
+- A prediction has no real scale, so it is fitted to the dataset's own 3D points from camera solving, photo by photo, and photos where that fit is poor are left out.
+- Predictions are cached with the dataset.
+- Auto = on when Flat surfaces is on and the dataset has no depth.
+
+**When to change it**
+
+- Only used for the flat-surfaces loss: surface directions don't depend on the scale.
+
+### Flat splats
+
+> Nudges splats towards thin discs, which describe surfaces better than round blobs.
+
+| | |
+|---|---|
+| **Default** | 0 |
+| **Range** | 0–0.1 |
+| **Mode** | Advanced |
+| **ID** | `train.flatnessReg` |
+
+**How it works.** Penalises how much of a splat's size is in its thinnest direction. Thin discs have a clear facing direction, so surfaces built from them are smoother and the flat-surfaces loss has something to act on.
+
+- 0 turns it off.
+
+**When to change it**
+
+- Too high and fine 3D detail (hair, foliage) loses volume.
 
 ### Needle-splat penalty
 
