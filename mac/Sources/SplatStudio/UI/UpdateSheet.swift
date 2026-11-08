@@ -47,7 +47,8 @@ struct UpdateSheet: View {
         switch updater.phase {
         case .ready:
             Button("Later") { updater.showPrompt = false; dismiss() }.keyboardShortcut(.cancelAction)
-            Button("Relaunch to Update") { updater.relaunchToUpdate() }.keyboardShortcut(.defaultAction)
+            Button(updater.isInstalling ? "Quitting…" : "Relaunch to Update") { updater.relaunchToUpdate() }
+                .keyboardShortcut(.defaultAction).disabled(updater.isInstalling)
         case .available:
             Button("Later") { updater.showPrompt = false; dismiss() }.keyboardShortcut(.cancelAction)
             Button("Download") { updater.downloadAvailable() }.keyboardShortcut(.defaultAction)

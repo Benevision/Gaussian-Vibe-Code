@@ -217,6 +217,10 @@ final class AppUpdater {
             stagedApp = app
             phase = .ready
             if promptWhenReady { showPrompt = true }
+            // Test hook: press "Relaunch to Update" by itself (with the prompt open, as a person would).
+            if ProcessInfo.processInfo.environment["SPLAT_TEST_RELAUNCH_UPDATE"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.relaunchToUpdate() }
+            }
         } catch {
             try? FileManager.default.removeItem(at: dir)
             phase = .failed(error.localizedDescription)
@@ -319,9 +323,19 @@ final class AppUpdater {
 
     /// Quits and relaunches into the new version.
     func relaunchToUpdate() {
-        guard launchInstaller(relaunch: true) else { return }
-        NSApp.terminate(nil)
+        if !installStarted { guard launchInstaller(relaunch: true) else { return } }
+        showPrompt = false
+        // AppKit ignores terminate while a sheet (this prompt) is attached to a window, so close sheets first and quit
+        // on a later turn of the run loop. The installer is already waiting for this process to exit; if something
+        // still refuses to quit, exit anyway rather than leave it waiting.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            for w in NSApp.windows { if let sheet = w.attachedSheet { w.endSheet(sheet) } }
+            NSApp.terminate(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { exit(0) }
+        }
     }
+
+    var isInstalling: Bool { installStarted }
 
     /// "Later": the staged update goes in when the app quits (called from applicationWillTerminate).
     func installOnQuitIfReady() {
@@ -370,6 +384,8 @@ final class AppUpdater {
     PID="$1"; NEW="$2"; DEST="$3"; RELAUNCH="$4"
     LOG="$(dirname "$NEW")/install.log"
     exec >>"$LOG" 2>&1
+    LOCK="$(dirname "$NEW")/install.lock"
+    mkdir "$LOCK" 2>/dev/null || { echo "another installer is already waiting"; exit 0; }
     echo "$(date) waiting for $PID"
     i=0; while kill -0 "$PID" 2>/dev/null; do sleep 0.5; i=$((i+1)); [ $i -gt 600 ] && { echo "app did not quit"; exit 1; }; done
     OLD="$DEST.updating-$$"
@@ -381,6 +397,7 @@ final class AppUpdater {
     else
       echo "copy failed: restoring"; rm -rf "$DEST"; mv "$OLD" "$DEST"
     fi
+    rmdir "$LOCK" 2>/dev/null
     [ "$RELAUNCH" = 1 ] && /usr/bin/open "$DEST"
     exit 0
     """
