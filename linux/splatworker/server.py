@@ -55,7 +55,10 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 # POST /v1/jobs/{id}/resume. Old clients see an unknown, non-terminal state and simply keep polling.
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
-               "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep")
+               "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep",
+               "pausedAt")
+REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
+LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 LOCAL_HEADER = "X-SplatWork-Local"   # per-launch secret of the desktop app that started this server
 
@@ -151,7 +154,7 @@ class Job:
             for k, v in fields.items():
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
-                         "checkpointStep"):
+                         "checkpointStep", "pausedAt"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -227,6 +230,10 @@ class JobManager:
         loaded.sort(key=lambda j: j.status.get("createdAt") or "")
         for job in loaded:
             self.jobs[job.id] = job
+            if job.state == "paused" and job.status.get("origin") != "local":
+                # another computer's paused job: its client may never resume it, so a restart does
+                job.update(persist=True, state="queued", pausedAt=None, message="queued (resumed after a restart)")
+                job.log("resumed automatically after a worker restart")
             if job.state == "queued":
                 self.queue.append(job.id)
 
@@ -329,7 +336,8 @@ class JobManager:
                     self.queue.remove(job_id)
                 except ValueError:
                     pass
-                job.update(persist=True, state="paused", message="paused before it started", etaSeconds=None)
+                job.update(persist=True, state="paused", message="paused before it started", etaSeconds=None,
+                           pausedAt=time.time())
                 job.log("paused while queued")
                 return job
         if job.state in ACTIVE_STATES:
@@ -352,15 +360,7 @@ class JobManager:
                 return job
             if job.state != "paused":
                 raise ApiError(409, f"a {job.state} job can't be resumed")
-            job.pause_event.clear()
-            job.checkpoint_event.clear()
-            step = job.status.get("step") or 0
-            resumable = (job.dir / "resume.pt").is_file()
-            job.update(persist=True, state="queued",
-                       message=f"queued (continues from step {step:,})" if resumable else "queued")
-            job.log("resumed: back in the queue" + (f", continues from step {step}" if resumable else ""))
-            self.queue.append(job.id)
-            self.cond.notify()
+            self._requeue_paused_locked(job, "resumed: back in the queue")
         return job
 
     def request_checkpoint(self, job_id: str) -> Job:
@@ -411,6 +411,7 @@ class JobManager:
             while True:
                 if self.stopping:
                     return None
+                self._housekeep_locked()
                 # drop stale entries, then take the highest priority (ties: oldest first). Nothing running is
                 # ever pre-empted; priority only decides which queued job a free GPU takes next.
                 live = [j for j in self.queue if j in self.jobs and self.jobs[j].state == "queued"]
@@ -419,8 +420,43 @@ class JobManager:
                     best = max(live, key=lambda j: (int(self.jobs[j].status.get("priority") or 0), -live.index(j)))
                     self.queue.remove(best)
                     self.running[device] = best
-                    return self.jobs[best]
+                    job = self.jobs[best]
+                    # taken: no longer "queued" from here on, so a pause / resume / cancel arriving before the job
+                    # really starts goes through the running path (events the job checks) instead of re-queueing it
+                    job.update(persist=True, state="loading", message="starting")
+                    return job
                 self.cond.wait(timeout=1.0)
+
+    def _housekeep_locked(self) -> None:
+        """(Holding ``cond``, at most every 30 s.) Paused jobs mustn't wait forever: another computer's (its app
+        may have no Resume button and would poll for ever) resume after REMOTE_PAUSE_LIMIT; this PC's are
+        cancelled after LOCAL_PAUSE_LIMIT so their multi-GB resume.pt doesn't stay behind."""
+        now = time.time()
+        if now - getattr(self, "_housekept", 0.0) < 30.0:
+            return
+        self._housekept = now
+        for job in list(self.jobs.values()):
+            if job.state != "paused":
+                continue
+            age = now - float(job.status.get("pausedAt") or now)
+            if job.status.get("origin") != "local" and age >= REMOTE_PAUSE_LIMIT:
+                self._requeue_paused_locked(job, "resumed automatically (paused by another computer for too long)")
+            elif job.status.get("origin") == "local" and age >= LOCAL_PAUSE_LIMIT:
+                job.update(persist=True, state="cancelled", message="cancelled: paused for more than 14 days",
+                           etaSeconds=None)
+                (job.dir / "resume.pt").unlink(missing_ok=True)
+                job.log("cancelled after 14 days paused; its saved state was removed")
+
+    def _requeue_paused_locked(self, job: Job, why: str) -> None:
+        job.pause_event.clear()
+        job.checkpoint_event.clear()
+        step = job.status.get("step") or 0
+        resumable = (job.dir / "resume.pt").is_file()
+        job.update(persist=True, state="queued", pausedAt=None,
+                   message=f"queued (continues from step {step:,})" if resumable else "queued")
+        job.log(why + (f", continues from step {step}" if resumable else ""))
+        self.queue.append(job.id)
+        self.cond.notify()
 
     def _worker_loop(self, device: Optional[int]) -> None:
         while True:
@@ -455,6 +491,15 @@ class JobManager:
         if dataset_dir is None:
             self._finish(job, "failed", "dataset no longer exists")
             return
+        if job.cancel_event.is_set():           # cancelled between being taken and starting
+            self._finish(job, "cancelled", "cancelled before start")
+            return
+        if job.pause_event.is_set():            # paused between being taken and starting: nothing ran yet
+            job.pause_event.clear()
+            job.update(persist=True, state="paused", etaSeconds=None, pausedAt=time.time(),
+                       message="paused before it started" if not resuming else "paused again before it resumed")
+            job.log("paused before it started")
+            return
 
         def status(**fields):
             fields.pop("elapsedSeconds", None)  # server measures wall time itself
@@ -488,7 +533,7 @@ class JobManager:
                 return
             elapsed = round(time.monotonic() - job.started_monotonic, 1)
             job.update(persist=True, state="paused", step=e.step, message=f"paused at step {e.step:,}",
-                       etaSeconds=None, elapsedSeconds=elapsed)
+                       etaSeconds=None, elapsedSeconds=elapsed, pausedAt=time.time())
             job.log(f"paused at step {e.step}; the GPU is free (resume continues from here)")
             return
         except JobCancelled:
@@ -1158,14 +1203,38 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             raise ApiError(403, "only the desktop app on this computer can reorder the queue")
         return manager.prioritize(job_id).snapshot()
 
-    def _may_control(request: Request, job: Job) -> None:
-        """Pause / resume / checkpoint: the person at this PC (the desktop app, who owns the GPU) and whoever
-        submitted the job (same origin). Other LAN clients may not stall or park somebody else's job."""
+    def _may_control(request: Request, job: Job, resume: bool = False) -> None:
+        """Pause / checkpoint: only whoever submitted the job (same origin; "local" = the desktop app here).
+        The app doesn't park other computers' jobs: their apps may have no Resume button and would wait for
+        ever (they resume by themselves after REMOTE_PAUSE_LIMIT anyway). Resume: also the desktop app, for any
+        paused job (so the person at this PC can always get a parked job going again)."""
         origin = _origin(request)
-        if origin == "local" or (origin not in ("", "unknown") and origin == job.status.get("origin")):
+        if origin not in ("", "unknown") and origin == job.status.get("origin"):
             return
-        raise ApiError(403, "only the desktop app on this computer or the client that submitted the job "
-                            "can pause, resume or checkpoint it")
+        if resume and origin == "local":
+            return
+        raise ApiError(403, "only the client that submitted the job can pause or checkpoint it")
+
+    def _job(request: Request, job_id: str) -> Job:
+        """A job for this request: the desktop app's own jobs don't exist for other computers' file requests."""
+        job = manager.get(job_id)
+        if job.status.get("origin") == "local" and not _is_local(request):
+            raise ApiError(404, f"job {job_id} not found")
+        return job
+
+    def _public(request: Request, snap: Dict[str, Any]) -> Dict[str, Any]:
+        """JobStatus as another computer may see it: the desktop app's jobs keep what a queue estimate needs
+        (state, progress, priority, GPU) but not their name, dataset or log text; other clients' addresses
+        become "remote" (a client still sees its own)."""
+        me = _origin(request)
+        if me == "local":
+            return snap
+        s = dict(snap)
+        if s.get("origin") == "local":
+            s.update(name="Job on this PC", datasetId="", outputDatasetId=None, message=None)
+        elif s.get("origin") not in (None, me):
+            s["origin"] = "remote"
+        return s
 
     @app.post("/v1/jobs/{job_id}/pause")
     def pause_job(job_id: str, request: Request):
@@ -1176,7 +1245,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     @app.post("/v1/jobs/{job_id}/resume")
     def resume_job(job_id: str, request: Request):
         job = manager.get(job_id)
-        _may_control(request, job)
+        _may_control(request, job, resume=True)
         return manager.resume(job_id).snapshot()
 
     @app.post("/v1/jobs/{job_id}/checkpoint")
@@ -1195,8 +1264,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return job.snapshot()
 
     @app.get("/v1/jobs/{job_id}/checkpoint.ply")
-    def get_checkpoint(job_id: str):
-        job = manager.get(job_id)
+    def get_checkpoint(job_id: str, request: Request):
+        job = _job(request, job_id)
         path = job.dir / "checkpoint.ply"
         if not path.is_file():
             raise ApiError(404, "no checkpoint yet")
@@ -1206,43 +1275,50 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                             filename=f"{job_id}-step{step if step is not None else 0}.ply", headers=headers)
 
     @app.get("/v1/jobs")
-    def list_jobs():
-        return manager.list()
+    def list_jobs(request: Request):
+        return [_public(request, s) for s in manager.list()]
 
     @app.get("/v1/jobs/{job_id}")
-    def get_job(job_id: str):
-        return manager.get(job_id).snapshot()
+    def get_job(job_id: str, request: Request):
+        return _public(request, manager.get(job_id).snapshot())
+
+    def _may_end(request: Request, job: Job) -> None:
+        """Cancel / delete: anybody may stop other computers' jobs (as before 1.4.0), but only the desktop app
+        may stop its own."""
+        if job.status.get("origin") == "local" and not _is_local(request):
+            raise ApiError(403, "that job belongs to the desktop app on this computer")
 
     @app.post("/v1/jobs/{job_id}/cancel")
-    def cancel_job(job_id: str):
-        return manager.cancel(job_id).snapshot()
+    def cancel_job(job_id: str, request: Request):
+        _may_end(request, manager.get(job_id))
+        return _public(request, manager.cancel(job_id).snapshot())
 
     @app.delete("/v1/jobs/{job_id}", status_code=204)
-    def delete_job(job_id: str):
+    def delete_job(job_id: str, request: Request):
+        _may_end(request, manager.get(job_id))
         manager.delete(job_id)
         return Response(status_code=204)
 
-    def _job_file(job_id: str, name: str) -> Path:
-        job = manager.get(job_id)
-        return job.dir / name
+    def _job_file(request: Request, job_id: str, name: str) -> Path:
+        return _job(request, job_id).dir / name
 
     @app.get("/v1/jobs/{job_id}/preview.ply")
-    def get_preview(job_id: str):
-        path = _job_file(job_id, "preview.ply")
+    def get_preview(job_id: str, request: Request):
+        path = _job_file(request, job_id, "preview.ply")
         if not path.is_file():
             raise ApiError(404, "no preview yet")
-        step = manager.get(job_id).status.get("previewStep")
+        step = _job(request, job_id).status.get("previewStep")
         headers = {"X-Preview-Step": str(step)} if step is not None else None
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}-preview.ply",
                             headers=headers)
 
     @app.get("/v1/jobs/{job_id}/preview.splat")
-    def get_preview_splat(job_id: str):
+    def get_preview_splat(job_id: str, request: Request):
         """Compact live preview (antimatter15 .splat, the most visible ≤400 k splats)."""
-        path = _job_file(job_id, "preview.splat")
+        path = _job_file(request, job_id, "preview.splat")
         if not path.is_file():
             raise ApiError(404, "no preview yet")
-        step = manager.get(job_id).status.get("previewStep")
+        step = _job(request, job_id).status.get("previewStep")
         headers = {"X-Preview-Step": str(step)} if step is not None else None
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}-preview.splat",
                             headers=headers)
@@ -1251,7 +1327,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     def get_job_cameras(job_id: str, request: Request):
         """The training job's cameras (same coordinates as its splats) — lets a viewer that watches the job
         draw the right camera frustums instead of whatever project it has open."""
-        job = manager.get(job_id)
+        job = _job(request, job_id)
         root = _root(request, job.spec.get("datasetId", "")) if job.spec.get("datasetId") else None
         dj = root / "dataset.json" if root is not None else None
         if dj is None or not dj.is_file():
@@ -1265,30 +1341,32 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return {"cameras": cams, "sceneExtent": raw.get("sceneExtent"), "upVector": raw.get("upVector")}
 
     @app.get("/v1/jobs/{job_id}/result.ply")
-    def get_result(job_id: str):
-        job = manager.get(job_id)
+    def get_result(job_id: str, request: Request):
+        job = _job(request, job_id)
         path = job.dir / "result.ply"
         if job.state != "completed" or not path.is_file():
             raise ApiError(404, f"result not available (job is {job.state})")
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}.ply")
 
     @app.get("/v1/jobs/{job_id}/census.npz")
-    def get_census(job_id: str):
-        path = _job_file(job_id, "census.npz")
+    def get_census(job_id: str, request: Request):
+        path = _job_file(request, job_id, "census.npz")
+        if not path.is_file():
+            raise ApiError(404, "census not available yet")
         return FileResponse(path, media_type="application/octet-stream", filename="census.npz")
 
     @app.get("/v1/jobs/{job_id}/sky.png")
-    def get_sky(job_id: str):
+    def get_sky(job_id: str, request: Request):
         """The learned skybox (worker ≥ 1.3.15): equirectangular panorama; orientation in sky.json."""
-        job = manager.get(job_id)
+        job = _job(request, job_id)
         path = job.dir / "result.sky.png"
         if job.state != "completed" or not path.is_file():
             raise ApiError(404, "no skybox for this job")
         return FileResponse(path, media_type="image/png", filename=f"{job_id}.sky.png")
 
     @app.get("/v1/jobs/{job_id}/sky.json")
-    def get_sky_meta(job_id: str):
-        job = manager.get(job_id)
+    def get_sky_meta(job_id: str, request: Request):
+        job = _job(request, job_id)
         path = job.dir / "result.sky.json"
         if job.state != "completed" or not path.is_file():
             raise ApiError(404, "no skybox for this job")
@@ -1318,8 +1396,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return FileResponse(target, media_type="application/zip", filename=name, background=cleanup)
 
     @app.get("/v1/jobs/{job_id}/output.zip")
-    async def get_output(job_id: str, only: Optional[str] = None, skip: Optional[str] = None):
-        job = manager.get(job_id)
+    async def get_output(job_id: str, request: Request, only: Optional[str] = None, skip: Optional[str] = None):
+        job = _job(request, job_id)
         legacy = job.dir / "output.zip"           # jobs from workers before 1.3.8
         out_id = job.status.get("outputDatasetId")
         root = dataset_root(settings, out_id) if out_id else None
@@ -1341,8 +1419,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return await _serve_zip(root, f"{dataset_id}.zip", _zip_filter(only, skip))
 
     @app.get("/v1/jobs/{job_id}/log")
-    def get_log(job_id: str):
-        path = _job_file(job_id, "train.log")
+    def get_log(job_id: str, request: Request):
+        path = _job_file(request, job_id, "train.log")
         text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
         return PlainTextResponse(text)
 

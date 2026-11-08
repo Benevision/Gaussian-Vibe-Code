@@ -100,7 +100,13 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
         except Exception:  # noqa: BLE001 — the worker must keep running even if the Studio can't start
             import traceback
             traceback.print_exc()
+            partial = getattr(self, "studio", None)
             self.studio = None
+            if partial is not None:
+                partial.shutdown()   # nothing it may have started (devices, receiver) outlives it
+            parent = view.get_parent()
+            if parent is not None:   # build_studio may already have put the worker page into its stack
+                parent.remove(view)
             self.toasts.set_child(view)
         self.refresh_static()
         self._render(self.state.poll(with_gpus=True))

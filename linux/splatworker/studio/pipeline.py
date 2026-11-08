@@ -82,6 +82,9 @@ class LocalPipeline:
         self.priority = priority
         self.cancel_event = threading.Event()
         self.current_job: Optional[str] = None
+        # jobs this pipeline has running on other machines (studio/compute.py): key → (client, job id)
+        self.remote_jobs: Dict[str, tuple] = {}
+        self._remote_lock = threading.Lock()
         self._registered: List[str] = []
         self._stage_index = -1
         self._titles = stage_titles(options, self.train_enabled)
@@ -89,14 +92,31 @@ class LocalPipeline:
         self.durations: Dict[str, float] = {}
 
     # ------------------------------------------------------------- helpers
-    def cancel(self) -> None:
+    def cancel(self, timeout: float = 3.0) -> None:
+        """Stop: this PC's current job and, synchronously (``timeout`` s each), every job this pipeline has on
+        other machines — on quit the polling threads may never wake again to do it."""
         self.cancel_event.set()
         job = self.current_job
         if job:
             try:
                 self.client.cancel(job)
-            except ApiError:
+            except Exception:  # noqa: BLE001 — ApiError, or the server already gone
                 pass
+        with self._remote_lock:
+            remote = list(self.remote_jobs.values())
+        for client, job_id in remote:
+            try:
+                Client(client.base_url, client.token, timeout=timeout,
+                       local_secret=client.local_secret).cancel(job_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def track_remote(self, key: str, client, job_id: Optional[str]) -> None:
+        with self._remote_lock:
+            if job_id is None:
+                self.remote_jobs.pop(key, None)
+            else:
+                self.remote_jobs[key] = (client, job_id)
 
     def _check(self) -> None:
         if self.cancel_event.is_set():

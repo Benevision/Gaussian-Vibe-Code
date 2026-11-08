@@ -102,7 +102,8 @@ class AppState:
     def client(self) -> Optional[WorkerClient]:
         if self._running_port is None:
             return None
-        return WorkerClient(f"http://127.0.0.1:{self._running_port}", self._running_token, timeout=4)
+        return WorkerClient(f"http://127.0.0.1:{self._running_port}", self._running_token, timeout=4,
+                            local_secret=self.local_secret)
 
     @property
     def running_port(self) -> Optional[int]:

@@ -527,10 +527,11 @@ def test_cancel_cancels_the_remote_job(tmp_path, workers):
     p._run = p.train
     t.start()
     assert slow.started.wait(10)
-    p.cancel()
-    t.join(10)
-    assert ("cancelled", None) in events
+    assert wait_for(lambda: p.remote_jobs)          # tracked, so quit can cancel it without the poll thread
     remote = Client(dev.base_url)
+    p.cancel()                                       # cancels the remote job itself, synchronously
+    t.join(10)
+    assert ("cancelled", None) in events and not p.remote_jobs
     assert remote.jobs() and wait_for(lambda: all(j["state"] == "cancelled" for j in remote.jobs()))
 
 

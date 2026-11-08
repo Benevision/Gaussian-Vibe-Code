@@ -78,7 +78,8 @@ class JobRow(Adw.ActionRow):
         if v.state == "paused":
             self.progress.set_text("paused")
         msg = status.get("message") or ""
-        self.pause_btn.set_visible(self._can_pause and (v.state == "queued" or (
+        own = origin in (None, "local")      # other computers' jobs: only their own app pauses them
+        self.pause_btn.set_visible(self._can_pause and own and (v.state == "queued" or (
             v.kind == "train" and v.state in ("loading", "training") and msg not in ("pausing", "cancelling"))))
         self.resume_btn.set_visible(self._can_pause and v.state == "paused")
         self.cancel_btn.set_visible(v.can_cancel or v.state == "paused")

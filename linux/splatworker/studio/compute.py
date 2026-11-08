@@ -332,6 +332,18 @@ class ComputeRun:
         local = d.id == LOCAL_ID
         job = client.train(dataset_id, cfg, name, self.p.priority if local else None)
         self.log(f"{name}: job {job} on {d.name}")
+        key = f"{d.id}/{job}"
+        if not local and hasattr(self.p, "track_remote"):
+            self.p.track_remote(key, client, job)       # cancelled synchronously on quit
+        try:
+            return self._finish_job(client, d, job, name, dest, on_status, with_preview, local)
+        finally:
+            if not local and hasattr(self.p, "track_remote"):
+                self.p.track_remote(key, None, None)
+
+    def _finish_job(self, client: Client, d: Device, job: str, name: str, dest: Path,
+                    on_status: Callable[[Dict[str, Any]], None], with_preview: bool,
+                    local: bool) -> Tuple[Path, bool]:
         preview = self.p.project.outputs_dir / ".preview.splat"
         last = {"step": None, "t": 0.0}
 

@@ -28,7 +28,7 @@ def other(c, host):
 
 
 def job_state(c, job_id):
-    return c.get(f"/v1/jobs/{job_id}", headers=REMOTE).json()
+    return c.get(f"/v1/jobs/{job_id}", headers=LOCAL).json()
 
 
 def wait_state(c, job_id, states, timeout=10):
@@ -78,7 +78,7 @@ def test_pause_frees_gpu_then_resume_continues(tmp_path):
         # a paused job's checkpoint is there already
         r = c.post(f"/v1/jobs/{a}/checkpoint", headers=LOCAL)
         assert r.status_code == 200 and r.json()["checkpointStep"] == paused_at
-        r = c.get(f"/v1/jobs/{a}/checkpoint.ply", headers=REMOTE)
+        r = c.get(f"/v1/jobs/{a}/checkpoint.ply", headers=LOCAL)
         assert r.status_code == 200 and r.headers["X-Checkpoint-Step"] == str(paused_at)
         # resume: back in the queue, continues from the saved step
         r = c.post(f"/v1/jobs/{a}/resume", headers=LOCAL)
@@ -87,20 +87,20 @@ def test_pause_frees_gpu_then_resume_continues(tmp_path):
         assert c.backend.resumed_from[-1] == paused_at
         assert s["elapsedSeconds"] >= paused_at * 0.03 * 0.5
         assert not (job_dir / "resume.pt").exists()
-        assert c.get(f"/v1/jobs/{a}/result.ply", headers=REMOTE).status_code == 200
+        assert c.get(f"/v1/jobs/{a}/result.ply", headers=LOCAL).status_code == 200
 
 
 def test_checkpoint_while_training(tmp_path):
     with make(tmp_path / "d") as c:
         slow(c)
         a = train(c, dataset(c, tmp_path))
-        assert c.get(f"/v1/jobs/{a}/checkpoint.ply", headers=REMOTE).status_code == 404
+        assert c.get(f"/v1/jobs/{a}/checkpoint.ply", headers=LOCAL).status_code == 404
         wait_for(lambda: (job_state(c, a)["step"] or 0) >= 3)
         r = c.post(f"/v1/jobs/{a}/checkpoint?wait=10", headers=LOCAL)
         assert r.status_code == 200, r.text
         step = r.json()["checkpointStep"]
         assert step is not None and step >= 3
-        r = c.get(f"/v1/jobs/{a}/checkpoint.ply", headers=REMOTE)
+        r = c.get(f"/v1/jobs/{a}/checkpoint.ply", headers=LOCAL)
         assert r.status_code == 200 and r.headers["X-Checkpoint-Step"] == str(step)
         path = tmp_path / "ck.ply"
         path.write_bytes(r.content)
@@ -133,7 +133,7 @@ def test_cancel_paused_job(tmp_path):
         wait_for(lambda: (job_state(c, a)["step"] or 0) >= 2)
         c.post(f"/v1/jobs/{a}/pause", headers=LOCAL)
         wait_state(c, a, "paused")
-        s = c.post(f"/v1/jobs/{a}/cancel", headers=REMOTE).json()
+        s = c.post(f"/v1/jobs/{a}/cancel", headers=LOCAL).json()
         assert s["state"] == "cancelled"
         assert not (tmp_path / "d" / "jobs" / a / "resume.pt").exists()
         assert c.post(f"/v1/jobs/{a}/resume", headers=LOCAL).status_code == 409
@@ -176,7 +176,9 @@ def test_who_may_pause(tmp_path):
         assert stranger.post(f"/v1/jobs/{theirs}/checkpoint", headers=REMOTE).status_code == 403
         # a loopback request without the secret is remote too
         assert c.post(f"/v1/jobs/{mine}/pause", headers=REMOTE).status_code == 403
-        # the submitter and the desktop app may
+        # the desktop app doesn't park other computers' jobs (their apps may have no Resume button)
+        assert c.post(f"/v1/jobs/{theirs}/pause", headers=LOCAL).status_code == 403
+        # the submitter may; the desktop app may resume it
         assert mac.post(f"/v1/jobs/{theirs}/pause", headers=REMOTE).json()["state"] == "paused"
         assert c.post(f"/v1/jobs/{theirs}/resume", headers=LOCAL).json()["state"] == "queued"
         c.backend.release.set()
@@ -222,3 +224,107 @@ def test_restart_during_resumed_run_keeps_last_pause(tmp_path):
     with make(data) as c:
         s = job_state(c, a)
         assert s["state"] == "paused" and "restart" in s["message"]
+
+
+def _bare(tmp_path):
+    """App + manager without the worker threads (TestClient not entered), so tests can step the queue."""
+    c = make(tmp_path / "d")
+    return c, c.app.state.manager
+
+
+def test_pause_or_resume_between_take_and_start(tmp_path):
+    """A job taken from the queue is "loading" at once: a pause then holds it before it starts, and a resume
+    can't put it back in the queue (two GPUs would train one job dir)."""
+    c, m = _bare(tmp_path)
+    ds = dataset(c, tmp_path)
+    a = train(c, ds)
+    job = m._next_job(None)
+    assert job.id == a and job_state(c, a)["state"] == "loading"
+    assert c.post(f"/v1/jobs/{a}/resume", headers=LOCAL).json()["state"] == "loading"
+    assert a not in m.queue
+    assert c.post(f"/v1/jobs/{a}/pause", headers=LOCAL).status_code == 200
+    m._run_job(job, None)
+    s = job_state(c, a)
+    assert s["state"] == "paused" and s["pausedAt"] and c.backend.contexts == []    # never ran
+    # and a cancel in that gap stops it before it starts
+    b = train(c, ds)
+    job = m._next_job(None)
+    assert c.post(f"/v1/jobs/{b}/cancel", headers=LOCAL).status_code == 200
+    m._run_job(job, None)
+    assert job_state(c, b)["state"] == "cancelled" and c.backend.contexts == []
+
+
+def test_other_computers_paused_jobs_resume_by_themselves(tmp_path, monkeypatch):
+    import splatworker.server as S
+
+    c, m = _bare(tmp_path)
+    mac = other(c, "192.168.0.20")
+    ds = dataset(c, tmp_path)
+    mine = train(c, ds)
+    up = _upload(mac, tmp_path)
+    theirs = train(mac, up, headers=REMOTE)
+    assert mac.post(f"/v1/jobs/{theirs}/pause", headers=REMOTE).json()["state"] == "paused"
+    assert c.post(f"/v1/jobs/{mine}/pause", headers=LOCAL).json()["state"] == "paused"
+    (m.jobs[mine].dir / "resume.pt").write_bytes(b"x")
+    now = __import__("time").time()
+    monkeypatch.setattr(S.time, "time", lambda: now + S.REMOTE_PAUSE_LIMIT + 1)
+    with m.cond:
+        m._housekept = 0.0
+        m._housekeep_locked()
+    assert job_state(c, theirs)["state"] == "queued" and job_state(c, mine)["state"] == "paused"
+    monkeypatch.setattr(S.time, "time", lambda: now + S.LOCAL_PAUSE_LIMIT + 1)
+    with m.cond:
+        m._housekept = 0.0
+        m._housekeep_locked()
+    assert job_state(c, mine)["state"] == "cancelled" and not (m.jobs[mine].dir / "resume.pt").exists()
+
+
+def test_paused_remote_job_resumes_after_restart(tmp_path):
+    c, m = _bare(tmp_path)
+    mac = other(c, "192.168.0.20")
+    theirs = train(mac, _upload(mac, tmp_path), headers=REMOTE)
+    mac.post(f"/v1/jobs/{theirs}/pause", headers=REMOTE)
+    c2 = make(tmp_path / "d")
+    assert job_state(c2, theirs)["state"] == "queued"
+
+
+def test_lan_clients_cant_touch_or_read_the_apps_jobs(tmp_path):
+    c, m = _bare(tmp_path)
+    mac = other(c, "192.168.0.20")
+    stranger = other(c, "192.168.0.30")
+    mine = train(c, dataset(c, tmp_path))
+    theirs = train(mac, _upload(mac, tmp_path), headers=REMOTE)
+    listed = {j["jobId"]: j for j in mac.get("/v1/jobs", headers=REMOTE).json()}
+    assert listed[mine]["name"] == "Job on this PC" and listed[mine]["datasetId"] == ""
+    assert listed[mine]["state"] == "queued" and listed[mine]["origin"] == "local"
+    assert listed[theirs]["origin"] == "192.168.0.20"
+    assert {j["jobId"]: j for j in stranger.get("/v1/jobs", headers=REMOTE).json()}[theirs]["origin"] == "remote"
+    assert mac.get(f"/v1/jobs/{mine}/log", headers=REMOTE).status_code == 404
+    assert mac.post(f"/v1/jobs/{mine}/cancel", headers=REMOTE).status_code == 403
+    assert mac.delete(f"/v1/jobs/{mine}", headers=REMOTE).status_code == 403
+    assert c.get("/v1/jobs", headers=LOCAL).json()[0]["name"] != "Job on this PC"
+    # other computers' jobs can still be stopped by anybody, as before
+    assert stranger.post(f"/v1/jobs/{theirs}/cancel", headers=REMOTE).json()["state"] == "cancelled"
+
+
+def test_census_before_its_file_exists_is_404(tmp_path):
+    c, m = _bare(tmp_path)
+    ds = dataset(c, tmp_path)
+    from conftest import write_fake_ply
+    ply = tmp_path / "s.ply"
+    write_fake_ply(ply, 5)
+    j = c.post("/v1/census", json={"datasetId": ds, "plyPath": str(ply)}, headers=LOCAL).json()["jobId"]
+    assert c.get(f"/v1/jobs/{j}/census.npz", headers=LOCAL).status_code == 404
+
+
+def _upload(client, tmp_path):
+    import io
+    import zipfile
+    src = make_dataset(tmp_path / f"up{id(client)}")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for p in src.rglob("*"):
+            if p.is_file():
+                zf.write(p, str(p.relative_to(src)))
+    return client.post("/v1/datasets", content=buf.getvalue(),
+                       headers={**REMOTE, "Content-Type": "application/zip"}).json()["datasetId"]

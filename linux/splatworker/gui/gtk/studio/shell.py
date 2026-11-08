@@ -82,8 +82,6 @@ class StudioShell:
         self.pages.add_named(self.inbox_page, "inbox")
         self.pages.add_named(self.models_page, "models")
         self.pages.add_named(page("Settings Reference", ReferencePage), "reference")
-        if self.studio.prefs.receive_captures:     # the receiver belongs to the app, not to the Inbox page
-            GLib.idle_add(lambda: (self.studio.start_receiver(), False)[1])
 
         side = Adw.ToolbarView()
         sh = Adw.HeaderBar()
@@ -134,6 +132,10 @@ class StudioShell:
         drop.connect("drop", lambda _t, v, _x, _y: self._drop(v))
         self.split_view.add_controller(drop)
         GLib.timeout_add_seconds(2, self._side_tick)
+        if self.studio.prefs.receive_captures:     # the receiver belongs to the app, not to the Inbox page
+            ctl = self.studio
+            # only once everything above is built, and only if this controller is still the window's one
+            GLib.idle_add(lambda: (ctl.start_receiver() if getattr(self, "studio", None) is ctl else None, False)[1])
         return self.split_view
 
     # ------------------------------------------------------------------ navigation

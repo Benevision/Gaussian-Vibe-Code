@@ -616,9 +616,23 @@ class ViewerPage(Gtk.Box):
             return
         self._busy("Finding isolated splats…")
 
+        n = self.iso_n
+
+        def done(mask, error) -> bool:
+            self._busy(None)                     # always, also after an error
+            if error is not None:
+                self.ctl.toast(f"Could not find isolated splats: {error}")
+            elif self.area.edit is e:            # still the scene the mask was computed for
+                self._edit(lambda ed: ed.delete(mask))
+            return False
+
         def work():
-            mask = e.isolated(self.iso_n)
-            GLib.idle_add(lambda: (self._busy(None), self._edit(lambda ed: ed.delete(mask)), False)[-1])
+            try:
+                mask = e.isolated(n)
+            except Exception as ex:  # noqa: BLE001
+                GLib.idle_add(done, None, ex)
+                return
+            GLib.idle_add(done, mask, None)
         threading.Thread(target=work, daemon=True).start()
 
     def auto_clean(self) -> None:
