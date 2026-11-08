@@ -26,9 +26,9 @@ class Client:
         self.timeout = timeout
         self._open = opener or urllib.request.urlopen
 
-    def _req(self, method: str, path: str, body: Optional[bytes] = None, ctype: Optional[str] = None,
-             timeout: Optional[float] = None):
-        req = urllib.request.Request(self.base_url + path, data=body, method=method)
+    def _req(self, method: str, path: str, body: Any = None, ctype: Optional[str] = None,
+             timeout: Optional[float] = None, headers: Optional[Dict[str, str]] = None):
+        req = urllib.request.Request(self.base_url + path, data=body, method=method, headers=headers or {})
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
         if self.local_secret:
@@ -85,6 +85,18 @@ class Client:
         os.replace(part, dest)
         return dest
 
+    def upload(self, path: str, file: Path, progress: Optional[Callable[[int, int], None]] = None,
+               ctype: str = "application/zip", timeout: float = 3 * 3600) -> Any:
+        """POST a file as the raw body, streamed from disk with a Content-Length (the Mac / iPhone workers
+        refuse uploads without one, 411)."""
+        size = os.path.getsize(file)
+        with open(file, "rb") as fh:
+            body = _ProgressReader(fh, size, progress)
+            with self._req("POST", path, body, ctype, timeout=timeout,
+                           headers={"Content-Length": str(size)}) as r:
+                data = r.read()
+        return json.loads(data) if data else None
+
     # ------------------------------------------------------------- API
     def info(self) -> Dict[str, Any]:
         return self.get("/v1/info")
@@ -101,6 +113,15 @@ class Client:
     def export_dataset(self, dataset_id: str, dest: Path) -> Dict[str, Any]:
         return self.post(f"/v1/datasets/{dataset_id}/export-local", {"path": str(Path(dest).resolve())})
 
+    def upload_dataset(self, zip_path: Path, progress: Optional[Callable[[int, int], None]] = None) -> str:
+        return self.upload("/v1/datasets", zip_path, progress)["datasetId"]
+
+    def datasets(self) -> List[Dict[str, Any]]:
+        return self.get("/v1/datasets") or []
+
+    def compose(self, layers: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return self.post("/v1/datasets/compose", {"layers": layers})
+
     def delete_dataset(self, dataset_id: str) -> None:
         try:
             self.delete(f"/v1/datasets/{dataset_id}")
@@ -111,9 +132,11 @@ class Client:
         return self.post("/v1/process", {"datasetId": dataset_id, "request": request, "name": name,
                                          "priority": priority})["jobId"]
 
-    def train(self, dataset_id: str, config: Dict[str, Any], name: str, priority: int = 1) -> str:
-        return self.post("/v1/jobs", {"datasetId": dataset_id, "config": config, "name": name,
-                                      "priority": priority})["jobId"]
+    def train(self, dataset_id: str, config: Dict[str, Any], name: str, priority: Optional[int] = 1) -> str:
+        body = {"datasetId": dataset_id, "config": config, "name": name}
+        if priority is not None:          # other workers: no priority (they'd queue it at 0 anyway)
+            body["priority"] = priority
+        return self.post("/v1/jobs", body)["jobId"]
 
     def census(self, dataset_id: str, ply_path: Path, name: str, priority: int = 1) -> str:
         return self.post("/v1/census", {"datasetId": dataset_id, "plyPath": str(ply_path), "name": name,
@@ -128,3 +151,17 @@ class Client:
     def log(self, job_id: str) -> str:
         with self._req("GET", f"/v1/jobs/{job_id}/log") as r:
             return r.read().decode("utf-8", "replace")
+
+
+class _ProgressReader:
+    """File wrapper for ``urllib`` request bodies: reads in blocks and reports (sent, total)."""
+
+    def __init__(self, fh, total: int, progress: Optional[Callable[[int, int], None]]):
+        self.fh, self.total, self.progress, self.sent = fh, total, progress, 0
+
+    def read(self, n: int = -1) -> bytes:
+        b = self.fh.read(n if n and n > 0 else 1 << 20)
+        self.sent += len(b)
+        if self.progress and b:
+            self.progress(self.sent, self.total)
+        return b
