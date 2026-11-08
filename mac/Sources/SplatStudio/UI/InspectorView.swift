@@ -74,7 +74,7 @@ struct ViewPanel: View {
                         model.viewer.background = SIMD3(Float(n.redComponent), Float(n.greenComponent), Float(n.blueComponent))
                     }), supportsOpacity: false).labelsHidden()
             }
-            SettingRow(id: "viewer.splatScale") { NumberSlider(value: $model.viewer.splatScale.double, range: 0.1...3, width: 110) }
+            SettingRow(id: "viewer.splatScale") { NumberSlider(value: $model.viewer.splatScale.double, range: 0.1...3, width: 110, decimals: 2) }
             SettingRow(id: "viewer.alphaCutoff") { NumberSlider(value: $model.viewer.alphaCutoff.double, range: 0.002...0.5, log: true, width: 110) }
             SettingRow(id: "viewer.showCameras") { Toggle("", isOn: $model.viewer.showCameras).labelsHidden()
                     .disabled(model.dataset == nil && (model.remoteWatch.cameras ?? []).isEmpty)
@@ -100,10 +100,10 @@ struct ViewPanel: View {
                 Picker("", selection: $model.cameraMode) { Text("Orbit").tag(ViewerCamera.Mode.orbit); Text("Fly").tag(ViewerCamera.Mode.fly) }
                     .pickerStyle(.segmented).labelsHidden().frame(width: 140)
             }
-            SettingRow(id: "nav.rotateSpeed") { NumberSlider(value: $model.navigation.rotateSpeed.double, range: 0.2...3, width: 110) }
-            SettingRow(id: "nav.panSpeed") { NumberSlider(value: $model.navigation.panSpeed.double, range: 0.2...3, width: 110) }
-            SettingRow(id: "nav.zoomSpeed") { NumberSlider(value: $model.navigation.zoomSpeed.double, range: 0.2...3, width: 110) }
-            SettingRow(id: "nav.flySpeed") { NumberSlider(value: $model.navigation.flySpeed.double, range: 0.1...5, log: true, width: 110) }
+            SettingRow(id: "nav.rotateSpeed") { NumberSlider(value: $model.navigation.rotateSpeed.double, range: 0.2...3, width: 110, decimals: 1) }
+            SettingRow(id: "nav.panSpeed") { NumberSlider(value: $model.navigation.panSpeed.double, range: 0.2...3, width: 110, decimals: 1) }
+            SettingRow(id: "nav.zoomSpeed") { NumberSlider(value: $model.navigation.zoomSpeed.double, range: 0.2...3, width: 110, decimals: 1) }
+            SettingRow(id: "nav.flySpeed") { NumberSlider(value: $model.navigation.flySpeed.double, range: 0.1...5, log: true, width: 110, decimals: 1) }
             SettingRow(id: "nav.trackpad") {
                 Picker("", selection: $model.navigation.trackpadTwoFinger) { Text("Orbit").tag(NavigationSettings.TwoFinger.orbit); Text("Pan").tag(NavigationSettings.TwoFinger.pan) }
                     .pickerStyle(.segmented).labelsHidden().frame(width: 140)
@@ -111,7 +111,7 @@ struct ViewPanel: View {
             SettingRow(id: "nav.invertVertical") { Toggle("", isOn: $model.navigation.invertVertical).labelsHidden() }
             SettingRow(id: "nav.smoothing") { Toggle("", isOn: $model.navigation.smoothing).labelsHidden() }
             SettingRow(id: "viewer.fov") {
-                NumberSlider(value: $fovDeg, range: 20...110, width: 110)
+                NumberSlider(value: $fovDeg, range: 20...110, width: 110, decimals: 0)
                     .onChange(of: fovDeg) { _, v in var c = model.renderer.camera; c.fovY = Float(v) * .pi / 180; model.renderer.camera = c }
             }
             Button("Keyboard & mouse shortcuts") { model.showShortcuts = true }
@@ -450,11 +450,11 @@ struct AdvancedTrainingSettings: View {
             SettingRow(id: "train.depthWeight", showSummary: false) { NumberSlider(value: c.depthWeight.double, range: 0...1, width: 90) }
             SettingRow(id: "train.depthEdgeAware", showSummary: false) { Toggle("", isOn: c.depthEdgeAware).labelsHidden() }
             SettingRow(id: "train.anisotropyReg", showSummary: false) { NumberSlider(value: c.anisotropyReg.double, range: 0...1, width: 90) }
-            SettingRow(id: "train.bigSplatReg", showSummary: false) { NumberSlider(value: c.bigSplatReg.double, range: 0...30, width: 90) }
+            SettingRow(id: "train.bigSplatReg", showSummary: false) { NumberSlider(value: c.bigSplatReg.double, range: 0...30, width: 90, decimals: 1) }
             SettingRow(id: "train.transientMasking", showSummary: false) { Toggle("", isOn: c.transientMasking).labelsHidden() }
             if session.config.transientMasking {
-                SettingRow(id: "train.transientSensitivity", showSummary: false) { NumberSlider(value: c.transientSensitivity.double, range: 2...8, width: 90) }
-                SettingRow(id: "train.transientMaxViewGap", showSummary: false) { NumberSlider(value: c.transientMaxViewGap.double, range: 5...45, width: 90) }
+                SettingRow(id: "train.transientSensitivity", showSummary: false) { NumberSlider(value: c.transientSensitivity.double, range: 2...8, width: 90, decimals: 1) }
+                SettingRow(id: "train.transientMaxViewGap", showSummary: false) { NumberSlider(value: c.transientMaxViewGap.double, range: 5...45, width: 90, decimals: 0) }
             }
             SettingRow(id: "train.longAxisSplit", showSummary: false) { Toggle("", isOn: c.longAxisSplit).labelsHidden() }
             SettingRow(id: "train.appearanceCorrection", showSummary: false) { Toggle("", isOn: c.appearanceCorrection).labelsHidden() }
@@ -466,7 +466,7 @@ struct AdvancedTrainingSettings: View {
             if session.config.strategy == .mcmc {
                 SettingRow(id: "train.opacityReg", showSummary: false) { NumberSlider(value: c.opacityReg.double, range: 0...0.1, width: 90) }
                 SettingRow(id: "train.scaleReg", showSummary: false) { NumberSlider(value: c.scaleReg.double, range: 0...0.1, width: 90) }
-                SettingRow(id: "train.noiseLR", showSummary: false) { NumberSlider(value: c.noiseLR.double, range: 0...2_000_000, width: 90) }
+                SettingRow(id: "train.noiseLR", showSummary: false) { NumberSlider(value: c.noiseLR.double, range: 0...2_000_000, width: 90, decimals: 0) }
             }
             SettingRow(id: "train.evalInterval", showSummary: false) { IntField(value: c.evalInterval, range: 0...20_000, step: 500) }
             HStack {

@@ -12,6 +12,18 @@ enum CLI {
         let a = CommandLine.arguments
         func value(_ flag: String) -> String? { a.firstIndex(of: flag).flatMap { $0 + 1 < a.count ? a[$0 + 1] : nil } }
         if a.contains("--dump-settings") { print(SettingsCatalog.markdown()); exit(0) }
+        if let v = value("--frames-fingerprint") {
+            // Fingerprint a worker frames job would be filed under, with the default new-project settings
+            // (pass --360 for 360° video). Lets an earlier job be registered in a project's .remote-jobs.json.
+            let o = PrepOptions().resolved
+            var r = ProcessingRequest(task: .frames)
+            var vo = o.video
+            if let f = value("--fps").flatMap(Double.init) { vo.targetFPS = f }
+            r.videoOptions = vo; r.equirect = a.contains("--360") ? o.equirect : nil
+            print(RemoteJobLedger.framesFingerprint(video: URL(fileURLWithPath: v), request: r) ?? "no such file")
+            print(canonicalJSON(r.videoOptions)); print(canonicalJSON(r.equirect))
+            exit(0)
+        }
         if let ds = value("--train") {
             do {
                 let dataset = try PreparedDataset.load(URL(fileURLWithPath: ds))

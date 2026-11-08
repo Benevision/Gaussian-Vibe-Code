@@ -22,9 +22,18 @@ enum RemoteFrameExtraction {
         // Workers ≥ 1.3.8 keep the frames: only frames.json and masks come back now, the images follow in the
         // background while masks / camera poses / training already run on the worker's copy.
         let chain = (try? await worker.info(timeout: 10))?.canChain ?? false
+        // The same video split with the same settings on this worker before (its frames are still there): reuse
+        // that job — no upload of the video, no second split.
+        let w = worker.baseURL.absoluteString
+        let fp = RemoteJobLedger.framesFingerprint(video: url, request: req)
+        var reuse: String? = nil
+        if chain, let fp, let id = RemoteJobLedger.lookup(dir, request: req, fingerprint: fp, worker: w),
+           let st = try? await worker.job(id), st.state != .failed, st.state != .cancelled,
+           st.state != .completed || st.outputDatasetId != nil { reuse = id }
         let final = try await worker.runProcessing(upload: { cb in try await worker.uploadFile(url, name: name, progress: cb) },
                                                    request: req, outputDirectory: unpack, skip: chain ? ["images"] : [],
-                                                   progress: progress)
+                                                   progress: progress, existingJob: reuse,
+                                                   onJobCreated: { id in if let fp { RemoteJobLedger.record(dir, request: req, fingerprint: fp, worker: w, jobId: id) } })
         let kept = chain ? final.outputDatasetId : nil
         let inner = [unpack.appendingPathComponent(req.outputDir), unpack]
             .first { fm.fileExists(atPath: $0.appendingPathComponent(FrameSet.fileName).path) }

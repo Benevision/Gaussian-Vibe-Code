@@ -7,6 +7,11 @@ struct NewProjectSheet: View {
     @Environment(\.experienceMode) private var mode
     @Environment(\.dismiss) private var dismiss
     @State private var source: SourceDescription?
+    @State private var reuseOffer: ReuseOffer? = nil
+    @State private var pendingRun: (PrepOptions, URL)? = nil
+    @State private var reuseFrames = true
+    @State private var reuseMasks = true
+    @State private var reusePoses = true
     @State private var options = PrepOptions()
     @State private var step = 0
     @State private var projectName = ""
@@ -55,6 +60,7 @@ struct NewProjectSheet: View {
             footer
         }
         .frame(width: 680, height: 620)
+        .sheet(item: $reuseOffer) { offer in reuseSheet(offer) }
         .onAppear {
             prep.reset()   // a new project starts on its settings, not on the last run's result
             source = model.newProjectSource
@@ -164,7 +170,7 @@ struct NewProjectSheet: View {
             }
             switch s {
             case .video, .video360, .stereoVideo:
-                SettingRow(id: "source.videoFPS") { NumberSlider(value: $options.video.targetFPS, range: 0.5...15, width: 110) }
+                SettingRow(id: "source.videoFPS") { NumberSlider(value: $options.video.targetFPS, range: 0.5...15, width: 110, decimals: 1) }
                 SettingRow(id: "source.targetFrames") {
                     IntField(value: Binding(get: { options.video.targetFrameCount ?? 0 }, set: { options.video.targetFrameCount = $0 > 0 ? $0 : nil }), range: 0...3000, step: 50)
                 }
@@ -184,7 +190,7 @@ struct NewProjectSheet: View {
                 Toggle("Drop frames with limited tracking", isOn: $options.capture.dropLimitedTracking)
                 if effectiveMode == .advanced {
                     Stepper("Use every \(options.capture.frameStride). frame", value: $options.capture.frameStride, in: 1...10)
-                    HStack { Text("Max depth"); NumberSlider(value: $options.capture.maxDepth.double, range: 1...20, width: 110); Text("m") }
+                    HStack { Text("Max depth"); NumberSlider(value: $options.capture.maxDepth.double, range: 1...20, width: 110, decimals: 1); Text("m") }
                 }
             }
             SettingRow(id: "source.holdout") { Toggle("", isOn: $holdout).labelsHidden() }
@@ -197,7 +203,7 @@ struct NewProjectSheet: View {
                 get: { options.equirect.rings.first?.count ?? 8 },
                 set: { v in if options.equirect.rings.isEmpty { options.equirect.rings = [.init(pitch: 0, count: v)] } else { options.equirect.rings[0].count = v } }), in: 3...16)
         }
-        SettingRow(id: "source.360fov") { NumberSlider(value: $options.equirect.fovDegrees.double, range: 60...120, width: 110) }
+        SettingRow(id: "source.360fov") { NumberSlider(value: $options.equirect.fovDegrees.double, range: 60...120, width: 110, decimals: 0) }
         SettingRow(id: "source.360dropNadir") {
             Toggle("", isOn: Binding(get: { !options.equirect.includeNadir }, set: { options.equirect.includeNadir = !$0 })).labelsHidden()
         }
@@ -515,7 +521,50 @@ struct NewProjectSheet: View {
         if model.training.placement != .thisMac { o.remoteWorkerId = model.training.workerId ?? WorkerBrowser.shared.workers.first?.id }
         let dir = projectParent.appendingPathComponent(projectName, isDirectory: true)
         if case .captureBundle(let capture) = source { CaptureProjects.record(capture: capture, project: dir) }
+        if let offer = ReuseOffer.find(projectDir: dir) {
+            pendingRun = (o, dir); reuseFrames = offer.frames != nil; reuseMasks = offer.masks != nil; reusePoses = offer.poses != nil
+            reuseOffer = offer
+            return
+        }
         prep.run(source: source, options: o, projectDir: dir, thenTrain: trainAfter)
+    }
+
+    private func reuseSheet(_ offer: ReuseOffer) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Reuse earlier results?").font(.title2.bold())
+            Text("This project has results from an earlier run. Reusing them skips that work (and the upload). Untick anything you changed on purpose — a replaced video, different frame or mask settings.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let f = offer.frames {
+                Toggle(isOn: $reuseFrames) { VStack(alignment: .leading) { Text("Frames"); Text(f).font(.caption).foregroundStyle(.secondary) } }
+            }
+            if let m = offer.masks {
+                Toggle(isOn: $reuseMasks) { VStack(alignment: .leading) { Text("Masks"); Text(m).font(.caption).foregroundStyle(.secondary) } }
+                    .disabled(!reuseFrames)
+            }
+            if let p = offer.poses {
+                Toggle(isOn: $reusePoses) { VStack(alignment: .leading) { Text("Camera positions"); Text(p).font(.caption).foregroundStyle(.secondary) } }
+                    .disabled(!reuseFrames)
+            }
+            if !reuseFrames && (offer.masks != nil || offer.poses != nil) {
+                Text("Masks and camera positions belong to the earlier frames, so they are redone when the frames are.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Cancel") { reuseOffer = nil; pendingRun = nil }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Start fresh") { startAfterReuseChoice(fresh: true) }
+                Button("Start") { startAfterReuseChoice(fresh: false) }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20).frame(width: 460)
+    }
+
+    private func startAfterReuseChoice(fresh: Bool) {
+        guard let offer = reuseOffer, let (o, dir) = pendingRun else { return }
+        if fresh { offer.apply(frames: false, masks: false, poses: false) }
+        else { offer.apply(frames: reuseFrames, masks: reuseMasks, poses: reusePoses) }
+        reuseOffer = nil; pendingRun = nil
+        prep.run(source: source!, options: o, projectDir: dir, thenTrain: trainAfter)
     }
 
     private func choose(dir: Bool, files: Bool = false, make: @escaping (URL) -> SourceDescription) {

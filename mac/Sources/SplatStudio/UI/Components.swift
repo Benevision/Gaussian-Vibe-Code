@@ -148,21 +148,36 @@ struct NumberSlider: View {
     var log: Bool = false
     var format: String = "%.3g"
     var width: CGFloat = 130
+    /// Round to this many decimal places (slider and text field); nil keeps 4 significant digits.
+    var decimals: Int? = nil
+
+    private func rounded(_ v: Double) -> Double {
+        guard let d = decimals else { return v }
+        let m = pow(10, Double(d))
+        return min(range.upperBound, max(range.lowerBound, (v * m).rounded() / m))
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             if log {
                 Slider(value: Binding(get: { Foundation.log10(max(value, range.lowerBound)) },
-                                      set: { value = pow(10, $0) }),
+                                      set: { value = rounded(pow(10, $0)) }),
                        in: Foundation.log10(range.lowerBound)...Foundation.log10(range.upperBound))
                     .frame(width: width)
             } else {
-                Slider(value: $value, in: range).frame(width: width)
+                Slider(value: Binding(get: { value }, set: { value = rounded($0) }), in: range).frame(width: width)
             }
-            TextField("", value: $value, format: .number.precision(.significantDigits(4)))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 72)
-                .multilineTextAlignment(.trailing)
+            if let d = decimals {
+                TextField("", value: Binding(get: { value }, set: { value = rounded($0) }), format: .number.precision(.fractionLength(0...d)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+                    .multilineTextAlignment(.trailing)
+            } else {
+                TextField("", value: $value, format: .number.precision(.significantDigits(4)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+                    .multilineTextAlignment(.trailing)
+            }
         }
     }
 }

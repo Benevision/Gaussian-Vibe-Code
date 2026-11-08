@@ -140,9 +140,25 @@ struct RemoteJobLedger: Codable, Sendable {
         return sha256Hex(Data(lines.joined(separator: "\n").utf8))
     }
 
+    /// Frames from a video: the video file (name, size, date) and the split settings, canonical JSON (sorted keys).
+    static func framesFingerprint(video u: URL, request r: ProcessingRequest) -> String? {
+        guard let a = try? FileManager.default.attributesOfItem(atPath: u.path),
+              let size = (a[.size] as? NSNumber)?.int64Value, let mod = a[.modificationDate] as? Date else { return nil }
+        let lines = ["frames", u.lastPathComponent, String(size), String(Int(mod.timeIntervalSince1970.rounded())),
+                     canonicalJSON(r.videoOptions), canonicalJSON(r.equirect)]
+        return sha256Hex(Data(lines.joined(separator: "\n").utf8))
+    }
+
     static func record(_ root: URL, request: ProcessingRequest, fingerprint: String, worker: String, jobId: String) {
         var l = load(root)
         l.entries[key(request)] = Entry(worker: worker, jobId: jobId, fingerprint: fingerprint, createdAt: Date())
+        l.save(root)
+    }
+
+    /// Removes entries whose key starts with any of these step names ("frames", "masks", "sfm").
+    static func forget(_ root: URL, steps: [String]) {
+        var l = load(root)
+        l.entries = l.entries.filter { k, _ in !steps.contains { k.hasPrefix($0 + "/") } }
         l.save(root)
     }
 
@@ -153,6 +169,13 @@ struct RemoteJobLedger: Codable, Sendable {
 }
 
 import CryptoKit
+
+/// JSON with sorted keys, numbers as the app sends them to workers (JSONEncoder: Float 0.3 → 0.3).
+func canonicalJSON<T: Encodable>(_ v: T?) -> String {
+    guard let v else { return "null" }
+    let e = JSONEncoder(); e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    return (try? e.encode(v)).map { String(decoding: $0, as: UTF8.self) } ?? "null"
+}
 
 func sha256Hex(_ d: Data) -> String { SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined() }
 
@@ -180,6 +203,7 @@ struct FrameSourceStamp: Codable, Equatable, Sendable {
     }
 
     func save(_ root: URL) { if let d = try? JSONEncoder().encode(self) { try? d.write(to: root.appendingPathComponent(Self.fileName), options: .atomic) } }
+    static func forget(_ root: URL) { try? FileManager.default.removeItem(at: root.appendingPathComponent(fileName)) }
 
     /// The earlier frames, when they came from the same video and settings and are still complete
     /// (images here, or kept on the worker this project uses).
@@ -190,5 +214,42 @@ struct FrameSourceStamp: Codable, Equatable, Sendable {
         if let w = worker, let s = RemoteStore.usable(at: root, by: w), s.dirs.contains("images") { return fs }
         let fm = FileManager.default
         return fs.frames.allSatisfy { fm.fileExists(atPath: root.appendingPathComponent($0.image).path) } ? fs : nil
+    }
+}
+
+/// Earlier results a new run of a project could reuse, offered to the user before the run starts
+/// (they may have replaced the video or changed something on purpose).
+struct ReuseOffer: Identifiable {
+    var id: String { root.path }
+    var root: URL
+    var frames: String?       // description, nil when there is nothing to reuse
+    var masks: String?
+    var poses: String?
+
+    static func find(projectDir: URL) -> ReuseOffer? {
+        let root = projectDir.appendingPathComponent("dataset", isDirectory: true)
+        let l = RemoteJobLedger.load(root)
+        func describe(_ step: String, _ what: String) -> String? {
+            guard let e = l.entries.first(where: { $0.key.hasPrefix(step + "/") })?.value else { return nil }
+            let host = URL(string: e.worker)?.host ?? e.worker
+            return "\(what) on \(host), \(e.createdAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        let fs = (try? FrameSet.load(root))?.frames.count
+        var frames = describe("frames", "Frames split")
+        if frames == nil, FileManager.default.fileExists(atPath: root.appendingPathComponent(FrameSourceStamp.fileName).path), let n = fs {
+            frames = "\(n) frames on this Mac"
+        }
+        let o = ReuseOffer(root: root, frames: frames, masks: describe("masks", "Masks"), poses: describe("sfm", "Camera positions"))
+        return (o.frames ?? o.masks ?? o.poses) == nil ? nil : o
+    }
+
+    /// Applies the choice: forgets what is not reused. Masks and camera positions only fit the frames they were
+    /// computed from, so they are dropped when the frames are not reused.
+    func apply(frames f: Bool, masks m: Bool, poses p: Bool) {
+        var drop: [String] = []
+        if !f { drop += ["frames", "masks", "sfm"]; FrameSourceStamp.forget(root) }
+        if !(f && m) { drop.append("masks") }
+        if !(f && p) { drop.append("sfm") }
+        RemoteJobLedger.forget(root, steps: drop)
     }
 }
