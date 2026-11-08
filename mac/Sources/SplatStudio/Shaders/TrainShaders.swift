@@ -930,7 +930,7 @@ kernel void preprocess_backward(device const float* pos [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------- optimiser
-struct AdamParams { float lr; float lr2; uint period; uint split; float beta1; float beta2; float eps; float bc1; float bc2; uint n; };
+struct AdamParams { float lr; float lr2; uint period; uint split; float beta1; float beta2; float eps; float bc1; float bc2; uint n; uint seed; };
 
 kernel void adam_step(device float* param [[buffer(0)]], device const float* grad [[buffer(1)]],
                       device float* m [[buffer(2)]], device float* v [[buffer(3)]],
@@ -948,6 +948,110 @@ kernel void adam_step(device float* param [[buffer(0)]], device const float* gra
 inline uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 inline float rnd(thread uint& s) { s = pcg(s); return (float(s) + 0.5f) / 4294967296.0f; }
 inline float randn(thread uint& s) { float u1 = rnd(s), u2 = rnd(s); return sqrt(-2.0f * log(u1)) * cos(6.2831853f * u2); }
+
+// ---------------------------------------------------------------- compact optimiser state
+// TrainingConfig.optimizerPrecision == "compact", same scheme as linux/splatworker/compact_adam.py:
+// * position / scale / rotation / opacity / SH DC: bf16 moments (fp32 exponent range), stochastic rounding.
+// * SH rest (45 values per splat): v = exp_avg_sq as uint8 codes on a log grid under one fp32 max per splat,
+//   v = s · 2^(−(255 − c)/4) (c ≥ 1), 0 for c = 0; m = exp_avg as int8 codes relative to the element's own
+//   decoded sqrt(v): m = sign(c)·(c/127)²·R·sqrt(v), R = the Cauchy–Schwarz bound on |m|/sqrt(v).
+// All rounding is unbiased-stochastic so the EMAs keep decaying. All-zero bytes decode to zero moments.
+// SH moment rows (bytes per splat): m row = [3 × bf16 DC m][45 × int8 rest m][pad] = 52,
+//                                   v row = [fp32 rest scale][3 × bf16 DC v][45 × uint8 rest v][pad] = 56.
+constant uint SH_W = 48, SH_REST = 45, SH_MROW = 52, SH_VROW = 56;
+
+inline float bf16_dec(ushort h) { return as_type<float>(uint(h) << 16); }
+inline ushort bf16_enc_sr(float x, uint r) {   // add random low 16 bits, then truncate → unbiased
+    if (!isfinite(x)) x = 0.0f;
+    return ushort((as_type<uint>(x) + (r & 0xFFFFu)) >> 16);
+}
+inline float sr_uniform(thread uint& s) { s = pcg(s); return float(s >> 8) * (1.0f / 16777216.0f); }
+inline float cq_vlevel(float c) { return c > 0.0f ? exp2((c - 255.0f) * 0.25f) : 0.0f; }
+inline float cq_ratio_bound(float b1, float b2) {
+    float r = b1 * b1 / b2;
+    return r >= 1.0f ? 16.0f : sqrt((1.0f - b1) * (1.0f - b1) / ((1.0f - b2) * (1.0f - r)));
+}
+
+kernel void adam_step_bf16(device float* param [[buffer(0)]], device const float* grad [[buffer(1)]],
+                           device ushort* m [[buffer(2)]], device ushort* v [[buffer(3)]],
+                           constant AdamParams& ap [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+    if (i >= ap.n) return;
+    float g = grad[i];
+    if (!isfinite(g)) g = 0.0f;
+    float mi = ap.beta1 * bf16_dec(m[i]) + (1.0f - ap.beta1) * g;
+    float vi = ap.beta2 * bf16_dec(v[i]) + (1.0f - ap.beta2) * g * g;
+    float lr = (i % ap.period) < ap.split ? ap.lr : ap.lr2;
+    param[i] -= lr * (mi / ap.bc1) / (sqrt(vi / ap.bc2) + ap.eps);
+    uint s = pcg(i ^ pcg(ap.seed));
+    m[i] = bf16_enc_sr(mi, s);
+    v[i] = bf16_enc_sr(max(vi, 0.0f), pcg(s + 0x68E31DA4u));
+}
+
+// One thread per splat (the rest-SH v scale is a per-splat max). ap.n = number of splats.
+kernel void adam_sh_compact(device float* param [[buffer(0)]], device const float* grad [[buffer(1)]],
+                            device uchar* mRows [[buffer(2)]], device uchar* vRows [[buffer(3)]],
+                            constant AdamParams& ap [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+    if (i >= ap.n) return;
+    device float* p = param + i * SH_W;
+    device const float* g = grad + i * SH_W;
+    device uchar* mr = mRows + i * SH_MROW;
+    device uchar* vr = vRows + i * SH_VROW;
+    device ushort* dcm = (device ushort*)mr;
+    device char* rm = (device char*)(mr + 6);
+    device float* vscale = (device float*)vr;
+    device ushort* dcv = (device ushort*)(vr + 4);
+    device uchar* rv = vr + 10;
+    uint s = pcg(i * 0x9E3779B9u ^ pcg(ap.seed));
+    const float b1 = ap.beta1, b2 = ap.beta2;
+    // DC: bf16, base learning rate
+    for (uint j = 0; j < 3; j++) {
+        float gj = g[j]; if (!isfinite(gj)) gj = 0.0f;
+        float mi = b1 * bf16_dec(dcm[j]) + (1.0f - b1) * gj;
+        float vi = b2 * bf16_dec(dcv[j]) + (1.0f - b2) * gj * gj;
+        p[j] -= ap.lr * (mi / ap.bc1) / (sqrt(vi / ap.bc2) + ap.eps);
+        s = pcg(s); dcm[j] = bf16_enc_sr(mi, s);
+        s = pcg(s); dcv[j] = bf16_enc_sr(max(vi, 0.0f), s);
+    }
+    // Rest: pass 1 finds the new per-splat max of v, pass 2 updates and re-encodes (recomputing the same values).
+    const float R = cq_ratio_bound(b1, b2), kq = R / (127.0f * 127.0f);
+    const float sOld = *vscale;
+    float sNew = 0.0f;
+    for (uint j = 0; j < SH_REST; j++) {
+        float gj = g[3 + j]; if (!isfinite(gj)) gj = 0.0f;
+        float vo = cq_vlevel(float(rv[j])) * sOld;
+        sNew = max(sNew, b2 * vo + (1.0f - b2) * gj * gj);
+    }
+    sNew = min(sNew, 3.0e38f);
+    for (uint j = 0; j < SH_REST; j++) {
+        float gj = g[3 + j]; if (!isfinite(gj)) gj = 0.0f;
+        float vo = cq_vlevel(float(rv[j])) * sOld;
+        float cm = float(rm[j]);
+        float mo = cm * abs(cm) * kq * sqrt(vo);
+        float mi = b1 * mo + (1.0f - b1) * gj;
+        float vi = b2 * vo + (1.0f - b2) * gj * gj;
+        p[3 + j] -= ap.lr2 * (mi / ap.bc1) / (sqrt(vi / ap.bc2) + ap.eps);
+        // v → uint8 log-grid code, stochastic between neighbouring levels in the linear domain
+        float cv = 0.0f;
+        if (sNew > 0.0f) {
+            float a = clamp(vi / sNew, 0.0f, 1.0f);
+            float lo = clamp(floor(log2(max(a, 1e-30f)) * 4.0f + 255.0f), 0.0f, 254.0f);
+            float vlo = cq_vlevel(lo), vhi = cq_vlevel(lo + 1.0f);
+            float pr = clamp((a - vlo) / (vhi - vlo), 0.0f, 1.0f);
+            cv = lo + (sr_uniform(s) < pr ? 1.0f : 0.0f);
+        }
+        float u = sqrt(cq_vlevel(cv) * sNew);
+        // m → int8 square-law code of m / (R · sqrt(v_decoded))
+        float r = u > 0.0f ? clamp(mi / max(u * R, 1e-30f), -1.0f, 1.0f) : 0.0f;
+        float a = abs(r);
+        float lo = clamp(floor(sqrt(a) * 127.0f), 0.0f, 126.0f);
+        float qlo = (lo / 127.0f) * (lo / 127.0f), qhi = ((lo + 1.0f) / 127.0f) * ((lo + 1.0f) / 127.0f);
+        float pr = clamp((a - qlo) / (qhi - qlo), 0.0f, 1.0f);
+        float c = lo + (sr_uniform(s) < pr ? 1.0f : 0.0f);
+        rv[j] = uchar(cv);
+        rm[j] = char(r < 0.0f ? -c : c);
+    }
+    *vscale = sNew;
+}
 
 // 3DGS-MCMC: perturb positions of low-opacity gaussians along their covariance (SGLD noise).
 kernel void mcmc_noise(device float* pos [[buffer(0)]], device const float* logScale [[buffer(1)]],

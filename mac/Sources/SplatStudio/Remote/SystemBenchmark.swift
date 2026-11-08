@@ -355,7 +355,8 @@ enum MemoryForecast {
             maxPx = max(maxPx, px)
             if let dw = c.depthWidth, let dh = c.depthHeight, config.depthWeight > 0 { images += Int64(dw * dh * 4) }
         }
-        let splats = Int64(Double(config.maxGaussians) * 1.1) * 1_400
+        // measured per-splat buffers (bedroom, 1.5M): fp32 Adam ≈ 1,400 B, compact (8/16-bit) ≈ 1,080 B
+        let splats = Int64(Double(config.maxGaussians) * 1.1) * (config.optimizerPrecision == "compact" ? 1_080 : 1_400)
         return images + splats + maxPx * 180 + 300_000_000      // + pipelines, sort scratch, app
     }
 

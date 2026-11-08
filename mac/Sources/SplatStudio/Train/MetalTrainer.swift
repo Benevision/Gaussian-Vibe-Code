@@ -15,6 +15,8 @@ struct AdamParams {
     var lr: Float, lr2: Float, period: UInt32, split: UInt32
     var beta1: Float = 0.9, beta2: Float = 0.999, eps: Float = 1e-15
     var bc1: Float, bc2: Float, n: UInt32
+    /// Stochastic-rounding seed for compact moments (unused by the fp32 kernel).
+    var seed: UInt32 = 0
 }
 
 struct TrainerStatus: Sendable, Equatable {
@@ -66,8 +68,22 @@ final class MetalTrainer: @unchecked Sendable {
     private(set) var n = 0
     private var params: [MTLBuffer] = []
     private var grads: [MTLBuffer] = []
+    /// Adam moments (exp_avg, exp_avg_sq) per parameter group. fp32: `widths[k]` floats per splat. Compact
+    /// (config.optimizerPrecision == "compact"): bf16 per value, except SH whose rows pack bf16 DC moments with
+    /// int8 / uint8 codes for the 45 rest coefficients (layout in TrainShaders `adam_sh_compact`). Row strides
+    /// in bytes come from `momentRowBytes`; densification moves whole rows, and all-zero rows mean fresh moments.
     private var m1: [MTLBuffer] = []
     private var m2: [MTLBuffer] = []
+    private let compactMoments: Bool
+    /// Bytes per splat of (m1, m2) for parameter group k.
+    private func momentRowBytes(_ k: Int) -> (Int, Int) {
+        guard compactMoments else { return (Self.widths[k] * 4, Self.widths[k] * 4) }
+        return k == 4 ? (Self.shMomentRowM, Self.shMomentRowV) : (Self.widths[k] * 2, Self.widths[k] * 2)
+    }
+    /// Must match SH_MROW / SH_VROW in TrainShaders.
+    static let shMomentRowM = 52, shMomentRowV = 56
+    /// Peak MTLDevice.currentAllocatedSize sampled during run() (bytes).
+    private(set) var peakAllocatedBytes = 0
     private var alive: MTLBuffer!
     private var gradStats: MTLBuffer!  // accum, count, maxRadius
     private var capacity = 0
@@ -153,6 +169,7 @@ final class MetalTrainer: @unchecked Sendable {
         self.ctx = ctx
         self.dataset = dataset
         self.config = config
+        compactMoments = config.optimizerPrecision == "compact"
         sorter = GPURadixSort(ctx: ctx)
         tileSorter = GPURadixSort(ctx: ctx)
         scan = GPUScan(ctx: ctx)
@@ -244,8 +261,8 @@ final class MetalTrainer: @unchecked Sendable {
         func mk(_ bytes: Int, _ l: String) -> MTLBuffer { ctx.buffer(bytes, label: l) }
         params = Self.widths.enumerated().map { mk(cap * $0.element * 4, "param\($0.offset)") }
         grads = Self.widths.enumerated().map { mk(cap * $0.element * 4, "grad\($0.offset)") }
-        m1 = Self.widths.map { mk(cap * $0 * 4, "adamM") }
-        m2 = Self.widths.map { mk(cap * $0 * 4, "adamV") }
+        m1 = (0..<5).map { mk(cap * momentRowBytes($0).0, "adamM\($0)") }
+        m2 = (0..<5).map { mk(cap * momentRowBytes($0).1, "adamV\($0)") }
         alive = mk(cap, "alive")
         gradStats = mk(cap * 12, "gradStats")
         p2d = mk(cap * 8, "p2d"); conicO = mk(cap * 16, "conicO"); rgbd = mk(cap * 16, "rgbd")
@@ -253,6 +270,17 @@ final class MetalTrainer: @unchecked Sendable {
         sortVals = mk(cap * 4, "svals"); counts = mk(cap * 4, "counts"); offsets = mk(cap * 4, "offsets")
         acc = mk(cap * 48, "acc")
         capacity = cap
+    }
+
+    /// Bytes per splat of capacity held in per-splat buffers (parameters, gradients, Adam state, scratch).
+    func perSplatBufferBytes() -> (total: Int, moments: Int) {
+        guard capacity > 0 else { return (0, 0) }
+        let moments = (m1 + m2).reduce(0) { $0 + $1.length }
+        var all = (params + grads).reduce(moments) { $0 + $1.length }
+        for b in [alive, gradStats, p2d, conicO, rgbd, rects, tilesTouched, depthKeys, sortVals, counts, offsets, acc] as [MTLBuffer?] {
+            all += b?.length ?? 0
+        }
+        return (all / capacity, moments / capacity)
     }
 
     private func allocPixelBuffers() {
@@ -823,13 +851,17 @@ final class MetalTrainer: @unchecked Sendable {
             (config.lrOpacity, config.lrOpacity, 1, 1),
             (config.lrColor, config.lrSHRest, 48, 3),
         ]
-        let adam = ctx.pipeline("adam_step")
+        let adam = ctx.pipeline(compactMoments ? "adam_step_bf16" : "adam_step")
         for k in 0..<5 {
-            var ap = AdamParams(lr: lrs[k].0, lr2: lrs[k].1, period: lrs[k].2, split: lrs[k].3, bc1: bc1, bc2: bc2, n: UInt32(n * Self.widths[k]))
+            // SH under compact state: one thread per splat (per-splat scale of the rest coefficients).
+            let perSplat = compactMoments && k == 4
+            let count = perSplat ? n : n * Self.widths[k]
+            var ap = AdamParams(lr: lrs[k].0, lr2: lrs[k].1, period: lrs[k].2, split: lrs[k].3, bc1: bc1, bc2: bc2, n: UInt32(count),
+                                seed: UInt32(truncatingIfNeeded: adamStep &* 0x9E37_79B1) ^ UInt32(k &* 0x85EB_CA6B))
             enc.setBuffer(params[k], offset: 0, index: 0); enc.setBuffer(grads[k], offset: 0, index: 1)
             enc.setBuffer(m1[k], offset: 0, index: 2); enc.setBuffer(m2[k], offset: 0, index: 3)
             enc.setBytes(&ap, length: MemoryLayout<AdamParams>.stride, index: 4)
-            enc.dispatch1D(adam, count: n * Self.widths[k])
+            enc.dispatch1D(perSplat ? ctx.pipeline("adam_sh_compact") : adam, count: count)
         }
         if config.strategy == .mcmc && config.noiseLR > 0 {
             enc.memoryBarrier(scope: .buffers)
@@ -1149,11 +1181,11 @@ final class MetalTrainer: @unchecked Sendable {
         }
     }
 
+    /// Fresh Adam state for splat i (all-zero bytes decode to zero moments in every precision).
     private func zeroMoments(_ i: Int) {
         for k in 0..<5 {
-            let w = Self.widths[k]
-            let a = ptr(m1[k]), b = ptr(m2[k])
-            for j in 0..<w { a[i*w + j] = 0; b[i*w + j] = 0 }
+            let (ra, rb) = momentRowBytes(k)
+            memset(m1[k].contents() + i * ra, 0, ra); memset(m2[k].contents() + i * rb, 0, rb)
         }
     }
 
@@ -1306,10 +1338,10 @@ final class MetalTrainer: @unchecked Sendable {
         let oldN = n
         allocGaussianBuffers(Int(Double(count) * 1.2))
         for k in 0..<5 {
-            let bytes = oldN * Self.widths[k] * 4
+            let bytes = oldN * Self.widths[k] * 4, (ra, rb) = momentRowBytes(k)
             memcpy(params[k].contents(), oldParams[k].contents(), bytes)
-            memcpy(m1[k].contents(), oldM1[k].contents(), bytes)
-            memcpy(m2[k].contents(), oldM2[k].contents(), bytes)
+            memcpy(m1[k].contents(), oldM1[k].contents(), oldN * ra)
+            memcpy(m2[k].contents(), oldM2[k].contents(), oldN * rb)
         }
         memcpy(alive.contents(), oldAlive.contents(), oldN)
         memcpy(gradStats.contents(), oldStats.contents(), oldN * 12)
@@ -1318,14 +1350,19 @@ final class MetalTrainer: @unchecked Sendable {
     /// Rebuilds all gaussian arrays from a list of source indices (used by ADC prune/split).
     private func gather(_ src: [Int], fresh: [Bool]) {
         let newN = src.count
-        var newParams: [[Float]] = [], newM1: [[Float]] = [], newM2: [[Float]] = []
+        var newParams: [[Float]] = [], newM1: [[UInt8]] = [], newM2: [[UInt8]] = []
         for k in 0..<5 {
-            let w = Self.widths[k]
-            let p = ptr(params[k]), a = ptr(m1[k]), b = ptr(m2[k])
-            var np = [Float](repeating: 0, count: newN * w), na = np, nb = np
+            let w = Self.widths[k], (ra, rb) = momentRowBytes(k)
+            let p = ptr(params[k])
+            let a = m1[k].contents().assumingMemoryBound(to: UInt8.self), b = m2[k].contents().assumingMemoryBound(to: UInt8.self)
+            var np = [Float](repeating: 0, count: newN * w)
+            var na = [UInt8](repeating: 0, count: newN * ra), nb = [UInt8](repeating: 0, count: newN * rb)
             for (i, s) in src.enumerated() {
                 for j in 0..<w { np[i*w + j] = p[s*w + j] }
-                if !fresh[i] { for j in 0..<w { na[i*w + j] = a[s*w + j]; nb[i*w + j] = b[s*w + j] } }
+                if !fresh[i] {    // fresh rows stay all-zero = zero moments
+                    for j in 0..<ra { na[i*ra + j] = a[s*ra + j] }
+                    for j in 0..<rb { nb[i*rb + j] = b[s*rb + j] }
+                }
             }
             newParams.append(np); newM1.append(na); newM2.append(nb)
         }
@@ -1389,8 +1426,8 @@ final class MetalTrainer: @unchecked Sendable {
         let op = ptr(params[3])
         let cap = GaussianCloud.invSigmoid(0.01)
         for i in 0..<n { op[i] = min(op[i], cap) }
-        let a = ptr(m1[3]), b = ptr(m2[3])
-        for i in 0..<n { a[i] = 0; b[i] = 0 }
+        let (ra, rb) = momentRowBytes(3)
+        memset(m1[3].contents(), 0, n * ra); memset(m2[3].contents(), 0, n * rb)
     }
 
     // MARK: full run
@@ -1407,6 +1444,7 @@ final class MetalTrainer: @unchecked Sendable {
             if isCancelled { throw TrainerError.cancelled }
             while isPaused && !isCancelled { Thread.sleep(forTimeInterval: 0.05) }
             let (l, p) = try trainStep()
+            if step % 25 == 0 || step == config.iterations { peakAllocatedBytes = max(peakAllocatedBytes, ctx.device.currentAllocatedSize) }
             emaLoss = step <= 1 ? l : emaLoss * 0.95 + l * 0.05
             emaPSNR = step <= 1 ? p : emaPSNR * 0.95 + p * 0.05
             if config.evalInterval > 0 && step % config.evalInterval == 0 {
@@ -1430,6 +1468,11 @@ final class MetalTrainer: @unchecked Sendable {
             }
         }
         if config.evalInterval > 0 { status.evalPSNR = try evaluate(); onStatus(status) }
+        if ProcessInfo.processInfo.environment["SPLAT_TRAIN_MEMLOG"] != nil {
+            let b = perSplatBufferBytes()
+            fputs(String(format: "memory: optimizerPrecision %@  peak GPU allocated %.1f MB  splats %d (capacity %d)  per-splat buffers %d B/splat (Adam state %d B/splat)\n",
+                         config.optimizerPrecision, Double(peakAllocatedBytes) / 1_048_576, n, capacity, b.total, b.moments), stderr)
+        }
         var result = snapshot()
         if config.strategy == .mcmc {
             // Drop gaussians that ended up dead.

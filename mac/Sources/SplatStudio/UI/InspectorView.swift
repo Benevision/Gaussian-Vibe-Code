@@ -413,7 +413,12 @@ struct AdvancedTrainingSettings: View {
             SettingRow(id: "train.strategy", showSummary: false) {
                 Picker("", selection: c.strategy) { Text("MCMC").tag(TrainingConfig.Strategy.mcmc); Text("Adaptive").tag(TrainingConfig.Strategy.adaptive) }.pickerStyle(.segmented).labelsHidden().frame(width: 160)
             }
-            SettingRow(id: "train.maxGaussians", showSummary: false) { IntField(value: c.maxGaussians, range: 10_000...10_000_000, step: 100_000) }
+            Group {
+                SettingRow(id: "train.maxGaussians", showSummary: false) { IntField(value: c.maxGaussians, range: 10_000...10_000_000, step: 100_000) }
+                SettingRow(id: "train.optimizerPrecision", showSummary: false) {
+                    Picker("", selection: c.optimizerPrecision) { Text("Full").tag("fp32"); Text("Compact").tag("compact") }.pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                }
+            }
             SettingRow(id: "train.densifyStart", showSummary: false) { IntField(value: c.densifyStart, range: 0...50_000, step: 100) }
             SettingRow(id: "train.densifyStop", showSummary: false) { IntField(value: c.densifyStop, range: 0...100_000, step: 500) }
             SettingRow(id: "train.densifyInterval", showSummary: false) { IntField(value: c.densifyInterval, range: 10...1000, step: 10) }
