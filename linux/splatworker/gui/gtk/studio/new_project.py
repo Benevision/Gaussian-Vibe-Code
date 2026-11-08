@@ -54,6 +54,11 @@ class NewProjectDialog(Adw.Window):
         choose = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
         choose.connect("clicked", lambda *_: self._choose())
         self.path_row.add_suffix(choose)
+        self.photos_btn = Gtk.Button(label="Photos folder…", valign=Gtk.Align.CENTER,
+                                     tooltip_text="A folder of side-by-side or over / under stereo photos")
+        self.photos_btn.connect("clicked", lambda *_: Gtk.FileDialog(title="Stereo photos folder").select_folder(
+            self, None, lambda dlg, res: self._picked(dlg.select_folder_finish, res)))
+        self.path_row.add_suffix(self.photos_btn)
         src.add(self.path_row)
         self.name_row = Adw.EntryRow(title="Project name")
         self.name_row.connect("changed", lambda r: self._valid())
@@ -188,6 +193,7 @@ class NewProjectDialog(Adw.Window):
             r.set_visible(kind == "photos")
         for r in self.stereo_rows:
             r.set_visible(kind == "stereo")
+        self.photos_btn.set_visible(kind == "stereo")
         self.right_row.set_visible(kind == "stereo" and self.o.stereo_layout == "separateFiles")
         posed = kind in ("colmap", "nerfstudio", "dataset")
         self.cams_group.set_visible(not posed)
@@ -199,7 +205,7 @@ class NewProjectDialog(Adw.Window):
             self.o.matching = "sequential"
         self.path_row.set_title({"photos": "Photos folder", "video": "Video file", "video360": "360° video file",
                                  "photos360": "Folder of 360° photos (2:1 equirectangular)",
-                                 "stereo": "Stereo video (left eye for two files)",
+                                 "stereo": "Stereo video (the left eye for two files) or photos folder",
                                  "capture": ".splatcapture folder", "colmap": "COLMAP project folder",
                                  "nerfstudio": "transforms.json", "dataset": "Dataset folder"}[kind])
         self._valid()

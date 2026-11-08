@@ -328,6 +328,34 @@ def test_stereo_pipeline_rig_metric_scale_and_depth(server, tmp_path):
     assert out is not None and out.is_file()
 
 
+def test_stereo_photos_folder_pipeline(server, tmp_path):
+    """A folder of side-by-side photos is split here (no frames job) and solved as a stereo rig."""
+    client, backend, _ = server
+    src = tmp_path / "sbs"
+    src.mkdir()
+    rng = np.random.default_rng(4)
+    for i in range(3):
+        tex = (rng.random((24, 40, 3)) * 255).astype(np.uint8)
+        Image.fromarray(np.concatenate([tex[:, 4:36], tex[:, 8:40]], 1)).save(src / f"S{i}.png")   # 64×24
+    opts = ProjectOptions(name="SP", source_kind="stereo", source=str(src), sky=False, stereo_baseline_mm=64,
+                          stereo_fov=60, holdout_every=0)
+    proj = Project.create(tmp_path / "projects", "SP", opts.to_dict())
+    out, events = run(client, proj, opts, train=False)
+    assert events[-1][0] == "done", [d for k, d in events if k in ("failed", "log")][-5:]
+    ds = proj.dataset_dir
+    assert sorted(p.name for p in (ds / "images").iterdir())[:2] == ["000000_L.jpg", "000000_R.jpg"]
+    fr = json.loads((ds / "frames.json").read_text())
+    assert fr["stereoLayout"] == "sideBySide" and fr["rig"]["baseline"] == pytest.approx(0.064)
+    assert "request" not in fr                                  # split here, not by a worker frames job
+    assert fr["frames"][0]["focalPx"] == pytest.approx(16 / np.tan(np.radians(30)))
+    doc = json.loads((ds / "dataset.json").read_text())
+    assert len(doc["request"]["rig"]["groups"]) == 3
+    cams = {Path(c["image"]).stem: c for c in doc["cameras"]}
+    d = np.linalg.norm(np.asarray(cams["000001_R"]["cameraToWorld"])[:3, 3]
+                       - np.asarray(cams["000001_L"]["cameraToWorld"])[:3, 3])
+    assert d == pytest.approx(0.064)
+
+
 def test_mask_editor_jobs_on_the_local_worker(server, tmp_path):
     """A SAM 2 click (maskpreview) and tracking (masks / sam2_track) as jobs of the local server."""
     from conftest import make_dataset

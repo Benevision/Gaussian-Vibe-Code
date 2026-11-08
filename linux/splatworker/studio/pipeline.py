@@ -222,7 +222,18 @@ class LocalPipeline:
         imported = False
 
         # 1. source → images (or a finished dataset.json)
-        if o.source_kind in ("video", "video360", "stereo"):
+        if o.source_kind == "stereo" and src.is_dir():           # a folder of SBS / over-under stereo photos
+            self._stage("Extracting frames")
+            shutil.rmtree(ds / "masks", ignore_errors=True)
+            from . import stereo
+
+            st = stereo.split_photos(src, ds, o.stereo_layout, o.stereo_swap,
+                                     (o.stereo_baseline_mm or 0) / 1000.0 or None, o.stereo_fov or None,
+                                     o.max_image_size, progress=lambda f, m: (self._check(), self._progress(f, m)))
+            for r in st["rejected"][:20]:
+                self._log(f"skipped {r['item']}: {r['reason']}")
+            self._stereo_frames(ds)
+        elif o.source_kind in ("video", "video360", "stereo"):
             self._stage("Extracting frames")
             shutil.rmtree(ds / "masks", ignore_errors=True)        # stacked masks of an earlier run
             vid = self._register(self._video_folder(src))

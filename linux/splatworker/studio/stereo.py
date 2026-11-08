@@ -77,6 +77,82 @@ def prepare_frames(ds: Path, both_eyes: bool = True) -> Dict:
             "droppedRight": dropped}
 
 
+def photo_layout(w: int, h: int, name: str, layout: str = "auto") -> Tuple[str, bool]:
+    """(layout, anamorphic) of a packed stereo photo — the worker's rule for videos (splatprep/stereo.py)."""
+    if layout in ("sideBySide", "topBottom"):
+        return layout, False
+    a = w / max(h, 1)
+    n = name.lower()
+    if any(k in n for k in ("_tb", "top-bottom", "topbottom", "over-under")) or a < 1.05:
+        return "topBottom", a >= 1.5
+    if a >= 2.6 or "_sbs" in n or "side-by-side" in n:
+        return "sideBySide", a < 2.6
+    if abs(a - 2) < 0.05:
+        return "sideBySide", False
+    raise ValueError(f"{name}: can't tell the stereo layout (aspect {a:.2f}): choose side by side or over / under")
+
+
+def split_photos(src: Path, ds: Path, layout: str = "auto", swap: bool = False, baseline: Optional[float] = None,
+                 fov: Optional[float] = None, max_size: int = 0, progress: Progress = lambda f, m="": None) -> Dict:
+    """A folder of side-by-side / over-under stereo photos → ``images/<n>_L|R.jpg`` + ``frames.json`` with the rig
+    (the same layout the worker's ``frames`` job writes for stereo video). One photo in memory at a time."""
+    import math
+
+    from PIL import Image, ImageOps
+
+    from .importers import list_images
+
+    ds = Path(ds)
+    (ds / "images").mkdir(parents=True, exist_ok=True)
+    files = list_images(Path(src))
+    if not files:
+        raise ValueError(f"no photos in {src}")
+    frames: List[Dict] = []
+    rejected: List[Dict] = []
+    used_layout = None
+    for i, p in enumerate(files):
+        try:
+            with Image.open(p) as im0:
+                im = ImageOps.exif_transpose(im0).convert("RGB")
+            lay, ana = photo_layout(im.width, im.height, p.name, layout)
+        except Exception as e:  # noqa: BLE001 — reported, not fatal
+            rejected.append({"item": p.name, "reason": str(e)})
+            continue
+        used_layout = used_layout or lay
+        W, H = im.size
+        boxes = ((0, 0, W // 2, H), (W // 2, 0, 2 * (W // 2), H)) if lay == "sideBySide" else \
+            ((0, 0, W, H // 2), (0, H // 2, W, 2 * (H // 2)))
+        eyes = [im.crop(b) for b in boxes]
+        im.close()
+        if swap:
+            eyes.reverse()
+        for eye, img, tag in zip(("left", "right"), eyes, ("L", "R")):
+            if ana:
+                img = img.resize((img.width * 2, img.height) if lay == "sideBySide" else (img.width, img.height * 2),
+                                 Image.BICUBIC)
+            if max_size and max(img.size) > max_size:
+                img.thumbnail((max_size, max_size), Image.LANCZOS)
+            name = f"{i:06d}_{tag}.jpg"
+            img.save(ds / "images" / name, quality=95)
+            fr = {"image": f"images/{name}", "width": img.width, "height": img.height, "group": i, "eye": eye,
+                  "source": str(p)}
+            if fov:
+                f = img.width / 2 / math.tan(math.radians(fov) / 2)
+                fr.update(focalPx=f, cx=img.width / 2, cy=img.height / 2)
+            frames.append(fr)
+        progress((i + 1) / len(files), f"{i + 1}/{len(files)} stereo photos")
+    if not frames:
+        raise ValueError("no usable stereo photos")
+    rig = {"baseline": baseline or None, "origin": "user" if baseline else "default", "parallel": True,
+           "lens": "pinhole"}
+    if fov:
+        rig["horizontalFOV"] = float(fov)
+    fs = {"root": ".", "frames": frames, "rejected": rejected, "isMultiViewRig": False, "rig": rig,
+          "stereoLayout": used_layout}
+    (ds / "frames.json").write_text(json.dumps(fs, indent=1))
+    return {"pairs": len(frames) // 2, "rejected": rejected, "layout": used_layout}
+
+
 def sfm_rig(ds: Path) -> Optional[Dict]:
     """``rig`` hint for the camera solve (PROTOCOL.md §4, rigs with a baseline), or None."""
     fs = load_frames(ds)

@@ -14,16 +14,19 @@ from splatworker.studio import equirect, importers, static_regions
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
 
 
-def _splatprep_frames():
-    sys.path.insert(0, str(TOOLS))
-    try:
-        from splatprep import frames  # type: ignore
-    finally:
-        sys.path.remove(str(TOOLS))
-    return frames
+@pytest.fixture
+def splatprep(monkeypatch):
+    """The real tools/splatprep (other tests leave a fake one in sys.modules)."""
+    import importlib
+
+    monkeypatch.syspath_prepend(str(TOOLS))
+    for mod in list(sys.modules):
+        if mod == "splatprep" or mod.startswith("splatprep."):
+            monkeypatch.delitem(sys.modules, mod)
+    return lambda name: importlib.import_module(f"splatprep.{name}")
 
 
-def test_equirect_views_match_the_worker_and_the_mac_layout():
+def test_equirect_views_match_the_worker_and_the_mac_layout(splatprep):
     o = {"fovDegrees": 90.0, "outputSize": 32,
          "rings": [{"pitch": 0, "count": 8}, {"pitch": 35, "count": 4, "yawOffset": 22.5},
                    {"pitch": -35, "count": 4, "yawOffset": 22.5}],
@@ -31,7 +34,7 @@ def test_equirect_views_match_the_worker_and_the_mac_layout():
     vs = equirect.views(o)
     assert len(vs) == 16 and vs[0]["focal"] == pytest.approx(16.0)
     assert [v["yaw"] for v in vs[:3]] == [0.0, 45.0, 90.0] and vs[8]["yaw"] == 22.5 and vs[8]["pitch"] == 35
-    fr = _splatprep_frames()
+    fr = splatprep("frames")
     ref = fr.equirect_views({**fr.EQUIRECT_DEFAULTS, **o})
     for a, b in zip(vs, ref):
         np.testing.assert_allclose(a["R"], b["R"], atol=1e-12)
@@ -240,7 +243,7 @@ def test_stereo_disparity_and_depth():
 
 
 def _stereo_ds(root: Path, n=5, baseline=0.064, solved_gap=0.5, parallel=True):
-    (root / "images").mkdir(parents=True)
+    (root / "images").mkdir(parents=True, exist_ok=True)
     frames, cams = [], []
     for i in range(n):
         for k, (eye, t) in enumerate((("left", "L"), ("right", "R"))):
@@ -258,17 +261,16 @@ def _stereo_ds(root: Path, n=5, baseline=0.064, solved_gap=0.5, parallel=True):
     (root / "dataset.json").write_text(json.dumps({"format": "splatdataset", "version": 1, "cameras": cams,
                                                    "sceneCenter": [1, 1, 1], "sceneExtent": 10.0,
                                                    "points": "points3d.ply"}))
-    sys.path.insert(0, str(TOOLS))
-    try:
-        from splatprep.ply import write_points_ply  # type: ignore
-    finally:
-        sys.path.remove(str(TOOLS))
-    write_points_ply(root / "points3d.ply", np.array([[2.0, 4.0, 6.0]], np.float32))
     return root
 
 
-def test_stereo_metric_scale_and_rig_enforcement(tmp_path):
+def test_stereo_metric_scale_and_rig_enforcement(tmp_path, splatprep):
     from splatworker.studio import stereo
+
+    ply = splatprep("ply")
+    for d in ("ds", "ds2"):
+        (tmp_path / d).mkdir()
+        ply.write_points_ply(tmp_path / d / "points3d.ply", np.array([[2.0, 4.0, 6.0]], np.float32))
 
     ds = _stereo_ds(tmp_path / "ds")
     rig = stereo.sfm_rig(ds)
@@ -284,12 +286,7 @@ def test_stereo_metric_scale_and_rig_enforcement(tmp_path):
         r = np.asarray(by[f"{i:06d}_R"]["cameraToWorld"])
         np.testing.assert_allclose(r[:3, 3] - l[:3, 3], [0.064, 0, 0], atol=1e-9)
     assert doc["sceneExtent"] == pytest.approx(10 * st["scale"])
-    sys.path.insert(0, str(TOOLS))
-    try:
-        from splatprep.ply import read_points_ply  # type: ignore
-    finally:
-        sys.path.remove(str(TOOLS))
-    np.testing.assert_allclose(read_points_ply(ds / "points3d.ply")[0][0], np.array([2, 4, 6]) * st["scale"],
+    np.testing.assert_allclose(ply.read_points_ply(ds / "points3d.ply")[0][0], np.array([2, 4, 6]) * st["scale"],
                                rtol=1e-6)
     # a toed-out fisheye rig (Arcturus): scale only, no rig hint, no depth
     ds2 = _stereo_ds(tmp_path / "ds2", parallel=False)
