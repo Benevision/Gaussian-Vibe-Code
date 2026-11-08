@@ -30,6 +30,8 @@ AUTO_BOTH_MAX = 1000
 #: fraction of them has one. Free focal lengths collapse on flat scenes — a nadir drone survey shrank a
 #: 2795 px EXIF focal to 573 px and registered 33/120 photos — because depth and focal trade off there.
 FIX_FOCAL_MIN_PRIOR = 0.9
+# COLMAP model ids: OPENCV_FISHEYE, FOV, SIMPLE_RADIAL_FISHEYE, RADIAL_FISHEYE, THIN_PRISM_FISHEYE
+FISHEYE_MODEL_IDS = {5, 7, 8, 9, 10}
 #: After mapping with fixed focal lengths, one bundle adjustment frees them; it is kept only if no focal
 #: moves by more than this fraction (EXIF values are usually within a few percent).
 FOCAL_REFINE_MAX_DRIFT = 0.08
@@ -80,8 +82,10 @@ def _prior_focal_fraction(database, default: float = 1.0) -> float:
 
     try:
         with sqlite3.connect(str(database)) as c:
-            rows = c.execute("SELECT prior_focal_length FROM cameras").fetchall()
-        return sum(1 for (p,) in rows if p) / len(rows) if rows else default
+            rows = c.execute("SELECT prior_focal_length, model FROM cameras").fetchall()
+        # fisheye focal "priors" are splatprep's own starting guess (COLMAP needs one to initialise), not EXIF:
+        # they must stay free in bundle adjustment
+        return sum(1 for (p, m) in rows if p and m not in FISHEYE_MODEL_IDS) / len(rows) if rows else default
     except Exception:
         return default
 

@@ -375,7 +375,10 @@ def initial_camera_params(model: str, w: int, h: int, prior: Optional[PriorFrame
         # is ~4× too long for such lenses and the mapper then can't initialise.
         fx = fy = max(w, h) / np.pi
         cx, cy = w / 2.0, h / 2.0
-        has_prior = False
+        # COLMAP marks fisheye pairs without a focal prior as degenerate (a fundamental matrix can't recover a
+        # fisheye focal length), so the guess must be flagged as a prior; the mapper still refines it (see
+        # mapper._prior_focal_fraction, which doesn't count fisheye guesses as "fix the focal length").
+        has_prior = True
     else:
         fx = fy = 1.2 * max(w, h)
         cx, cy = w / 2.0, h / 2.0

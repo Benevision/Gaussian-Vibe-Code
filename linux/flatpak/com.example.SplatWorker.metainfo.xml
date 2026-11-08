@@ -81,6 +81,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.4.3" date="2026-11-09">
+      <description>
+        <p>Fisheye footage (e.g. Arcturus stereo cameras) now solves: one camera per lens instead of one per frame, a fisheye starting focal length flagged so COLMAP can initialise (it rejects fisheye pairs without one) but still refined, and the undistorted frames are what training uses.</p>
+      </description>
+    </release>
     <release version="1.4.2" date="2026-11-09">
       <description>
         <p>Flat surfaces on by default: the normals of the rendered depth are matched to the photos' depth maps — LiDAR when the capture has it, otherwise depth predicted by Depth Anything V2 and fitted to the scene. On a 1,258-photo drone flight this removed the haze of floaters between the cameras and the ground at the same held-out quality. Edge-aware weighting, and a denser starting point from the predicted depth.</p>
