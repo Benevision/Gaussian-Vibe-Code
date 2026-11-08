@@ -77,7 +77,7 @@ class T(SplatWorkerApp):
             (1200, lambda: shot("5-worker")),
             (300, lambda: self.window.show_section("inbox")),
             (1200, lambda: shot("6-inbox")),
-            (300, lambda: self.window.show_section("models")),
+            (300, lambda: (self.fake_benchmarks(), self.window.show_section("models"))),
             (1200, lambda: shot("7-models")),
             (300, lambda: self.window.show_section("reference")),
             (1200, lambda: shot("8-reference")),
@@ -146,6 +146,22 @@ class T(SplatWorkerApp):
         frames = sorted((out / "turntable-frames").glob("*.png")) if (out / "turntable-frames").is_dir() else []
         assert made or len(frames) == 12, (made, len(frames))
         print("turntable:", made or f"{len(frames)} PNG frames", flush=True)
+
+    def fake_benchmarks(self):
+        from splatworker.studio import benchmark
+        cfg = self.state.paths.config_dir
+        benchmark.save_benchmark(cfg, {"deviceId": "local", "name": "cachyos-pc", "date": "2026-11-08T10:00:00Z",
+                                       "gpu": "NVIDIA GeForce RTX 4080", "software": "SplatWork Node 1.4.0",
+                                       "trainStepsPerSecond": 41.7, "splats": 1000000, "megapixels": 1.92,
+                                       "uploadMBps": None, "downloadMBps": None})
+        benchmark.save_benchmark(cfg, {"deviceId": "http://192.168.0.20:7878", "name": "Office PC",
+                                       "date": "2026-11-07T18:30:00Z", "gpu": "NVIDIA GeForce RTX 3060",
+                                       "trainStepsPerSecond": 17.2, "splats": 1000000, "megapixels": 1.92,
+                                       "uploadMBps": 92.4, "downloadMBps": 101.0})
+        mp = self.window.models_page
+        assert hasattr(mp, "refresh_benchmarks"), mp           # not a BrokenPage
+        mp.refresh_benchmarks()
+        print("benchmarks table rows:", len(mp.benchmark_rows(benchmark.sorted_results(cfg))), flush=True)
 
     def offscreen(self):
         img = self.window.viewer_page.area.screenshot(640, 360)

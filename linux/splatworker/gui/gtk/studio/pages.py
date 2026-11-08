@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 import time
+from datetime import datetime
 from typing import Callable
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
-from ....studio import catalog
+from ....studio import benchmark, catalog
 from ....studio.inbox import format_code, list_captures, new_code
 from ...paths import splatprep_dir
 from ..common import action_row, alert, label
@@ -265,16 +267,124 @@ class ModelsPage(Gtk.Box):
                     r.set_subtitle_selectable(True)
                     row.add_row(r)
             cards.add(row)
+        box.append(self._benchmark_group())
         box.append(cards)
-        bench = group("Benchmarks", "Training speed of this PC is measured on the Mac's Compute page (steps/s, "
-                      "upload / download), which uses this worker. A local benchmark page is planned.")
-        box.append(bench)
         sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         clamp = Adw.Clamp(maximum_size=820)
         clamp.set_child(box)
         sw.set_child(clamp)
         self.append(_page("Models & Benchmarks", sw))
         self.update(None)
+
+    # ------------------------------------------------------------------ benchmark
+    def _benchmark_group(self) -> Gtk.Widget:
+        g = group("Benchmark", "Training speed on the standard SplatWork scene (1 M splats, 1600 × 1200 photos, "
+                               "2,000 steps): the same test the Mac's Compute → Benchmark runs, so the numbers "
+                               "compare. Takes a few minutes; the GPU's queue runs it like any other job.")
+        self.bench_run = plain_row(title="This PC", subtitle="Not measured yet")
+        self.bench_btn = Gtk.Button(label="Run benchmark", valign=Gtk.Align.CENTER)
+        self.bench_btn.add_css_class("suggested-action")
+        self.bench_btn.connect("clicked", lambda *_: self.run_benchmark())
+        self.bench_cancel = Gtk.Button(label="Cancel", valign=Gtk.Align.CENTER, visible=False)
+        self.bench_cancel.connect("clicked", lambda *_: self._bench_flag.set())
+        self.bench_run.add_suffix(self.bench_cancel)
+        self.bench_run.add_suffix(self.bench_btn)
+        self.bench_btn.set_visible(self.studio is not None)
+        g.add(self.bench_run)
+        self.bench_progress = Gtk.ProgressBar(show_text=True, visible=False, margin_top=8)
+        g.add(self.bench_progress)
+        frame = Gtk.Frame(margin_top=8)
+        self.bench_grid = Gtk.Grid(column_spacing=18, row_spacing=6, margin_top=10, margin_bottom=10,
+                                   margin_start=12, margin_end=12)
+        frame.set_child(self.bench_grid)
+        g.add(frame)
+        self._bench_flag = threading.Event()
+        self._bench_running = False
+        self.refresh_benchmarks()
+        return g
+
+    BENCH_COLUMNS = ("Device", "GPU", "Steps/s", "Splats", "Photos", "Upload", "Download", "Measured")
+
+    @staticmethod
+    def benchmark_rows(results):
+        """Table cells (strings) for saved results, fastest first."""
+        def mbps(v):
+            return f"{v:.0f} MB/s" if isinstance(v, (int, float)) and v > 0 else "—"
+
+        def when(d):
+            try:
+                return datetime.fromisoformat(str(d).replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                return str(d or "—")
+        out = []
+        for r in results:
+            out.append((str(r.get("name") or r.get("deviceId")), str(r.get("gpu") or "—"),
+                        f"{float(r['trainStepsPerSecond']):.1f}", f"{int(r.get('splats') or 0) / 1e6:.1f} M",
+                        f"{float(r.get('megapixels') or 0):.1f} MP", mbps(r.get("uploadMBps")),
+                        mbps(r.get("downloadMBps")), when(r.get("date"))))
+        return out
+
+    def refresh_benchmarks(self) -> None:
+        while (c := self.bench_grid.get_first_child()) is not None:
+            self.bench_grid.remove(c)
+        results = benchmark.sorted_results(self.state.paths.config_dir)
+        rows = self.benchmark_rows(results)
+        if not rows:
+            self.bench_grid.attach(label("No results yet: run the benchmark (or `splatworker benchmark`).",
+                                         ("dim-label",)), 0, 0, 1, 1)
+            return
+        for col, title in enumerate(self.BENCH_COLUMNS):
+            self.bench_grid.attach(label(title, ("heading",), wrap=False), col, 0, 1, 1)
+        for r, cells in enumerate(rows, start=1):
+            for col, text in enumerate(cells):
+                lab = label(text, ("numeric",) if col in (2, 3, 4, 5, 6) else (), wrap=col == 1,
+                            xalign=1.0 if col in (2, 3, 4, 5, 6) else 0.0)
+                self.bench_grid.attach(lab, col, r, 1, 1)
+        local = next((x for x in results if x.get("deviceId") == "local"), None)
+        if local is not None and not self._bench_running:
+            self.bench_run.set_subtitle(f"{float(local['trainStepsPerSecond']):.1f} steps/s on "
+                                        f"{local.get('gpu') or 'this PC'}")
+
+    def run_benchmark(self) -> None:
+        if self.studio is None or self._bench_running:
+            return
+        self._bench_running = True
+        self._bench_flag.clear()
+        self.bench_btn.set_sensitive(False)
+        self.bench_cancel.set_visible(True)
+        self.bench_progress.set_visible(True)
+        self.bench_progress.set_fraction(0.0)
+        self.bench_progress.set_text("Starting the worker server…")
+        cfg = self.state.paths.config_dir
+        scene = self.state.paths.cache_dir / benchmark.SCENE_DIR
+        name = self.state.settings.effective_name()
+
+        def progress(msg, frac):
+            GLib.idle_add(lambda: (self.bench_progress.set_fraction(min(max(frac, 0.0), 1.0)),
+                                   self.bench_progress.set_text(msg), False)[-1])
+
+        def go(client):
+            try:
+                rec = benchmark.run(client, scene, local=True, progress=progress, cancelled=self._bench_flag.is_set,
+                                    priority=self.studio.priority, device_id="local", name=name)
+                benchmark.save_benchmark(cfg, rec)
+                GLib.idle_add(self._bench_done, f"{rec['trainStepsPerSecond']:.1f} steps/s")
+            except benchmark.BenchmarkCancelled:
+                GLib.idle_add(self._bench_done, "Cancelled")
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(self._bench_done, f"Failed: {getattr(e, 'message', None) or e}")
+        self.studio.with_server(go, lambda msg: self._bench_done(f"Failed: {msg}"))
+
+    def _bench_done(self, msg: str) -> bool:
+        self._bench_running = False
+        self.bench_btn.set_sensitive(True)
+        self.bench_cancel.set_visible(False)
+        self.bench_progress.set_visible(False)
+        self.bench_run.set_subtitle(msg)
+        self.refresh_benchmarks()
+        if self.studio is not None:
+            self.studio.toast(f"Benchmark: {msg}")
+        return False
 
     @staticmethod
     def _cards():

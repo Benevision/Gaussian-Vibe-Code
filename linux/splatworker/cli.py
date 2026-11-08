@@ -1,4 +1,4 @@
-"""Command line interface: ``splatworker serve | train | gen-token | info``."""
+"""Command line interface: ``splatworker serve | train | gen-token | info | convert | splat-info | benchmark``."""
 
 from __future__ import annotations
 
@@ -179,6 +179,66 @@ def cmd_info(args) -> int:
     return 0
 
 
+def cmd_benchmark(args) -> int:
+    """The standard training benchmark (the Mac's Compute → Benchmark / ``--benchmark``) on a running worker:
+    by default this PC's (SplatWork Node's server, or ``splatworker serve``). Saved to benchmarks.json."""
+    from urllib.parse import urlparse
+
+    from .gui.paths import AppPaths
+    from .studio import benchmark
+    from .studio.client import ApiError, Client
+
+    paths = AppPaths.from_env()
+    config_dir = Path(args.config_dir).expanduser() if args.config_dir else paths.config_dir
+    url, token = args.url, _read_token(args)
+    if url is None:
+        port, require = 7878, True
+        try:
+            gs = json.loads(paths.settings_file.read_text(encoding="utf-8"))
+            port = int(gs.get("port", port))
+            require = bool(gs.get("require_token", True))
+        except (OSError, ValueError, TypeError):
+            pass
+        url = f"http://127.0.0.1:{port}"
+        if token is None and require and paths.token_file.is_file():
+            token = paths.token_file.read_text(encoding="utf-8").strip() or None
+    host = (urlparse(url).hostname or "").lower()
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    spec = benchmark.BenchmarkSpec(width=320, height=240, views=8, splats=20_000, steps=200, measure_from=50) \
+        if args.quick else benchmark.BenchmarkSpec()
+    scene = Path(args.scene_dir).expanduser() if args.scene_dir else paths.cache_dir / (
+        benchmark.SCENE_DIR + ("-quick" if args.quick else ""))
+    client = Client(url, token, timeout=60)
+    last = {"m": None}
+
+    def progress(msg, frac):
+        if msg != last["m"]:
+            last["m"] = msg
+            print(f"[{frac * 100:5.1f} %] {msg}", file=sys.stderr, flush=True)
+    try:
+        rec = benchmark.run(client, scene, spec, local=False, progress=progress, poll=args.poll,
+                            device_id="local" if loopback else url.rstrip("/"),
+                            name="This PC" if loopback else None, tmp_dir=paths.cache_dir / "tmp")
+    except KeyboardInterrupt:
+        print("interrupted (the benchmark job may still be running on the worker)", file=sys.stderr)
+        return 130
+    except (ApiError, benchmark.BenchmarkError) as e:
+        print(f"benchmark failed: {getattr(e, 'message', None) or e}", file=sys.stderr)
+        if isinstance(e, ApiError) and e.status is None:
+            print("Is the worker running? Start SplatWork Node (or `splatworker serve`), or pass --url.",
+                  file=sys.stderr)
+        return 1
+    if loopback:
+        rec["uploadMBps"] = rec["downloadMBps"] = None       # loopback "network" speed means nothing
+    if args.quick:
+        print("(quick run: a tiny scene, not comparable - not saved)", file=sys.stderr)
+    else:
+        benchmark.save_benchmark(config_dir, rec)
+        print(f"saved to {config_dir / benchmark.FILE}", file=sys.stderr)
+    print(json.dumps(rec, indent=1))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="splatworker", description="SplatWork Node - CUDA training server")
     p.add_argument("--version", action="version", version=f"splatworker {__version__}")
@@ -234,6 +294,17 @@ def build_parser() -> argparse.ArgumentParser:
     si = sub.add_parser("splat-info", help="print what a splat file contains")
     si.add_argument("file")
     si.set_defaults(func=cmd_splat_info)
+
+    b = sub.add_parser("benchmark", help="measure training speed (the standard SplatWork benchmark) on a running "
+                                         "worker, by default this PC's; saved to benchmarks.json")
+    b.add_argument("--url", help="worker URL (default: this PC's SplatWork Node server, from its settings)")
+    b.add_argument("--token", help="bearer token (default: SplatWork Node's own token file)")
+    b.add_argument("--token-file")
+    b.add_argument("--config-dir", help="where benchmarks.json is kept (default: the app's config dir)")
+    b.add_argument("--scene-dir", help="where the synthetic scene is built and cached")
+    b.add_argument("--quick", action="store_true", help="tiny scene and 200 steps: checks it works, not saved")
+    b.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)
+    b.set_defaults(func=cmd_benchmark)
     return p
 
 
