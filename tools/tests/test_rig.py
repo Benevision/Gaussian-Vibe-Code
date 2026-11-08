@@ -105,6 +105,21 @@ def test_fisheye_starts_from_a_fisheye_focal_length():
     from splatprep.backends.base import initial_camera_params
 
     p, prior = initial_camera_params("OPENCV_FISHEYE", 1600, 1600, None)
-    assert not prior and 400 < p[0] < 600 and p[2] == 800
+    assert prior and 400 < p[0] < 600 and p[2] == 800      # flagged so COLMAP can initialise fisheye pairs
     p, _ = initial_camera_params("OPENCV", 1600, 1600, None)
     assert p[0] == 1.2 * 1600
+
+
+def test_fisheye_guesses_do_not_fix_the_focal_length(tmp_path):
+    import sqlite3
+
+    from splatprep.mapper import _prior_focal_fraction
+
+    db = tmp_path / "d.db"
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE cameras (camera_id INTEGER, model INTEGER, prior_focal_length INTEGER)")
+        c.executemany("INSERT INTO cameras VALUES (?, ?, ?)", [(1, 5, 1), (2, 5, 1)])     # OPENCV_FISHEYE guesses
+    assert _prior_focal_fraction(db) == 0.0
+    with sqlite3.connect(db) as c:
+        c.executemany("INSERT INTO cameras VALUES (?, ?, ?)", [(3, 1, 1), (4, 1, 1)])     # PINHOLE with EXIF
+    assert _prior_focal_fraction(db) == 0.5
