@@ -63,6 +63,11 @@ class T(SplatWorkerApp):
             (1500, lambda: shot("4-projects")),
             (300, lambda: self.fake_pause()),
             (1200, lambda: shot("4b-projects-paused")),
+            (300, lambda: self.mask_editor()),
+            (1500, lambda: shot("4c-mask-editor")),
+            (300, lambda: self.mask_editor_paint()),
+            (1200, lambda: shot("4d-mask-editor-painted")),
+            (300, lambda: self.mask_editor_close()),
             (300, lambda: self.window.show_section("worker")),
             (1200, lambda: shot("5-worker")),
             (300, lambda: self.window.show_section("inbox")),
@@ -81,6 +86,8 @@ class T(SplatWorkerApp):
             (1500, lambda: shot("9-newproject")),
             (300, lambda: self.focus_train_on()),
             (1200, lambda: shot("9b-newproject-train-on")),
+            (300, lambda: self.new_project_kind("stereo")),
+            (1200, lambda: shot("9c-newproject-stereo")),
             (500, lambda: self.quit()),
         ]
         t = 0
@@ -96,6 +103,15 @@ class T(SplatWorkerApp):
                 w.train_on_row.grab_focus()
                 print("train on choices", [w.train_on_row.get_model().get_string(i)
                                            for i in range(w.train_on_row.get_model().get_n_items())], flush=True)
+
+    def new_project_kind(self, kind):
+        from gi.repository import Gtk
+        from splatworker.gui.gtk.studio.new_project import NewProjectDialog
+        for w in Gtk.Window.list_toplevels():
+            if isinstance(w, NewProjectDialog):
+                w.kind_row.set_selected(w.kind_row.keys.index(kind))
+                assert all(r.get_visible() for r in w.stereo_rows if r is not w.right_row)
+                print("new project kind", kind, flush=True)
 
     def brush(self):
         vp = self.window.viewer_page
@@ -140,6 +156,51 @@ class T(SplatWorkerApp):
         run.handle("log", "== Training")
         self.run = run
         self.window.studio.changed()
+
+    def mask_editor(self):
+        """A generated dataset with a person-mask layer in the Garden project, then the mask editor on it."""
+        from splatworker.studio import importers
+        ds = self.proj.dataset_dir
+        (ds / "images").mkdir(parents=True, exist_ok=True)
+        layer = ds / "splatprep-masks" / "person" / "masks"
+        layer.mkdir(parents=True, exist_ok=True)
+        yy, xx = np.mgrid[0:480, 0:640]
+        cams = []
+        for i in range(24):
+            img = np.stack([(xx * 0.3 + i * 4) % 255, (yy * 0.4) % 255, 120 + 60 * np.sin(xx / 40 + i / 3)], -1)
+            img[300:420, 80 + i * 10:160 + i * 10] = (230, 200, 40)          # a moving "person"
+            Image.fromarray(img.astype(np.uint8)).save(ds / "images" / f"{i:06d}.jpg")
+            m = np.full((480, 640), 255, np.uint8)
+            m[300:420, 80 + i * 10:160 + i * 10] = 0
+            Image.fromarray(m).save(layer / f"{i:06d}.png")
+            cams.append({"id": i, "image": f"images/{i:06d}.jpg", "width": 640, "height": 480, "fx": 500.0,
+                         "fy": 500.0, "cx": 320.0, "cy": 240.0, "cameraToWorld": np.eye(4).tolist()})
+        (ds / "dataset.json").write_text(json.dumps({"format": "splatdataset", "version": 1,
+                                                     "convention": "opencv", "cameras": cams}))
+        importers.finish_dataset(ds, importers.stack_masks(ds, [layer]), {})
+        page = self.window.projects_page
+        assert page.masks_btn.get_visible()
+        self.editor = page._edit_masks()
+        self.editor.set_default_size(1300, 800)
+        print("mask editor", len(self.editor.m), "images", flush=True)
+
+    def mask_editor_paint(self):
+        ed = self.editor
+        ed.go(3)
+        ed.tool_btns["paint"].set_active(True)
+        for x in range(420, 560, 10):
+            ed.m.paint(x, 120, 30, remove=True, begin=(x == 420))
+        ed._changed()
+        assert ed.m.dirty == {3} and not ed.m.keep()[120, 500]
+        st = ed.m.save()
+        assert st["saved"] == 1, st
+        from splatworker.studio import importers
+        assert (self.proj.dataset_dir / importers.MANUAL_LAYER / "masks" / "000003.png").is_file()
+        ed._changed()
+        print("mask editor painted + saved", st, flush=True)
+
+    def mask_editor_close(self):
+        self.editor.close()
 
     def fake_pause(self):
         page = self.window.projects_page

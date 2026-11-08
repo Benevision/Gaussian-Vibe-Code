@@ -774,6 +774,10 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         if "process" in caps or "frames" in caps:
             caps = caps + ["chain"]       # outputDatasetId, /v1/datasets/compose, /v1/datasets/{id}/archive.zip
             caps = caps + ["stream"]      # ≥ 1.3.13: training images streamed from disk when RAM is short
+        if "process" in caps:
+            caps = caps + ["maskpreview"]  # ≥ 1.4.0: processing task "maskpreview" (SAM 2 clicks, mask editor)
+        if "frames" in caps:
+            caps = caps + ["stereo"]      # ≥ 1.4.0: frames request "stereo" (two eyes → images/*_L, *_R)
         caps = caps + ["priority"]        # ≥ 1.4.0: POST /v1/jobs/{id}/prioritize, JobStatus.priority / origin
         if "train" in caps:
             caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)

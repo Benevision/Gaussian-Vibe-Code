@@ -221,7 +221,10 @@ class ProjectsPage(Gtk.Box):
         folder.connect("clicked", lambda *_: self.current and self._show_folder(self.current.root))
         trash = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="Move the project to the trash")
         trash.connect("clicked", lambda *_: self._trash())
-        for b in (self.open_btn, self.train_btn, self.prepare_btn, self.stop_btn, folder, trash):
+        self.masks_btn = Gtk.Button(label="Edit masks…", tooltip_text="Review and edit the masks: SAM 2 clicks, "
+                                    "brush, tracking, fixed parts of the frame")
+        self.masks_btn.connect("clicked", lambda *_: self.current and self._edit_masks())
+        for b in (self.open_btn, self.train_btn, self.prepare_btn, self.masks_btn, self.stop_btn, folder, trash):
             actions.append(b)
         box.append(actions)
         self.preset = "high"
@@ -420,6 +423,12 @@ class ProjectsPage(Gtk.Box):
         o.preset = self.preset
         self.ctl.start_pipeline(self.current, o)
         self._attach_later()
+
+    def _edit_masks(self):
+        from .mask_editor import open_mask_editor
+
+        self.mask_editor = open_mask_editor(self.window, self.ctl, self.current)
+        return self.mask_editor
 
     def _attach_later(self) -> None:
         def later():

@@ -111,3 +111,108 @@ def test_static_regions_camera_keys():
     assert static_regions.camera_key("000001_v05.jpg", (10, 10), {"rotationToRig": [[1]]}) == "_v05"
     assert static_regions.camera_key("000001_L.jpg", (10, 10), {"eye": "left"}) == "eye left"
     assert static_regions.camera_key("a.jpg", (10, 20), None) == "10x20"
+
+
+# ------------------------------------------------------------------------------------------ mask editor
+
+def _masked_dataset(root: Path, n=3, w=40, h=30):
+    from conftest import make_dataset
+
+    make_dataset(root, n_cams=n, width=w, height=h, depth=False, points=False)
+    layer = root / "splatprep-masks" / "person" / "masks"
+    layer.mkdir(parents=True)
+    m = np.full((h, w), 255, np.uint8)
+    m[0:10, 0:10] = 0                                   # the model removed the top-left corner of image 0
+    Image.fromarray(m).save(layer / "000000.png")
+    masks = importers.stack_masks(root, [layer], dilate=0)
+    importers.finish_dataset(root, masks, {})
+    return root
+
+
+def test_mask_editor_paint_restore_undo_save_and_restack(tmp_path):
+    from splatworker.studio.mask_edit import MaskEditModel
+
+    ds = _masked_dataset(tmp_path / "ds")
+    m = MaskEditModel(ds)
+    assert len(m) == 3 and m.has_mask(0) and not m.has_mask(1)
+    assert not m.keep()[5, 5] and m.keep()[20, 30]
+    m.paint(30, 20, 3, remove=True)                    # paint out a disk
+    m.paint(5, 5, 2, remove=False)                     # paint back inside the model's mask
+    k = m.keep()
+    assert not k[20, 30] and k[5, 5] and not k[8, 8]
+    assert m.dirty == {0}
+    m.select(1)
+    m.paint(10, 10, 2, remove=True)
+    assert m.undo() and m.index == 1 and m.keep(1)[10, 10]
+    m.select(0)
+    assert not m.keep()[20, 30]                        # image 0's edit survived switching (packed)
+    st = m.save()
+    assert st["saved"] >= 1
+    man = np.asarray(Image.open(ds / importers.MANUAL_LAYER / "masks" / "000000.png"))
+    res = np.asarray(Image.open(ds / importers.MANUAL_LAYER / "restore" / "000000.png"))
+    assert man[20, 30] == 0 and man[5, 5] == 255 and res[5, 5] == 255 and res[20, 30] == 0
+    stacked = np.asarray(Image.open(ds / "masks" / "000000.png"))
+    assert stacked[20, 30] == 0 and stacked[5, 5] == 255 and stacked[8, 8] == 0
+    doc = json.loads((ds / "dataset.json").read_text())
+    assert doc["cameras"][0]["mask"] == "masks/000000.png" and "mask" not in doc["cameras"][1]
+    # the model layer is recomputed by "Prepare again": the manual layer still applies on top
+    m2 = MaskEditModel(ds)
+    assert not m2.keep(0)[20, 30] and m2.keep(0)[5, 5]
+    m2.clear_frame()
+    m2.save()
+    stacked = np.asarray(Image.open(ds / "masks" / "000000.png"))
+    assert stacked[20, 30] == 255 and stacked[5, 5] == 0          # back to the model's mask only
+    assert not (ds / importers.MANUAL_LAYER / "masks" / "000000.png").exists()
+
+
+def test_mask_editor_sam_clicks_and_tracking_results(tmp_path):
+    from splatworker.studio.mask_edit import MaskEditModel
+
+    ds = _masked_dataset(tmp_path / "ds")
+    m = MaskEditModel(ds)
+    m.select(2)
+    m.add_point(20, 15, True)
+    m.add_point(2, 2, False)
+    req = m.preview_request("out")
+    assert req["task"] == "maskpreview" and req["previewImage"] == "000002.png"
+    assert req["maskPrompts"][0]["points"] == [[20.0, 15.0, 1], [2.0, 2.0, 0]]
+    obj = np.zeros((30, 40), np.uint8)
+    obj[12:18, 15:25] = 255
+    Image.fromarray(obj).save(tmp_path / "preview.png")
+    assert m.apply_object(tmp_path / "preview.png") == pytest.approx(60 / 1200)
+    assert not m.keep()[15, 20] and m.keep()[5, 5]
+    m.reset_clicks()
+    assert m.keep()[15, 20] and not m.points
+    m.add_point(20, 15, True)
+    tr = m.track_request("t")
+    assert tr["maskModel"] == "sam2_track" and tr["maskPrompts"] == [
+        {"image": "000002.png", "points": [[20.0, 15.0, 1]], "objectId": 1}]
+    td = tmp_path / "track" / "masks"
+    td.mkdir(parents=True)
+    keep = np.full((30, 40), 255, np.uint8)
+    keep[0:5, 30:40] = 0
+    for i in range(3):
+        Image.fromarray(keep).save(td / f"{i:06d}.png")
+    assert m.apply_tracked(td) == 3 and m.dirty == {0, 1, 2} and not m.tracked
+    m.save()
+    for i in range(3):
+        assert np.asarray(Image.open(ds / "masks" / f"{i:06d}.png"))[2, 35] == 0
+
+
+def test_processing_validates_new_tasks():
+    from splatworker.processing import ProcessingError, validate_request
+
+    r = validate_request({"task": "maskpreview", "maskPrompts": [{"image": "a.jpg", "points": [[1, 2, 1]]}],
+                          "previewImage": "a.jpg"})
+    assert r["imagesDir"] == "images"
+    with pytest.raises(ProcessingError):
+        validate_request({"task": "maskpreview"})
+    with pytest.raises(ProcessingError):
+        validate_request({"task": "maskpreview", "maskPrompts": [{}], "previewImage": "../x.jpg"})
+    r = validate_request({"task": "frames", "video": "a.mp4", "stereo": {"layout": "separateFiles",
+                                                                         "rightVideo": "b.mp4"}})
+    assert r["stereo"]["rightVideo"] == "b.mp4"
+    with pytest.raises(ProcessingError):
+        validate_request({"task": "frames", "video": "a.mp4", "stereo": {"rightVideo": "/etc/passwd"}})
+    with pytest.raises(ProcessingError):
+        validate_request({"task": "frames", "video": "a.mp4", "stereo": "sbs"})

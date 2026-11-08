@@ -236,6 +236,22 @@ to run its New Project pipeline on its own project folders without uploading. Ot
 datasets: `GET /v1/datasets` leaves them out (and never lists the folder path), and jobs, compose, archive and
 delete answer `404` for them.
 
+**Mask editor clicks (worker ≥ 1.4.0, capability `maskpreview`).** `POST /v1/process` also accepts splatprep's
+`"task": "maskpreview"` (it existed in splatprep for the Mac's local mask server; the worker now lets it through
+`validate_request`): one image, SAM 2 point / box prompts → `outputDir/preview.png`.
+
+```jsonc
+{"task": "maskpreview", "imagesDir": "images", "outputDir": "_click",
+ "previewImage": "000012.jpg",                       // required in practice; relative, no ".."
+ "maskPrompts": [{"image": "000012.jpg", "points": [[x, y, 1], [x, y, 0]]}],   // required, non-empty; image pixels
+ "previewObjectMask": true}                          // 255 on the object (default: keep convention, object = 0)
+```
+
+SplatWork Node's mask editor sends one per click (the model loads per job, a few seconds on the PC) and tracks the
+clicked objects with the existing `masks` task (`"maskModel": "sam2_track"`, `"maskPrompts"`, `"replaceMasks": true`).
+Its edits are stored as a mask layer of the project's dataset (`splatprep-masks/manual/masks` 255 = keep,
+`…/restore` 255 = keep whatever other layers say), so they survive "Prepare again".
+
 ```jsonc
 // JobStatus
 {

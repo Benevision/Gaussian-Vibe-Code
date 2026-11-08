@@ -38,6 +38,14 @@ def run_request(req, workdir, progress):
         progress({"stage": "frames", "progress": 1.0, "message": "6 frames"})
         return {"stats": {}}
     images = sorted((w / req["imagesDir"]).iterdir())
+    if req["task"] == "maskpreview":
+        out.mkdir(parents=True)
+        im = Image.open(w / req["imagesDir"] / req["previewImage"])
+        m = np.zeros((im.height, im.width), np.uint8)
+        x, y, _ = req["maskPrompts"][0]["points"][0]
+        m[max(0, int(y) - 3):int(y) + 3, max(0, int(x) - 3):int(x) + 3] = 255
+        Image.fromarray(m).save(out / "preview.png")
+        return {"stats": {}}
     if req["task"] == "masks":
         (out / "masks").mkdir(parents=True)
         for k, p in enumerate(images):
@@ -265,6 +273,28 @@ def test_360_photos_pipeline_rig_nadir_masks_and_manual_layer(server, tmp_path):
     m = np.asarray(Image.open(proj.dataset_dir / by["000001_v00"]["mask"]))
     assert m[2, 2] == 0 and m[20, 20] == 255
     assert manual.is_dir()
+
+
+def test_mask_editor_jobs_on_the_local_worker(server, tmp_path):
+    """A SAM 2 click (maskpreview) and tracking (masks / sam2_track) as jobs of the local server."""
+    from conftest import make_dataset
+    from splatworker.studio.mask_edit import MaskEditModel, run_job, scratch_dir
+
+    client, backend, _ = server
+    ds = tmp_path / "proj" / "dataset"
+    make_dataset(ds, n_cams=3, width=32, height=24, depth=False, points=False)
+    m = MaskEditModel(ds)
+    m.add_point(10, 10, True)
+    dest = scratch_dir(ds)
+    run_job(client, ds, m.preview_request("_mp"), "click", dest, poll=0.02)
+    assert m.apply_object(dest / "preview.png") > 0 and not m.keep()[10, 10]
+    dest2 = scratch_dir(ds)
+    run_job(client, ds, m.track_request("_tr"), "track", dest2, poll=0.02)
+    assert m.apply_tracked(dest2 / "masks") == 2           # the fake marks every other image
+    m.save()
+    doc = json.loads((ds / "dataset.json").read_text())
+    assert sum("mask" in c for c in doc["cameras"]) == 2
+    assert client.get("/v1/datasets") == []
 
 
 def test_static_regions_stage(server, tmp_path):
