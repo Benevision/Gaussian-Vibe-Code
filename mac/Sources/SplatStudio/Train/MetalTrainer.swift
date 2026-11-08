@@ -9,6 +9,7 @@ struct RasterParams {
     var bg = SIMD4<Float>()
     var absGrad: UInt32 = 0, hasDepth: UInt32 = 0, numGaussians: UInt32 = 0, step: UInt32 = 0
     var ssimWeight: Float = 0.2, depthWeight: Float = 0, invNumPixels: Float = 0, pad: Float = 0
+    var sky: UInt32 = 0, pad1: UInt32 = 0, pad2: UInt32 = 0, pad3: UInt32 = 0
 }
 
 struct AdamParams {
@@ -109,6 +110,10 @@ final class MetalTrainer: @unchecked Sendable {
     private var apHoldout: MTLBuffer?
     private var apM1: [Float] = [], apM2: [Float] = [], apSteps: [Int] = [], apInit: [Float] = []
     private var viewIndex: [ObjectIdentifier: Int] = [:]
+    /// Learned skybox (config.skybox): background of every pixel = panorama(view direction). nil = constant background.
+    private(set) var skybox: TrainSkybox?
+    /// dL/dT_final per pixel when the skybox is on (sky_backward → rasterize_backward).
+    private var skyDT: MTLBuffer!
     /// Moving-object masking is only trusted when every surface is seen from several nearby views.
     private(set) var transientEnabled = false
     /// Median over photos of the gap to the most similar other photo (degrees of view direction plus
@@ -201,6 +206,13 @@ final class MetalTrainer: @unchecked Sendable {
         }
         maxPixels = views.map { $0.width * $0.height }.max() ?? 0
         allocPixelBuffers()
+        let skyPhotos = trainViews.filter { $0.sky != nil }.count
+        if config.skybox == "on" || (config.skybox == "auto" && skyPhotos > 0) {
+            let u = dataset.manifest.upVector
+            let up = u.count == 3 ? SIMD3<Float>(u[0], u[1], u[2]) : SIMD3<Float>(0, -1, 0)
+            skybox = TrainSkybox(up: up, height: config.skyboxResolution, ctx: ctx)
+            progress("Learned skybox \(2 * config.skyboxResolution)×\(config.skyboxResolution) at infinity; \(skyPhotos) photos have a sky mask (splats kept out, weight \(config.skyAlphaWeight))")
+        }
         progress("Initialising gaussians")
         let cloud: GaussianCloud
         if let pURL = dataset.pointCloudURL, FileManager.default.fileExists(atPath: pURL.path),
@@ -254,6 +266,25 @@ final class MetalTrainer: @unchecked Sendable {
         }
         memset(alive.contents(), 1, max(n, 1))
         memset(gradStats.contents(), 0, gradStats.length)
+        // Resuming a run that learns a skybox: continue from the saved panorama.
+        if skybox != nil, let s = cloud.skybox, let t = TrainSkybox(s, ctx: ctx) { skybox = t }
+    }
+
+    /// Uses the skybox saved with `g` (or none) as the background, e.g. to evaluate a splat loaded from a file.
+    private func useSkybox(of g: GaussianCloud) {
+        skybox = g.skybox.flatMap { TrainSkybox($0, ctx: ctx) }
+    }
+
+    /// Encodes pred += T_final · sky(dir) (the raster ran with a black background).
+    private func encodeSkyComposite(_ enc: MTLComputeCommandEncoder, v: TrainView, rp: inout RasterParams) {
+        guard let skybox else { return }
+        var sp = skybox.params(for: v, penalty: 0)
+        enc.setBuffer(img, offset: 0, index: 0); enc.setBuffer(finalT, offset: 0, index: 1)
+        enc.setBuffer(skybox.tex, offset: 0, index: 2)
+        enc.setBytes(&sp, length: MemoryLayout<SkyParams>.stride, index: 3)
+        enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 4)
+        dispatch2D(enc, "sky_composite", v.width, v.height)
+        enc.memoryBarrier(scope: .buffers)
     }
 
     private func allocGaussianBuffers(_ count: Int) {
@@ -297,6 +328,7 @@ final class MetalTrainer: @unchecked Sendable {
         resid = ctx.buffer(hw * 4, label: "resid"); weights = ctx.buffer(hw * 4, label: "weights")
         mu = ctx.buffer(hw * 15 * 4, label: "mu"); dmaps = ctx.buffer(hw * 9 * 4, label: "dmaps")
         rawImg = ctx.buffer(hw * 12, label: "rawImg"); apGrad = ctx.buffer(64, label: "apGrad")
+        skyDT = ctx.buffer(hw * 4, label: "skyDT")
         if config.appearanceCorrection, Self.exposureLocked(views.map(\.camera)) {
             // Locked exposure (Splat Capture): nothing to correct, and the extra freedom costs held-out quality
             // (bedroom, 8k: 21.20 dB with correction, 22.21 dB without) and drifts colours too bright.
@@ -662,6 +694,22 @@ final class MetalTrainer: @unchecked Sendable {
         c.fx *= sx; c.fy *= sy; c.cx = (c.cx + 0.5) * sx - 0.5; c.cy = (c.cy + 0.5) * sy - 0.5
         c.width = w; c.height = h
         let child = TrainView(camera: c, width: w, height: h, target: buf, depth: v.depth, depthSize: v.depthSize, holdout: v.holdout)
+        if let sky = v.sky {
+            let ss = sky.contents().bindMemory(to: UInt8.self, capacity: v.width * v.height)
+            let sb = ctx.buffer(w * h, label: "sky/\(factor)")
+            let sd = sb.contents().bindMemory(to: UInt8.self, capacity: w * h)
+            var cnt = 0
+            for y in 0..<h {
+                for x in 0..<w {
+                    var a = 0
+                    for dy in 0..<factor { for dx in 0..<factor { a += Int(ss[(y * factor + dy) * v.width + x * factor + dx]) } }
+                    let m = UInt8(a / (factor * factor))
+                    sd[y * w + x] = m
+                    if m > 127 { cnt += 1 }
+                }
+            }
+            child.sky = sb; child.skyCount = cnt
+        }
         if let i = viewIndex[ObjectIdentifier(v)] { viewIndex[ObjectIdentifier(child)] = i }   // same colour correction
         v.levels[factor] = child
         return child
@@ -724,7 +772,8 @@ final class MetalTrainer: @unchecked Sendable {
 
     private func forwardBackward(view v: TrainView, bg: SIMD3<Float>, optimize: Bool) throws -> (Float, Float) {
         var u = uniforms(for: v, shDegree: activeSHDegree)
-        var rp = rasterParams(for: v, bg: bg)
+        var rp = rasterParams(for: v, bg: skybox != nil ? .zero : bg)
+        if skybox != nil { rp.sky = 1 }
         let tf0 = CACurrentMediaTime()
         guard try encodeForward(view: v, u: &u, rp: &rp) else { return (0, 0) }
         if Self.profiling { profile("1 preprocess+depth sort+scan", CACurrentMediaTime() - tf0) }
@@ -737,6 +786,7 @@ final class MetalTrainer: @unchecked Sendable {
             cb = ctx.queue.makeCommandBuffer()!; enc = cb.makeComputeCommandEncoder()!
         }
         encodeRaster(enc, v: v, rp: &rp)
+        encodeSkyComposite(enc, v: v, rp: &rp)
         let apIndex = config.appearanceCorrection ? viewIndex[ObjectIdentifier(v)] : nil
         let bgIndex = (config.bilateralGrid && optimize && !v.holdout) ? viewIndex[ObjectIdentifier(v)] : nil
         if let bi = bgIndex, let bgGrid {
@@ -799,6 +849,24 @@ final class MetalTrainer: @unchecked Sendable {
             dispatch2D(enc, "appearance_backward", v.width, v.height)
             enc.memoryBarrier(scope: .buffers)
         }
+        if let skybox {
+            // dL/dT_final per pixel (sky colour · g + sky-coverage penalty) and the panorama's gradient.
+            let train = optimize && !v.holdout
+            if train { memset(skybox.grad.contents(), 0, skybox.count * 4) }
+            let pen: Float = (v.sky != nil && v.skyCount > 0 && config.skyAlphaWeight > 0) ? -config.skyAlphaWeight / Float(v.skyCount) : 0
+            var sp = skybox.params(for: v, penalty: pen)
+            var want: UInt32 = train ? 1 : 0
+            enc.setBuffer(gradImg, offset: 0, index: 0); enc.setBuffer(finalT, offset: 0, index: 1)
+            enc.setBuffer(skybox.tex, offset: 0, index: 2)
+            enc.setBytes(&sp, length: MemoryLayout<SkyParams>.stride, index: 3)
+            enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 4)
+            enc.setBuffer(skybox.grad, offset: 0, index: 5)
+            enc.setBuffer(v.sky ?? skyDT, offset: 0, index: 6)
+            enc.setBuffer(skyDT, offset: 0, index: 7)
+            enc.setBytes(&want, length: 4, index: 8)
+            dispatch2D(enc, "sky_backward", v.width, v.height)
+            enc.memoryBarrier(scope: .buffers)
+        }
         split("3 SSIM loss + grad")
         // backward raster
         enc.setBuffer(acc, offset: 0, index: 0); enc.set(UInt32(n * 12), 1)
@@ -811,6 +879,7 @@ final class MetalTrainer: @unchecked Sendable {
         enc.setBytes(&rp, length: MemoryLayout<RasterParams>.stride, index: 5)
         enc.setBuffer(finalT, offset: 0, index: 6); enc.setBuffer(nContrib, offset: 0, index: 7)
         enc.setBuffer(gradImg, offset: 0, index: 8); enc.setBuffer(acc, offset: 0, index: 9)
+        enc.setBuffer(skyDT, offset: 0, index: 10)
         enc.dispatchThreadgroups(MTLSize(width: Int(rp.tilesX), height: Int(rp.tilesY), depth: 1), threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         enc.memoryBarrier(scope: .buffers)
         split("4 backward raster")
@@ -863,6 +932,7 @@ final class MetalTrainer: @unchecked Sendable {
             enc.setBytes(&ap, length: MemoryLayout<AdamParams>.stride, index: 4)
             enc.dispatch1D(perSplat ? ctx.pipeline("adam_sh_compact") : adam, count: count)
         }
+        if let skybox, !v.holdout { skybox.encodeStep(enc, ctx: ctx) }
         if config.strategy == .mcmc && config.noiseLR > 0 {
             enc.memoryBarrier(scope: .buffers)
             var np = SIMD4<Float>(config.noiseLR * lrPos, Float(bitPattern: UInt32(truncatingIfNeeded: rng.next())), Float(n), 0)
@@ -928,11 +998,12 @@ final class MetalTrainer: @unchecked Sendable {
 
     private func renderUnlocked(view v: TrainView, background: SIMD3<Float> = .zero) throws -> (pixels: [UInt8], mse: Float)? {
         var u = uniforms(for: v, shDegree: activeSHDegree)
-        var rp = rasterParams(for: v, bg: background)
+        var rp = rasterParams(for: v, bg: skybox != nil ? .zero : background)
         guard try encodeForward(view: v, u: &u, rp: &rp) else { return nil }
         let cb = ctx.queue.makeCommandBuffer()!
         let enc = cb.makeComputeCommandEncoder()!
         encodeRaster(enc, v: v, rp: &rp)
+        encodeSkyComposite(enc, v: v, rp: &rp)   // held-out views too: the learned sky is the backdrop
         // Training views: their own colour correction. Held-out views: the average one (what exports bake in),
         // so evaluation during training scores what the exported splat will look like. For a splat loaded from
         // a file (--eval) the average is the identity.
@@ -1030,6 +1101,7 @@ final class MetalTrainer: @unchecked Sendable {
     /// Renders `g` from every dataset view (training and held out), e.g. to make a synthetic benchmark scene.
     func renderEach(cloud g: GaussianCloud, _ body: (_ camera: DatasetCamera, _ width: Int, _ height: Int, _ rgba: [UInt8]) throws -> Void) throws {
         load(g)
+        useSkybox(of: g)
         step = config.shDegreeInterval * (config.shDegree + 1)
         for v in trainViews + evalViews {
             if let r = try render(view: v) { try body(v.camera, v.width, v.height, r.pixels) }
@@ -1043,6 +1115,7 @@ final class MetalTrainer: @unchecked Sendable {
     /// and visual side-by-sides (tools/eval/evaluate.py).
     func evaluate(cloud g: GaussianCloud, saveRendersTo dir: URL? = nil) throws -> (mean: Float, perView: [Float], names: [String], failed: [String]) {
         load(g)
+        useSkybox(of: g)
         step = config.shDegreeInterval * (config.shDegree + 1)
         let set = evalViews.isEmpty ? Array(trainViews.prefix(8)) : evalViews
         var per: [Float] = [], names: [String] = [], failed: [String] = []
@@ -1081,6 +1154,7 @@ final class MetalTrainer: @unchecked Sendable {
         }
         g.positions = arr(0); g.scales = arr(1); g.rotations = arr(2); g.opacities = arr(3); g.sh = arr(4)
         if let m = meanAppearance() { Self.bakeColourCorrection(m, into: &g.sh, count: n) }
+        g.skybox = skybox?.export()
         return g
     }
 
@@ -1476,7 +1550,9 @@ final class MetalTrainer: @unchecked Sendable {
         var result = snapshot()
         if config.strategy == .mcmc {
             // Drop gaussians that ended up dead.
+            let sky = result.skybox
             result = result.filtered((0..<result.count).map { result.opacity($0) > config.pruneOpacity })
+            result.skybox = sky
         }
         return result
     }

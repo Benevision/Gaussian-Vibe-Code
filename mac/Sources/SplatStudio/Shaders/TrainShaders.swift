@@ -9,6 +9,7 @@ struct RasterParams {
     float4 bg;             // rgb background, w unused
     uint absGrad; uint hasDepth; uint numGaussians; uint step;
     float ssimWeight; float depthWeight; float invNumPixels; float pad;
+    uint sky; uint pad1; uint pad2; uint pad3;   // sky = 1: dL/dT_final per pixel comes from skyDT (learned skybox)
 };
 
 // ---------------------------------------------------------------- preprocess (forward)
@@ -314,6 +315,7 @@ kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],
                                device const uint* nContrib [[buffer(7)]],
                                device const float* gradImg [[buffer(8)]],
                                device atomic<float>* acc [[buffer(9)]],
+                               device const float* skyDT [[buffer(10)]],
                                uint2 tg [[threadgroup_position_in_grid]],
                                uint2 lt [[thread_position_in_threadgroup]],
                                uint tidx [[thread_index_in_threadgroup]],
@@ -336,7 +338,9 @@ kernel void rasterize_backward(device const uint2* ranges [[buffer(0)]],
     float T = Tfinal;
     uint last = inside ? nContrib[pid] : 0;
     float4 dpix = inside ? float4(gradImg[pid], gradImg[hw + pid], gradImg[2*hw + pid], gradImg[3*hw + pid]) : float4(0);
-    float bgDot = dot(rp.bg.xyz, dpix.xyz);
+    // dL/dT_final: the constant background's colour · dL/dpixel, or (learned skybox) the per-pixel value from
+    // sky_backward (sky colour · dL/dpixel plus the sky-coverage penalty).
+    float bgDot = rp.sky != 0u ? (inside ? skyDT[pid] : 0.0f) : dot(rp.bg.xyz, dpix.xyz);
     float4 accumRec = float4(0), lastColor = float4(0);
     float lastAlpha = 0.0f;
     uint contributor = uint(toDo);
@@ -640,6 +644,114 @@ kernel void bilagrid_backward(device float* gradImg [[buffer(0)]], device const 
             for (int col = 0; col < 4; col++)
                 atomic_fetch_add_explicit(&gridGrad[bg_index(r * 4 + col, i0.z + dz, i0.y + dy, i0.x + dx)], w * g[r] * xin[col], memory_order_relaxed);
         }
+    }
+}
+
+// ---------------------------------------------------------------- learned skybox (equirectangular, at infinity)
+// Same model as linux/splatworker/skybox.py and sky_fragment (RenderShaders): s = M · d_cam with M = B · Rᵀ
+// (B rows = right, up, forward); longitude atan2(s.x, s.z) (left edge −180°, wraps), latitude asin(s.y)
+// (top row +90°, clamped); bilinear between texel centres of sigmoid(logits). Logits interleaved RGB per texel.
+struct SkyParams {
+    float4 r0; float4 r1; float4 r2;
+    float4 intr;            // fx fy cx cy
+    uint W; uint H;
+    float penalty;          // dL/dT_final on sky-masked pixels: −skyAlphaWeight / #sky pixels
+    uint hasMask;
+};
+
+struct SkyTap { uint idx[4]; float w[4]; uint key; };
+
+inline SkyTap sky_tap(uint2 p, constant SkyParams& sp) {
+    float3 dc = float3((float(p.x) + 0.5f - sp.intr.z) / sp.intr.x, (float(p.y) + 0.5f - sp.intr.w) / sp.intr.y, 1.0f);
+    float3 s = normalize(float3(dot(sp.r0.xyz, dc), dot(sp.r1.xyz, dc), dot(sp.r2.xyz, dc)));
+    float lon = precise::atan2(s.x, s.z), lat = precise::asin(clamp(s.y, -1.0f, 1.0f));
+    int W = int(sp.W), H = int(sp.H);
+    float u = (lon * (0.5f / M_PI_F) + 0.5f) * float(W) - 0.5f;
+    float v = (0.5f - lat / M_PI_F) * float(H) - 0.5f;
+    float fu = floor(u), fv = floor(v);
+    float ax = u - fu, ay = v - fv;
+    int x0 = int(fu) % W; if (x0 < 0) x0 += W;
+    int x1 = x0 + 1 == W ? 0 : x0 + 1;
+    int yr = int(fv);
+    int y0 = clamp(yr, 0, H - 1), y1 = clamp(yr + 1, 0, H - 1);
+    SkyTap t;
+    t.idx[0] = uint(y0 * W + x0); t.idx[1] = uint(y0 * W + x1); t.idx[2] = uint(y1 * W + x0); t.idx[3] = uint(y1 * W + x1);
+    t.w[0] = (1 - ax) * (1 - ay); t.w[1] = ax * (1 - ay); t.w[2] = (1 - ax) * ay; t.w[3] = ax * ay;
+    t.key = uint((yr + 2) * W + x0);
+    return t;
+}
+
+inline float sky_sig(float x) { return 1.0f / (1.0f + exp(-x)); }
+
+inline float3 sky_color(thread const SkyTap& t, device const float* sky) {
+    float3 c = 0;
+    for (int k = 0; k < 4; k++) {
+        uint b = t.idx[k] * 3;
+        c += t.w[k] * float3(sky_sig(sky[b]), sky_sig(sky[b + 1]), sky_sig(sky[b + 2]));
+    }
+    return c;
+}
+
+// pred += T_final · sky(dir), after rasterize_forward ran with a black background.
+kernel void sky_composite(device float* img [[buffer(0)]], device const float* finalT [[buffer(1)]],
+                          device const float* sky [[buffer(2)]], constant SkyParams& sp [[buffer(3)]],
+                          constant RasterParams& rp [[buffer(4)]], uint2 p [[thread_position_in_grid]]) {
+    if (p.x >= rp.width || p.y >= rp.height) return;
+    uint hw = rp.width * rp.height, pid = p.y * rp.width + p.x;
+    float T = finalT[pid];
+    if (T <= 0.0f) return;
+    SkyTap t = sky_tap(p, sp);
+    float3 c = sky_color(t, sky);
+    img[pid] += T * c.x; img[hw + pid] += T * c.y; img[2*hw + pid] += T * c.z;
+}
+
+// From dL/dpixel (gradImg, after the colour-correction backward): dL/dT_final per pixel (sky colour · g, plus the
+// sky-coverage penalty on sky-masked pixels) for rasterize_backward, and (wantTex) the panorama logit gradients
+// T · g · w · σ(1 − σ). Neighbouring pixels mostly hit the same 2×2 texels: a SIMD-group whose pixels all share
+// one footprint reduces with simd_sum and adds once; otherwise every lane adds its own (device atomics).
+kernel void sky_backward(device const float* gradImg [[buffer(0)]], device const float* finalT [[buffer(1)]],
+                         device const float* sky [[buffer(2)]], constant SkyParams& sp [[buffer(3)]],
+                         constant RasterParams& rp [[buffer(4)]], device atomic_float* skyGrad [[buffer(5)]],
+                         device const uchar* skyMask [[buffer(6)]], device float* skyDT [[buffer(7)]],
+                         constant uint& wantTex [[buffer(8)]],
+                         uint2 p [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+    bool inb = p.x < rp.width && p.y < rp.height;
+    uint hw = rp.width * rp.height, pid = p.y * rp.width + p.x;
+    float vals[12];
+    for (int k = 0; k < 12; k++) vals[k] = 0.0f;
+    SkyTap t = {};
+    uint key = 0xFFFFFFFFu;
+    bool nz = false;
+    if (inb) {
+        t = sky_tap(p, sp);
+        key = t.key;
+        float3 g = float3(gradImg[pid], gradImg[hw + pid], gradImg[2*hw + pid]);
+        float T = finalT[pid];
+        float3 c = 0;
+        for (int k = 0; k < 4; k++) {
+            uint b = t.idx[k] * 3;
+            float3 s = float3(sky_sig(sky[b]), sky_sig(sky[b + 1]), sky_sig(sky[b + 2]));
+            c += t.w[k] * s;
+            float3 d = T * t.w[k] * g * s * (1.0f - s);
+            vals[k * 3] = d.x; vals[k * 3 + 1] = d.y; vals[k * 3 + 2] = d.z;
+        }
+        float dT = dot(c, g);
+        if (sp.hasMask != 0u && skyMask[pid] > 127) dT += sp.penalty;
+        skyDT[pid] = dT;
+        nz = T > 0.0f && any(g != 0.0f);
+    }
+    if (wantTex == 0u || !simd_any(nz)) return;
+    uint kmin = simd_min(key);
+    if (simd_all(!inb || key == kmin)) {
+        uint leader = simd_min(inb ? lane : 0xFFFFFFFFu);
+        for (int k = 0; k < 12; k++) {
+            float s = simd_sum(vals[k]);
+            if (lane == leader && s != 0.0f)
+                atomic_fetch_add_explicit(&skyGrad[t.idx[k / 3] * 3 + uint(k % 3)], s, memory_order_relaxed);
+        }
+    } else if (nz) {
+        for (int k = 0; k < 12; k++)
+            if (vals[k] != 0.0f) atomic_fetch_add_explicit(&skyGrad[t.idx[k / 3] * 3 + uint(k % 3)], vals[k], memory_order_relaxed);
     }
 }
 

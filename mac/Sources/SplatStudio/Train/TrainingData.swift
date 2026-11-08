@@ -14,6 +14,9 @@ final class TrainView {
     let depthSize: SIMD2<UInt32>
     let worldToCam: simd_float4x4
     let holdout: Bool
+    /// Sky mask (uchar per pixel, > 127 = sky; learned skybox) and its sky-pixel count, when the photo has one.
+    var sky: MTLBuffer?
+    var skyCount = 0
     /// Lower-resolution copies for coarse-to-fine training (factor → view), built on first use.
     var levels: [Int: TrainView] = [:]
 
@@ -81,6 +84,20 @@ enum TrainingDataLoader {
             }
             for i in 0..<(w * h) { px[i * 4 + 3] = gray[i] }
         }
+        var skyBuf: MTLBuffer?, skyCount = 0
+        if let sk = cam.sky, let ssrc = CGImageSourceCreateWithURL(dataset.url(sk) as CFURL, nil),
+           let simg = CGImageSourceCreateImageAtIndex(ssrc, 0, nil) {
+            let b = ctx.buffer(w * h, label: "sky")
+            memset(b.contents(), 0, w * h)
+            if let gc = CGContext(data: b.contents(), width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) {
+                gc.interpolationQuality = .high
+                gc.draw(simg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            }
+            let sp = b.contents().bindMemory(to: UInt8.self, capacity: w * h)
+            for i in 0..<(w * h) where sp[i] > 127 { skyCount += 1 }
+            skyBuf = b
+        }
         var c = cam
         let sx = Float(w) / Float(cam.width), sy = Float(h) / Float(cam.height)
         c.fx *= sx; c.fy *= sy; c.cx *= sx; c.cy *= sy; c.width = w; c.height = h
@@ -91,7 +108,9 @@ enum TrainingDataLoader {
             depthBuf = ctx.buffer(values, label: "depth")
             dsize = SIMD2(UInt32(dw), UInt32(dh))
         }
-        return TrainView(camera: c, width: w, height: h, target: buf, depth: depthBuf, depthSize: dsize, holdout: cam.holdout ?? false)
+        let view = TrainView(camera: c, width: w, height: h, target: buf, depth: depthBuf, depthSize: dsize, holdout: cam.holdout ?? false)
+        view.sky = skyBuf; view.skyCount = skyCount
+        return view
     }
 }
 

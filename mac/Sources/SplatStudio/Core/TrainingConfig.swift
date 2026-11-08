@@ -84,6 +84,12 @@ struct TrainingConfig: Codable, Equatable {
     var errorDrivenDensify = false
     /// Splats on a far-field sphere (0 = off), for distant land/sky beyond the capture (aerial, outdoor).
     var backgroundShell = 0
+    /// Learned skybox at infinity (equirectangular panorama behind the splats): "auto" = on when any training
+    /// photo has a sky mask, "on", "off". Sky-masked pixels also push splat coverage out (skyAlphaWeight).
+    var skybox = "auto"
+    /// Panorama height in texels (width = 2 × height).
+    var skyboxResolution = 256
+    var skyAlphaWeight: Float = 0.05
     /// MCMC growth/relocation places copies along the parent's longest axis (ImprovedGS / IGS+) instead of
     /// stacking them on top of it. +2.2 dB held-out on a 649-photo bedroom capture (+3.4 dB together with
     /// moving-object masking off).
@@ -112,6 +118,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.transientMaxViewGap, &transientMaxViewGap)
         d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio); d(.longAxisSplit, &longAxisSplit)
         d(.bigSplatReg, &bigSplatReg); d(.bigSplatMaxAngle, &bigSplatMaxAngle); d(.progressiveResolution, &progressiveResolution); d(.errorDrivenDensify, &errorDrivenDensify); d(.backgroundShell, &backgroundShell)
+        d(.skybox, &skybox); d(.skyboxResolution, &skyboxResolution); d(.skyAlphaWeight, &skyAlphaWeight)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         d(.optimizerPrecision, &optimizerPrecision)
         region = try? c.decode(Region.self, forKey: .region)
