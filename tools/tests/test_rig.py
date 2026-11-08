@@ -99,3 +99,12 @@ def test_quaternion_roundtrip():
                        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
                        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
         assert np.allclose(R, R2, atol=1e-6)
+
+
+def test_fisheye_starts_from_a_fisheye_focal_length():
+    from splatprep.backends.base import initial_camera_params
+
+    p, prior = initial_camera_params("OPENCV_FISHEYE", 1600, 1600, None)
+    assert not prior and 400 < p[0] < 600 and p[2] == 800
+    p, _ = initial_camera_params("OPENCV", 1600, 1600, None)
+    assert p[0] == 1.2 * 1600

@@ -1373,7 +1373,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 | [Ignore moving objects](#ignore-moving-objects) | Off | – | Easy |
 | [Moving-object sensitivity](#moving-object-sensitivity) | 3× | 2–8 | Advanced |
 | [Edge-aware depth](#edge-aware-depth) | On | – | Advanced |
-| [Flat surfaces (depth normals)](#flat-surfaces-depth-normals) | 0 | 0–0.5 | Advanced |
+| [Flat surfaces (depth normals)](#flat-surfaces-depth-normals) | 0.05 | 0–0.5 | Advanced |
 | [Predicted depth](#predicted-depth) | Auto | – | Advanced |
 | [Flat splats](#flat-splats) | 0 | 0–0.1 | Advanced |
 | [Needle-splat penalty](#needle-splat-penalty) | 0.1 | 0–1 | Advanced |
@@ -1479,7 +1479,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 
 | | |
 |---|---|
-| **Default** | 0 |
+| **Default** | 0.05 |
 | **Range** | 0–0.5 |
 | **Mode** | Advanced |
 | **ID** | `train.normalWeight` |
@@ -1489,7 +1489,8 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 - This computes the surface direction (normal) of the rendered depth at every pixel and pulls it towards the direction measured from the photo's depth map (LiDAR / stereo, or — on a Linux worker — depth predicted by a depth model for photos without a depth sensor).
 - The idea is the one Spirula Studio uses with its MoGe priors.
 - Weighted down at photo edges like edge-aware depth.
-- Needs depth maps; 0 turns it off.
+- On our 649-photo bedroom capture it cut the surface-direction error against LiDAR from 33° to 18° (held-out PSNR −0.1 dB); on a 1,258-photo drone flight held-out PSNR was unchanged and the haze of floaters between the cameras and the ground disappeared.
+- 0 turns it off.
 
 ### Predicted depth
 

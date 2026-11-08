@@ -95,8 +95,11 @@ struct TrainingConfig: Codable, Equatable {
     /// moving-object masking off).
     var longAxisSplit = true
     /// Depth-normal consistency: surface normals of the rendered depth are pulled towards normals of the photo's
-    /// sensor depth (LiDAR / stereo), so flat walls and floors train flat instead of bumpy. Needs depth maps.
-    var normalWeight: Float = 0
+    /// sensor depth (LiDAR / stereo; or depth predicted by a depth model when there is none — depthPriors), so flat
+    /// walls and floors train flat instead of bumpy. On by default since 2026-11-09: bedroom capture normals vs
+    /// LiDAR 33° → 18° mean (−0.1 dB held-out); 1,258-photo drone flight: same held-out PSNR, and the haze of floaters
+    /// between the cameras and the ground is gone.
+    var normalWeight: Float = 0.05
     /// Step at which the normal loss starts (the scene needs a rough shape first).
     var normalStart = 1000
     /// Pushes splats towards flat discs (penalises the smallest axis's share of the splat's size), which gives each

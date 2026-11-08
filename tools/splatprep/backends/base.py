@@ -370,6 +370,12 @@ def initial_camera_params(model: str, w: int, h: int, prior: Optional[PriorFrame
         fx = fy = float(exif_f)
         cx, cy = w / 2.0, h / 2.0
         has_prior = True
+    elif model == "OPENCV_FISHEYE":
+        # equidistant fisheye seen across ~180°: f ≈ (max side / 2) / (π / 2). COLMAP's pinhole guess (1.2 × side)
+        # is ~4× too long for such lenses and the mapper then can't initialise.
+        fx = fy = max(w, h) / np.pi
+        cx, cy = w / 2.0, h / 2.0
+        has_prior = False
     else:
         fx = fy = 1.2 * max(w, h)
         cx, cy = w / 2.0, h / 2.0
@@ -400,6 +406,16 @@ def write_database(
 ) -> List[int]:
     model = camera_model_name(ctx.request)
     single = bool(ctx.opt("singleCamera", True))
+    # Stereo footage: one camera per eye (each lens has its own intrinsics, shared by all of its frames) instead of
+    # one per image, which leaves the mapper hundreds of unknown lenses.
+    eye_of: Dict[str, int] = {}
+    srig = ctx.request.get("rig") or {}
+    if not single and str(srig.get("kind", "")).lower() == "stereo":
+        for pair in srig.get("pairs") or []:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                eye_of[Path(str(pair[0])).name] = 0
+                eye_of[Path(str(pair[1])).name] = 1
+    cam_for_eye: Dict[Tuple[int, int, int], int] = {}
     db = COLMAPDatabase.create(db_path)
     cam_for_size: Dict[Tuple[int, int], int] = {}
     cam_for_sensor: Dict[int, int] = {}
@@ -422,13 +438,18 @@ def write_database(
             db.add_keypoints(iid, kps_colmap[i].astype(np.float32))
             ids.append(iid)
             continue
+        eye = eye_of.get(Path(name).name)
         if single and (w, h) in cam_for_size:
             cid = cam_for_size[(w, h)]
+        elif eye is not None and (w, h, eye) in cam_for_eye:
+            cid = cam_for_eye[(w, h, eye)]
         else:
             exif_f = None if (prior is not None and prior.intrinsics is not None) else exif_focal_px(ctx.image_dir / name, w, h)
             params, has_prior = initial_camera_params(model, w, h, prior, exif_f)
             cid = db.add_camera(CAMERA_MODEL_IDS[model], w, h, params, has_prior)
             cam_for_size[(w, h)] = cid
+            if eye is not None:
+                cam_for_eye[(w, h, eye)] = cid
         iid = db.add_image(name, cid)
         db.add_keypoints(iid, kps_colmap[i].astype(np.float32))
         ids.append(iid)

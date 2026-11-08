@@ -202,7 +202,12 @@ final class MetalTrainer: @unchecked Sendable {
         var priors: [Int: MonoDepth.Map] = [:]
         var cams = dataset.manifest.cameras
         if let ids = config.cameraIds { let s = Set(ids); cams = cams.filter { s.contains($0.id) } }
-        if config.normalWeight > 0, config.depthPriors == "auto" || config.depthPriors == "on",
+        #if os(iOS)
+        let priorsAllowed = false   // the phone's training budget has no room for the depth model (jetsam)
+        #else
+        let priorsAllowed = true
+        #endif
+        if priorsAllowed, config.normalWeight > 0, config.depthPriors == "auto" || config.depthPriors == "on",
            !cams.contains(where: { $0.depth != nil && !($0.holdout ?? false) }) {
             let pts = (dataset.pointCloudURL).flatMap { try? PLYCodec.readPointCloud(url: $0) }?.points ?? []
             do {

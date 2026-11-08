@@ -154,7 +154,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `transientMaxViewGap` | float | 15 | transient masking is skipped when the median nearest-view gap (degrees, view angle + camera offset at scene scale) exceeds this |
 | `depthEdgeAware` | bool | true | depth loss weighted by exp(−10·|∇I|) of the target image |
 | `anisotropyReg` | float | 0.1 | penalty on max(longest/shortest axis − `anisotropyMaxRatio`, 0) per splat |
-| `normalWeight` | float | 0 | depth-normal consistency: normals of the rendered depth (central differences) vs normals of the photo's depth map, loss (1−c)/2 + √((1−c)/2), summed over valid opaque pixels / pixel count |
+| `normalWeight` | float | 0.05 | depth-normal consistency: normals of the rendered depth (central differences) vs normals of the photo's depth map, loss (1−c)/2 + √((1−c)/2), summed over valid opaque pixels / pixel count |
 | `normalStart` | int | 1000 | step at which the normal loss starts |
 | `flatnessReg` | float | 0 | per-splat penalty on the smallest axis's share s_min² / Σ s² (flat discs) |
 | `depthPriors` | string | `"auto"` | Linux worker: photos without sensor depth get a monocular depth map (Depth Anything V2 Small) fitted to the dataset's points, for the normal loss. `auto` = when no training photo has depth and `normalWeight` > 0; `on`; `off` |

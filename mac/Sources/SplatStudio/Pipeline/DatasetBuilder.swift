@@ -294,8 +294,9 @@ enum DatasetBuilder {
             fatalError("handled above")
         }
 
-        // 3. Masks.
-        if o.maskStaticRegions {
+        // 3. Masks. Circular fisheye footage always gets them: the black lens border is fixed in every frame, and
+        // its edge would otherwise "match" perfectly between all frames and break camera solving.
+        if o.maskStaticRegions || frames.looksCircularFisheye {
             try await FrameMasker.waitForFrames(frames.root, progress: maskP)
             let reps = try await StaticRegions.apply(to: &frames, progress: maskP)
             for r in reps where r.staticFraction > 0 {

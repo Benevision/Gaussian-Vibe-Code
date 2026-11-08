@@ -77,7 +77,7 @@ class TrainingConfig:
     anisotropyMaxRatio: float = 10.0
     # Depth-normal consistency (rendered-depth normals vs sensor-depth normals) and the flat-disc regulariser,
     # as on the Mac
-    normalWeight: float = 0.0
+    normalWeight: float = 0.05     # on by default since 1.4.2 (see the Mac's TrainingConfig for the measurements)
     normalStart: int = 1000
     flatnessReg: float = 0.0
     # Photos without sensor depth: predict depth with a monocular model (Depth Anything V2 Small), fitted to the
