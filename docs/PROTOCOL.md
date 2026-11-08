@@ -207,15 +207,19 @@ jobs queued by other machines; everybody else's requests queue at 0.
 | `POST /v1/jobs/{id}/checkpoint?wait=<s>` | – | `JobStatus`; asks a running training job to write `checkpoint.ply` of its current splats without stopping. With `wait` (≤ 300 s) the answer comes once it is written (or the job stops); `checkpointStep` says which step it holds. A paused job already has one (written when it paused). `409` for jobs that are queued, finished or not training |
 | `GET /v1/jobs/{id}/checkpoint.ply` | – | the latest checkpoint (3DGS PLY, same layout as `result.ply`); header `X-Checkpoint-Step`; `404` until one was written |
 
-Who may pause, resume or checkpoint a job: the desktop app on the worker PC (the person who owns the GPU, see
-below) and the client that submitted the job (its address equals the job's `origin`); others get `403`. Pausing
-parks somebody's job and a checkpoint briefly stalls it, so another machine on the LAN must not do either to a job
-it didn't send. (`cancel` stays open to every authenticated client, as before.) A client whose address changed
-since it submitted (e.g. Wi-Fi → ethernet) can't pause that job.
+Who may pause or checkpoint a job: only the client that submitted it (its address equals the job's `origin`;
+the desktop app on the worker PC counts as `"local"`); others get `403`. The desktop app doesn't park other
+computers' jobs, since their apps may have no Resume button. It may resume any paused job. A client whose address
+changed since it submitted (e.g. Wi-Fi → ethernet) can't pause that job. A paused job of another computer
+resumes by itself after an hour and when the worker restarts; a paused job of the desktop app is cancelled
+(its saved state removed) after 14 days. `JobStatus.pausedAt` (epoch seconds) says when it was paused.
+
+A job taken from the queue is `"loading"` straight away; a pause or cancel that arrives before it really starts
+holds or stops it without running it.
 
 `"paused"` is neither active nor finished: `JobStatus` keeps `step`, `elapsedSeconds` (carried on after resuming)
 and `checkpointStep`; `etaSeconds` is `null`; the job keeps its dataset (`DELETE /v1/datasets/{id}` → `409`);
-`cancel` and `DELETE` work as for a queued job. Paused jobs survive a worker restart, and a resumed job that was
+`cancel` and `DELETE` work as for a queued job. Paused jobs of the desktop app survive a worker restart, and a resumed job that was
 running when the worker stopped returns to `"paused"` (from its last pause) instead of `"failed"`. Clients that
 don't know the state see an unknown, non-terminal value and keep polling (the Mac's `JobState` is tolerant).
 
@@ -225,6 +229,13 @@ it starts in the environment (`SPLATWORK_LOCAL_SECRET`, read once and removed), 
 `X-SplatWork-Local: <secret>` from 127.0.0.1. Without both, a request is remote. A server started without the
 secret (e.g. `splatworker serve --allow-local-datasets` by hand) keeps these endpoints off and doesn't advertise
 `local`.
+
+**The desktop app's jobs, seen from other computers (worker ≥ 1.4.0).** They stay in `GET /v1/jobs` (so queue
+estimates still work) with their state, progress, priority and GPU, but `name` is `"Job on this PC"`,
+`datasetId` is `""` and `message` / `outputDatasetId` are null; their files (log, previews, result, census,
+checkpoint, cameras, output) answer `404`, and `cancel` / `DELETE` answer `403`. Other clients' jobs show
+`origin` `"remote"` instead of their address (a client still sees its own). Anybody may still cancel or delete
+other computers' jobs, as before.
 
 **Local datasets (worker ≥ 1.4.0, `--allow-local-datasets` + the secret, capability `local`, the desktop app only).**
 `POST /v1/datasets/local` `{"path":"/abs/folder"}` → `{"datasetId",…,"path"}` registers a folder *in place* (nothing
