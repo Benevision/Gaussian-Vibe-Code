@@ -31,7 +31,7 @@ SHORTCUTS = [
                     ("Shift-drag / right-drag", "Pan"), ("Scroll / pinch", "Zoom"),
                     ("Double-click", "Set the orbit centre"), ("Tab", "Orbit ↔ Fly"),
                     ("W A S D Q E / arrows", "Fly (Shift ×4, Alt ×¼)"), ("F / R", "Frame the scene / reset")]),
-    ("Display", [("1 – 5", "Colour, Depth, Centres, Ellipses, Opacity")]),
+    ("Display", [("1 – 6", "Colour, Depth, Centres, Ellipses, Opacity, Coverage")]),
     ("Editing", [("Delete", "Delete the selection"), ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo")]),
     ("Files", [("Ctrl+N", "New project"), ("Ctrl+O", "Open"), ("Ctrl+E", "Export"), ("?", "This list")]),
 ]

@@ -268,3 +268,34 @@ def test_gl_view_dependent_sh():
         assert abs(int(flat) - 127) < 20
     finally:
         ctx.close()
+
+
+def test_gl_coverage_mode():
+    from splatworker.studio.renderer import SplatRenderer, ViewSettings, render_offscreen
+
+    ctx = _gl()
+    try:
+        g = single((0.1, 0.1, 0.9), pos=(0, 0, 0))
+        cam = Camera(pitch=0, distance=3)
+        r = SplatRenderer()
+        r.init_gl()
+        r.set_cloud(g)
+        order, n = depth_order(g.positions, cam.position(), cam.forward(), cam.near)
+        r.set_order(order, n)
+        s = ViewSettings(background=(0, 0, 0), mode="coverage")
+        grey = render_offscreen(r, cam, 64, 48, s)[24, 32].astype(int)
+        assert abs(grey[0] - grey[1]) < 8 and abs(grey[1] - grey[2]) < 8 and grey[0] > 80, grey  # not computed
+        r.set_coverage(np.array([0.0], np.float32))
+        poor = render_offscreen(r, cam, 64, 48, s)[24, 32].astype(int)
+        assert poor[0] > 150 and poor[1] < 80 and poor[2] < 80, poor                          # red
+        r.set_coverage(np.array([1.0], np.float32))
+        good = render_offscreen(r, cam, 64, 48, s)[24, 32].astype(int)
+        assert good[1] > 120 and good[1] > good[0] + 40 and good[1] > good[2] + 40, good    # green
+        r.set_coverage(np.zeros(5, np.float32))          # wrong length: ignored → grey again
+        assert not r.has_coverage
+        r.set_coverage(np.array([1.0], np.float32))
+        r.set_cloud(g)                                   # a new scene drops the old scores
+        assert not r.has_coverage
+        r.destroy()
+    finally:
+        ctx.close()

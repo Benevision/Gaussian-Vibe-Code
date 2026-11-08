@@ -9,7 +9,7 @@ from typing import Callable, Optional
 import numpy as np
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from ....studio import autoclean, formats
+from ....studio import autoclean, coverage, formats, turntable
 from ....studio.camera import UP_CHOICES
 from ....studio.edit import EditState, estimate_size
 from ....studio.projects import Project
@@ -20,7 +20,10 @@ from .rows import button_row, combo_row, group, plain_expander, plain_row, scrol
 from .viewer_area import ViewerArea
 
 DISPLAY_MODES = [("color", "Colour"), ("depth", "Depth"), ("centers", "Centres"), ("ellipses", "Ellipses"),
-                 ("opacity", "Opacity")]
+                 ("opacity", "Opacity"), ("coverage", "Coverage")]
+COVERAGE_NO_PROJECT = ("Coverage needs the project's camera positions: open a splat from a project's outputs "
+                       "folder (or a project made on the Mac), not just the splat file.")
+COVERAGE_LIVE = "Coverage is shown once training finishes (the live preview changes every few seconds)."
 EXPORT_FORMATS = [(k, v) for k, v in formats.FORMATS.items()]
 
 
@@ -54,6 +57,11 @@ class ViewerPage(Gtk.Box):
         self.project: Optional[Project] = None
         self._live_job = None
         self._building = False
+        self.is_live = False
+        self._cov_gen = 0              # bumped whenever the scene changes: a running computation is dropped
+        self._cov_done_gen = -1        # the scene generation whose coverage is on the GPU
+        self._cov_busy = False
+        self._mode = "color"
 
         view = Adw.ToolbarView(hexpand=True, vexpand=True)
         self.append(view)
@@ -124,7 +132,9 @@ class ViewerPage(Gtk.Box):
         self.split.set_sidebar(self._inspector())
         self.split.set_show_sidebar(False)
         self.inspector_btn.set_sensitive(False)
-        self._apply_prefs()
+        self._applied_prefs = {}
+        self._prefs_changed()
+        controller.prefs_listeners.append(self._prefs_changed)
         GLib.timeout_add(500, self._hud_tick)
         drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
         drop.connect("drop", self._on_drop)
@@ -199,8 +209,10 @@ class ViewerPage(Gtk.Box):
         a = self.area
         s = a.settings
         disp = group("Display")
-        self.mode_row = combo_row("Display mode", DISPLAY_MODES, s.mode, a.set_mode, "viewer.displayMode")
+        self.mode_row = combo_row("Display mode", DISPLAY_MODES, s.mode, self._mode_changed, "viewer.displayMode")
+        self._mode_list_factory()
         disp.add(self.mode_row)
+        disp.add(self._coverage_panel())
         disp.add(spin_row("View-dependent colour", 0, 3, 1, s.sh_degree, lambda v: self._set("sh_degree", int(v)),
                           setting_id="viewer.maxSHDegree"))
         disp.add(spin_row("Splat scale", 0.1, 3.0, 0.05, s.splat_scale, lambda v: self._set("splat_scale", v), 2,
@@ -218,7 +230,9 @@ class ViewerPage(Gtk.Box):
         self.bg_btn.connect("notify::rgba", self._bg_changed)
         bg_row.add_suffix(self.bg_btn)
         disp.add(bg_row)
-        disp.add(switch_row("Show training cameras", a.show_cameras, self._show_cameras, "viewer.showCameras"))
+        self.cams_switch = switch_row("Show training cameras", a.show_cameras, self._show_cameras,
+                                      "viewer.showCameras")
+        disp.add(self.cams_switch)
         disp.add(switch_row("Learned skybox", s.show_sky, lambda v: self._set("show_sky", v),
                             subtitle="Draw the sky panorama trained with the scene (Colour mode)."))
 
@@ -236,18 +250,25 @@ class ViewerPage(Gtk.Box):
         nav.add(vb)
         nav.add(button_row("Frame scene", "Frame", lambda: self.area.frame(), subtitle="F"))
         p = self.ctl.prefs
+        self._pref_rows = {}
         for title, attr, sid in (("Rotation speed", "rotate_speed", "nav.rotateSpeed"),
                                  ("Pan speed", "pan_speed", "nav.panSpeed"),
                                  ("Zoom speed", "zoom_speed", "nav.zoomSpeed"),
                                  ("Fly speed", "fly_speed", "nav.flySpeed")):
-            nav.add(spin_row(title, 0.1, 5.0, 0.1, getattr(p, attr), lambda v, a_=attr: self._nav_pref(a_, v), 1, sid))
-        nav.add(switch_row("Invert vertical rotation", p.invert_vertical,
-                           lambda v: self._nav_pref("invert_vertical", v), "nav.invertVertical"))
+            self._pref_rows[attr] = spin_row(title, 0.1, 5.0, 0.1, getattr(p, attr),
+                                             lambda v, a_=attr: self._nav_pref(a_, v), 1, sid)
+            nav.add(self._pref_rows[attr])
+        self._pref_rows["invert_vertical"] = switch_row("Invert vertical rotation", p.invert_vertical,
+                                                        lambda v: self._nav_pref("invert_vertical", v),
+                                                        "nav.invertVertical")
+        nav.add(self._pref_rows["invert_vertical"])
 
         perf = group("Performance")
-        perf.add(combo_row("Render resolution", [("1.0", "100 %"), ("0.75", "75 %"), ("0.5", "50 %"), ("0.33", "33 %")],
-                           f"{s.render_scale:g}" if f"{s.render_scale:g}" in ("1", "0.75", "0.5", "0.33") else "1.0",
-                           lambda v: self._set("render_scale", float(v)), "viewer.renderScale"))
+        self.scale_row = combo_row(
+            "Render resolution", [("1.0", "100 %"), ("0.75", "75 %"), ("0.5", "50 %"), ("0.33", "33 %")],
+            f"{s.render_scale:g}" if f"{s.render_scale:g}" in ("0.75", "0.5", "0.33") else "1.0",
+            lambda v: self._set("render_scale", float(v)), "viewer.renderScale")
+        perf.add(self.scale_row)
         self.gl_row = plain_row(title="Renderer", subtitle="—")
         perf.add(self.gl_row)
 
@@ -256,6 +277,122 @@ class ViewerPage(Gtk.Box):
         self.cams_group.add(self.cams_expander)
         self._cam_rows = []
         return scrolled(disp, nav, perf, self.cams_group)
+
+    # ------------------------------------------------------------------ coverage
+    def coverage_unavailable(self) -> Optional[str]:
+        """Why the Coverage mode can't be used for the open splat (None = it can)."""
+        if self.project is None or not self.project.has_dataset:
+            return COVERAGE_NO_PROJECT
+        if self.is_live:
+            return COVERAGE_LIVE
+        return None
+
+    def _mode_list_factory(self) -> None:
+        """Popup list of the display modes: Coverage greyed out (with the reason as tooltip) when unavailable.
+        Set again whenever availability changes, so the popup rebinds its rows."""
+        f = Gtk.SignalListItemFactory()
+        f.connect("setup", lambda _f, li: li.set_child(Gtk.Label(xalign=0.0)))
+
+        def bind(_f, li):
+            lab = li.get_child()
+            lab.set_text(li.get_item().get_string())
+            why = self.coverage_unavailable() if DISPLAY_MODES[li.get_position()][0] == "coverage" else None
+            lab.set_sensitive(why is None)
+            lab.set_tooltip_text(why)
+            li.set_activatable(why is None)
+            li.set_selectable(why is None)
+        f.connect("bind", bind)
+        self.mode_row.set_list_factory(f)
+
+    def _coverage_panel(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=10, visible=False)
+        bar = Gtk.Box(height_request=8, hexpand=True, css_classes=["coverage-ramp"])   # coverage.RAMP, common.CSS
+        box.append(bar)
+        ends = Gtk.Box()
+        ends.append(label("Seen by 1–2 photos, or only from far away", ("caption", "dim-label"), wrap=False))
+        right = label("Seen closely by many", ("caption", "dim-label"), wrap=False)
+        right.set_hexpand(True)
+        right.set_halign(Gtk.Align.END)
+        ends.append(right)
+        box.append(ends)
+        row = Gtk.Box(spacing=8)
+        self.cov_spinner = Gtk.Spinner(visible=False, valign=Gtk.Align.START)
+        self.cov_info = label("", ("caption",))
+        self.cov_info.set_hexpand(True)
+        row.append(self.cov_spinner)
+        row.append(self.cov_info)
+        box.append(row)
+        box.append(label("Red areas will stay blurry however long you train: capture them again from closer, from a "
+                         "few more angles.", ("caption", "dim-label")))
+        self.cov_panel = box
+        return box
+
+    def _mode_changed(self, mode: str) -> None:
+        if mode == "coverage" and self.area.cloud is not None:
+            why = self.coverage_unavailable()
+            if why is not None and self._mode != "coverage":
+                self.ctl.toast(why)
+                set_combo(self.mode_row, self._mode)         # back to the previous mode
+                return
+        self._mode = mode
+        self.area.set_mode(mode)
+        self.cov_panel.set_visible(mode == "coverage")
+        self.ensure_coverage()
+
+    def _coverage_scene_changed(self) -> None:
+        """A new scene (or preview) is shown: drop old scores, recompute if Coverage is on."""
+        self._cov_gen += 1
+        self._cov_busy = False
+        self.cov_spinner.set_visible(False)
+        self.cov_spinner.set_spinning(False)
+        self.cov_info.set_text("")
+        self._mode_list_factory()
+        self.ensure_coverage()
+
+    def ensure_coverage(self) -> None:
+        """Compute per-splat coverage on a background thread when the Coverage mode is on (Mac: ensureCoverage)."""
+        if self._mode != "coverage" or self.area.cloud is None or self._cov_busy or self._cov_done_gen == self._cov_gen:
+            return
+        why = self.coverage_unavailable()
+        if why is not None:
+            self.cov_info.set_text(why)
+            return
+        gen = self._cov_gen
+        cloud = self.area.cloud
+        ds = self.project.dataset_dir
+        self._cov_busy = True
+        self.cov_spinner.set_visible(True)
+        self.cov_spinner.set_spinning(True)
+        self.cov_info.set_text("Working out which photos saw each part of the scene…")
+
+        def progress(f):
+            GLib.idle_add(lambda: (gen == self._cov_gen and self._cov_busy and self.cov_info.set_text(
+                f"Working out which photos saw each part of the scene… {f * 100:.0f} %"), False)[-1])
+
+        def work():
+            try:
+                r = coverage.compute(cloud, ds, progress=progress, cancelled=lambda: gen != self._cov_gen)
+                GLib.idle_add(self._coverage_done, gen, r, None)
+            except coverage.CoverageCancelled:
+                pass
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(self._coverage_done, gen, None, str(e))
+        threading.Thread(target=work, daemon=True, name="coverage").start()
+
+    def _coverage_done(self, gen, result, error) -> bool:
+        if gen != self._cov_gen:
+            return False
+        self._cov_busy = False
+        self.cov_spinner.set_spinning(False)
+        self.cov_spinner.set_visible(False)
+        if result is None:
+            self.cov_info.set_text(f"Couldn't compute coverage: {error}")
+            self._cov_done_gen = gen          # don't retry in a loop; a new scene tries again
+            return False
+        self._cov_done_gen = gen
+        self.area.set_coverage(result.score)
+        self.cov_info.set_text(result.summary())
+        return False
 
     def _edit_tab(self) -> Gtk.Widget:
         hist = group("History")
@@ -350,7 +487,24 @@ class ViewerPage(Gtk.Box):
         m = group("Media")
         m.add(button_row("Screenshot", "Save 4K PNG…", self.screenshot_dialog,
                          subtitle="3840 × 2160, the current view"))
-        return scrolled(g, m)
+        v = group("Turntable video", "One full turn around the orbit centre, at the current distance and pitch.")
+        self.tt_res, self.tt_secs, self.tt_fps = 1080, 8, 30
+        v.add(combo_row("Resolution", [("720", "720p"), ("1080", "1080p"), ("2160", "4K")], "1080",
+                        lambda x: setattr(self, "tt_res", int(x)), "export.video"))
+        v.add(spin_row("Length", 3, 30, 1, self.tt_secs, lambda x: setattr(self, "tt_secs", int(x)),
+                       subtitle="Seconds for one turn"))
+        v.add(combo_row("Frame rate", [("24", "24 fps"), ("30", "30 fps"), ("60", "60 fps")], "30",
+                        lambda x: setattr(self, "tt_fps", int(x))))
+        self.tt_row = button_row("Render video", "Render…", self.turntable_dialog,
+                                 subtitle=turntable.describe_encoder())
+        v.add(self.tt_row)
+        self.tt_progress_row = plain_row(title="Rendering", subtitle="", visible=False)
+        self.tt_bar = Gtk.ProgressBar(valign=Gtk.Align.CENTER, hexpand=True, width_request=110)
+        self.tt_progress_row.add_suffix(self.tt_bar)
+        self.tt_progress_row.add_suffix(self._small_button("Cancel", self.turntable_cancel))
+        v.add(self.tt_progress_row)
+        self._tt = None
+        return scrolled(g, m, v)
 
     @staticmethod
     def _small_button(text, cb):
@@ -629,6 +783,7 @@ class ViewerPage(Gtk.Box):
         self._busy(None)
         self.path = path if not live else self.path
         self.project = proj
+        self.is_live = live
         edit = EditState(g)
         self.area.cameras_c2w = np.array([np.asarray(c["cameraToWorld"], float) for c in cams]) if cams else None
         self.area.set_cloud(g, edit, reset_camera=not keep_camera, packed=packed)
@@ -642,6 +797,7 @@ class ViewerPage(Gtk.Box):
         self._sync_crop_rows()
         self._fill_cameras(cams)
         self.gl_row.set_subtitle(f"{self.area.renderer.gl_renderer or 'OpenGL'} · {self.area.renderer.gl_version}")
+        self._coverage_scene_changed()
         self._stats_changed()
         if not live:
             self.ctl.recents.add(path)
@@ -724,15 +880,43 @@ class ViewerPage(Gtk.Box):
                                  if self.area.tool == "select" else ""))
         return True
 
-    def _apply_prefs(self) -> None:
+    def _prefs_changed(self) -> None:
+        """Studio prefs saved (here, or in Preferences → Studio): apply the values that changed since last time
+        to the viewer and its inspector rows (so a saved nav speed doesn't reset a FOV changed in the inspector)."""
         p = self.ctl.prefs
         a = self.area
-        a.rotate_speed, a.pan_speed, a.zoom_speed, a.fly_speed = p.rotate_speed, p.pan_speed, p.zoom_speed, p.fly_speed
-        a.invert_vertical = p.invert_vertical
-        a.camera.fov_y = p.fov
-        a.settings.background = tuple(p.background)
-        a.settings.render_scale = p.render_scale
-        a.show_cameras = p.show_cameras
+        now = {k: (list(v) if isinstance(v, list) else v) for k, v in p.__dict__.items()}
+        changed = {k for k, v in now.items() if self._applied_prefs.get(k, object()) != v}
+        self._applied_prefs = now
+        for attr in ("rotate_speed", "pan_speed", "zoom_speed", "fly_speed", "invert_vertical"):
+            if attr in changed:
+                setattr(a, attr, getattr(p, attr))
+                row = self._pref_rows.get(attr)
+                if isinstance(row, Adw.SpinRow) and abs(row.get_value() - getattr(p, attr)) > 1e-9:
+                    row.set_value(getattr(p, attr))
+                elif isinstance(row, Adw.SwitchRow) and row.get_active() != getattr(p, attr):
+                    row.set_active(getattr(p, attr))
+        if "fov" in changed:
+            a.camera.fov_y = p.fov
+            if abs(self.fov_row.get_value() - p.fov) > 1e-9:
+                self.fov_row.set_value(p.fov)
+        if "background" in changed:
+            a.settings.background = tuple(p.background)
+            c = self.bg_btn.get_rgba()
+            if (round(c.red, 4), round(c.green, 4), round(c.blue, 4)) != tuple(round(x, 4) for x in p.background):
+                rgba = Gdk.RGBA()
+                rgba.red, rgba.green, rgba.blue, rgba.alpha = (*p.background, 1.0)
+                self.bg_btn.set_rgba(rgba)
+        if "render_scale" in changed:
+            a.settings.render_scale = p.render_scale
+            set_combo(self.scale_row, f"{p.render_scale:g}" if f"{p.render_scale:g}" in self.scale_row.keys
+                      else "1.0")
+        if "show_cameras" in changed:
+            a.show_cameras = p.show_cameras
+            if self.cams_switch.get_active() != p.show_cameras:
+                self.cams_switch.set_active(p.show_cameras)
+            a.update_lines()
+        a.queue_render()
 
     # ------------------------------------------------------------------ export
     def _export_cloud(self):
@@ -774,6 +958,116 @@ class ViewerPage(Gtk.Box):
                 msg = str(e)
                 GLib.idle_add(lambda: (self._busy(None), self.ctl.toast(f"Export failed: {msg}"), False)[-1])
         threading.Thread(target=work, daemon=True).start()
+
+    # ------------------------------------------------------------------ turntable video
+    def turntable_dialog(self) -> None:
+        if self.area.edit is None or self._tt is not None:
+            return
+        stem = self.path.name.split(".")[0] if self.path else "scene"
+        suffix = turntable.video_suffix() or ".mp4"
+        d = Gtk.FileDialog(title="Save turntable video", initial_name=f"{stem}-turntable{suffix}")
+        d.save(self.window, None, self._turntable_chosen)
+
+    def _turntable_chosen(self, dlg, res) -> None:
+        try:
+            f = dlg.save_finish(res)
+        except GLib.Error:
+            return
+        if f is not None and f.get_path():
+            self.start_turntable(Path(f.get_path()))
+
+    def start_turntable(self, path: Path) -> None:
+        if self.area.edit is None or not self.area.renderer.ready or self._tt is not None:
+            return
+        w, h = turntable.RESOLUTIONS[self.tt_res]
+        opts = turntable.TurntableOptions(width=w, height=h, fps=self.tt_fps, seconds=self.tt_secs)
+        try:
+            sink = turntable.open_sink(path, w, h, opts.fps)
+        except Exception as e:  # noqa: BLE001
+            self.ctl.toast(f"Video failed: {e}")
+            return
+        a = self.area
+        a.make_current()
+        frames = turntable.render_frames(a.renderer, a.camera, a.settings, opts, a.cloud.positions,
+                                         a.edit.hidden())
+        self._tt = {"ts": turntable.ThreadedSink(sink), "frames": frames, "frame": None, "done": 0, "opts": opts,
+                    "sink": sink, "cancel": False, "cloud": a.cloud}
+        a.suspended = True                  # the turntable owns the renderer's draw order until it finishes
+        self.tt_row.button.set_sensitive(False)
+        self.tt_progress_row.set_visible(True)
+        self.tt_progress_row.set_subtitle(f"0 / {opts.frames} frames")
+        self.tt_bar.set_fraction(0.0)
+        self._busy("Rendering the turntable video…")
+        GLib.idle_add(self._turntable_step)
+
+    def turntable_cancel(self) -> None:
+        if self._tt is not None:
+            self._tt["cancel"] = True
+
+    def _turntable_step(self) -> bool:
+        """One frame per main-loop turn: render (GL needs this thread), hand it to the encoder thread when it has
+        room (at most two frames wait), otherwise try again shortly."""
+        tt = self._tt
+        if tt is None:
+            return False
+        try:
+            if tt["cancel"] or self.area.cloud is not tt["cloud"]:
+                raise turntable.TurntableCancelled()
+            if tt["frame"] is None:
+                self.area.make_current()
+                tt["frame"] = next(tt["frames"], None)
+                if tt["frame"] is None:
+                    self._turntable_finish(None)
+                    return False
+            if not tt["ts"].offer(tt["frame"]):
+                GLib.timeout_add(10, self._turntable_step)
+                return False
+            tt["frame"] = None
+            tt["done"] += 1
+            n = tt["opts"].frames
+            self.tt_bar.set_fraction(tt["done"] / n)
+            self.tt_progress_row.set_subtitle(f"{tt['done']} / {n} frames")
+            self.spinner_label.set_text(f"Rendering the turntable video… {tt['done'] * 100 // n} %")
+            return True
+        except turntable.TurntableCancelled:
+            self._turntable_finish("cancelled")
+        except Exception as e:  # noqa: BLE001
+            self._turntable_finish(str(e) or type(e).__name__)
+        return False
+
+    def _turntable_finish(self, error: Optional[str]) -> None:
+        tt, self._tt = self._tt, None
+        tt["frame"] = None
+        tt["frames"].close()
+        self.area.suspended = False
+        self.area.camera_moved()            # re-sort for the viewer's own camera
+        self.spinner_label.set_text("Finishing the video…")
+
+        def work():
+            msg = error
+            try:
+                if error is None:
+                    tt["ts"].finish()
+                else:
+                    tt["ts"].abort()
+            except Exception as e:  # noqa: BLE001
+                msg = str(e) or type(e).__name__
+            GLib.idle_add(self._turntable_done, tt["sink"], msg)
+        threading.Thread(target=work, daemon=True, name="turntable-finish").start()
+
+    def _turntable_done(self, sink, error: Optional[str]) -> bool:
+        self._busy(None)
+        self.tt_row.button.set_sensitive(True)
+        self.tt_progress_row.set_visible(False)
+        if error == "cancelled":
+            self.ctl.toast("Turntable video cancelled")
+        elif error:
+            self.ctl.toast(f"Video failed: {error}")
+        elif sink.kind == "png":
+            self.ctl.toast(f"No video encoder available: saved {sink.count} PNG frames in {sink.path.name}/")
+        else:
+            self.ctl.toast(f"Saved {sink.path.name} ({sink.description})")
+        return False
 
     def screenshot_dialog(self) -> None:
         stem = self.path.stem if self.path else "scene"

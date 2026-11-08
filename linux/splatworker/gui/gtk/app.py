@@ -160,7 +160,7 @@ class SplatWorkerApp(Adw.Application):
     def _preferences(self, *_args) -> None:
         self._present()
         Preferences(self.window, self.state, self._setting_changed, self._autostart_changed,
-                    self._setup).present()
+                    self._setup, studio=getattr(self.window, "studio", None)).present()
 
     def _setting_changed(self, name: str) -> None:
         self.window.refresh_static()
