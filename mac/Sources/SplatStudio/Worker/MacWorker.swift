@@ -2,8 +2,8 @@ import Foundation
 import Network
 import Observation
 
-/// "Act as a worker": this Mac takes training jobs from other devices (an iPhone running Splat Capture, another
-/// Mac) over the Splat Worker API — the same subset the iPhone's Compute screen serves (Worker/WorkerRouter.swift:
+/// "Act as a worker": this Mac takes training jobs from other devices (an iPhone running SplatWork Capture, another
+/// Mac) over the worker API — the same subset the iPhone's Compute screen serves (Worker/WorkerRouter.swift:
 /// info, dataset upload, train jobs, result.ply, log, cameras). Advertised as `_splatworker._tcp` with
 /// `kind=mac`; processing (`/v1/process`: learned masks, camera solving) is left to Linux workers.
 @MainActor

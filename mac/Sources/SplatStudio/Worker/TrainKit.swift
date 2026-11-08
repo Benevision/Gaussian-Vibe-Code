@@ -4,7 +4,7 @@ import os
 import simd
 
 // Public facade over the Metal trainer for the worker server (Worker/WorkerEngine.swift). On iOS this is the
-// SplatTrainKit module's API (the trainer sources stay internal there, in Swift 5 mode); in Splat Studio it is
+// SplatTrainKit module's API (the trainer sources stay internal there, in Swift 5 mode); in SplatWork it is
 // compiled into the app and used by "act as a worker" (MacWorker).
 
 /// Progress of a running training job (mirrors the Mac's `TrainerStatus`).

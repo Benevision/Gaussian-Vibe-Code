@@ -23,7 +23,7 @@ targets:
     platform: iOS
     sources:
       - path: SplatCapture
-      # The training-worker server (Compute screen), shared with Splat Studio's "act as a worker" mode
+      # The training-worker server (Compute screen), shared with SplatWork's "act as a worker" mode
       - path: ../mac/Sources/SplatStudio/Worker/WorkerEngine.swift
       - path: ../mac/Sources/SplatStudio/Worker/HTTPServer.swift
       - path: ../mac/Sources/SplatStudio/Worker/WorkerRouter.swift
@@ -113,14 +113,14 @@ targets:
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoDepth.swift
       - path: ../mac/Sources/SplatStudio/Formats/SplatFormats.swift
       - path: ../mac/Sources/SplatStudio/Formats/CompressedPLY.swift
-      # Offloading: discover Splat Workers / Macs (_splatworker._tcp) and train on them, whole or in blocks.
+      # Offloading: discover SplatWork Nodes / Macs (_splatworker._tcp) and train on them, whole or in blocks.
       - path: ../mac/Sources/SplatStudio/Remote/WorkerClient.swift
       - path: ../mac/Sources/SplatStudio/Remote/WorkerBrowser.swift
       - path: ../mac/Sources/SplatStudio/Remote/ComputeScheduler.swift
       - path: ../mac/Sources/SplatStudio/Remote/BlockTraining.swift
       - path: ../mac/Sources/SplatStudio/Remote/RemoteStore.swift
       - path: ../mac/Sources/SplatStudio/Remote/SystemBenchmark.swift
-      # the public facade (TrainKit / TrainKitJob, also used by Splat Studio's "act as a worker") and the
+      # the public facade (TrainKit / TrainKitJob, also used by SplatWork's "act as a worker") and the
       # pure-Swift zip (ZipUtil on iOS has no /usr/bin/ditto; also compiled into the app target)
       - path: ../mac/Sources/SplatStudio/Worker/TrainKit.swift
       - path: ../mac/Sources/SplatStudio/Worker/ZipWriter.swift

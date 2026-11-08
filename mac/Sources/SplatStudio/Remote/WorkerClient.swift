@@ -23,8 +23,8 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     /// Host RAM (worker ≥ 1.3.14).
     struct Memory: Codable, Hashable, Sendable { var totalMB: Int?; var availableMB: Int? }
     var memory: Memory?
-    /// What runs the worker: "iphone" (Splat Capture's Compute screen), "mac" (Splat Studio's "act as a worker"),
-    /// nil for the Linux Splat Worker.
+    /// What runs the worker: "iphone" (SplatWork Capture's Compute screen), "mac" (SplatWork's "act as a worker"),
+    /// nil for the SplatWork Node.
     var kind: String?
     /// Worker ≥ 1.3.13: training images are streamed from disk when they don't fit in RAM.
     var streamsImages: Bool { capabilities?.contains("stream") ?? false }

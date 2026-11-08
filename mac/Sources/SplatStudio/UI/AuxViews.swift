@@ -104,7 +104,7 @@ struct MacWorkerSection: View {
 
     private var status: String {
         switch worker.serverState {
-        case .stopped: return "Lets Splat Capture on your iPhone (and other Macs) send training here. Training only — learned masks and camera solving need a Linux worker."
+        case .stopped: return "Lets SplatWork Capture on your iPhone (and other Macs) send training here. Training only — learned masks and camera solving need a Linux worker."
         case .starting: return "Starting…"
         case .ready(let port): return "Visible as “\(worker.advertisedName)” on port \(port)" + (worker.isTraining ? " · training a job" : "")
         case .failed(let e): return "Couldn't start: \(e)"

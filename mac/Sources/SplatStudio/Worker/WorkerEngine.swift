@@ -33,7 +33,7 @@ struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
 
 /// The worker's state and request handling. Thread-safe (one lock); training runs one job at a time on a
 /// private serial queue. Knows nothing about UIKit / AppKit — the app layer drives it: `ComputeWorker` on the
-/// iPhone (Compute screen), `MacWorker` in Splat Studio ("act as a worker"). Shared by both apps.
+/// iPhone (Compute screen), `MacWorker` in SplatWork ("act as a worker"). Shared by both apps.
 final class WorkerEngine: @unchecked Sendable {
     #if os(iOS)
     static let workerVersion = "ios-1.0"

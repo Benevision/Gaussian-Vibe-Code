@@ -75,13 +75,13 @@ xcrun altool --upload-app -f build/export/SplatCapture.ipa -t ios --apiKey <KEY>
 
 **Make splat** (after a capture, or in the Library) turns a capture into a trained splat without any other computer:
 
-1. **Prep on the phone.** The frames and ARKit poses become a training dataset (`CaptureImporter`, the same code Splat Studio uses on the Mac), with the LiDAR point cloud as the starting splats. Optional **Masks** use Apple Vision on the phone: remove people, people and pets, or keep only the main object.
+1. **Prep on the phone.** The frames and ARKit poses become a training dataset (`CaptureImporter`, the same code SplatWork uses on the Mac), with the LiDAR point cloud as the starting splats. Optional **Masks** use Apple Vision on the phone: remove people, people and pets, or keep only the main object.
 2. **Train** with the Metal trainer, sized to the memory iOS gives the app. **Quick** takes about 10–20 min on an iPhone 16 Pro Max. Keep the app open and the phone plugged in: iOS stops GPU work as soon as the app leaves the screen.
-3. **View** the result (drag to orbit, two fingers to pan, pinch to zoom, double-tap to reset) or share the `.ply`. Splats are saved in *Files › On My iPhone › Splat Capture › Splats*.
+3. **View** the result (drag to orbit, two fingers to pan, pinch to zoom, double-tap to reset) or share the `.ply`. Splats are saved in *Files › On My iPhone › SplatWork Capture › Splats*.
 
 When other devices are on the network, tick them under **Train on**:
-- **Macs** running Splat Studio with *Compute › Act as a worker* on, **PCs** running Splat Worker, and **iPhones** with Compute on. One device trains the whole scene. Several devices split scenes of 400 or more photos into blocks that train in parallel and are merged on the phone.
-- A **Splat Worker PC** also runs the steps that need Python: camera-pose refinement, learned moving-object masks (SAM 2) and sky masks with a learned skybox. Without one, these steps are skipped, which the result's *What happened* list shows.
+- **Macs** running SplatWork with *Compute › Act as a worker* on, **PCs** running SplatWork Node, and **iPhones** with Compute on. One device trains the whole scene. Several devices split scenes of 400 or more photos into blocks that train in parallel and are merged on the phone.
+- A **SplatWork Node PC** also runs the steps that need Python: camera-pose refinement, learned moving-object masks (SAM 2) and sky masks with a learned skybox. Without one, these steps are skipped, which the result's *What happened* list shows.
 
 Debug builds can run the whole flow without the UI, for example in the Simulator: `xcrun simctl launch <device> com.gunntower.splatcapture -splatSelfTest`. The options are documented in `Splat/SplatSelfTest.swift`.
 

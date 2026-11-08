@@ -9,7 +9,7 @@ import simd
 //
 // Works with nothing else on the network: preparation (frames + ARKit poses → dataset), Apple Vision masks and
 // training all run on the phone. Steps that need Python (learned masks, sky, pose refinement) only run when a
-// Linux Splat Worker that can do them is reachable, and are skipped (with a note) otherwise. Training can be
+// SplatWork Node that can do them is reachable, and are skipped (with a note) otherwise. Training can be
 // handed to Macs / PCs / other iPhones running a worker, whole or as blocks spread over several devices.
 
 // MARK: - Options
@@ -99,7 +99,7 @@ public struct SplatDeviceInfo: Identifiable, Hashable, Sendable {
     public var isLocal: Bool { id == Self.localId }
 }
 
-/// Discovered training devices: this iPhone plus Splat Workers / Macs / iPhones on the local network.
+/// Discovered training devices: this iPhone plus SplatWork Nodes / Macs / iPhones on the local network.
 @MainActor
 @Observable
 public final class SplatDevices {
@@ -143,7 +143,7 @@ public final class SplatDevices {
             switch h?.status ?? .unknown {
             case .online: online = true
             case .checking, .unknown: status = "checking…"
-            case .unauthorized: status = "needs an access token (set it in Splat Studio)"
+            case .unauthorized: status = "needs an access token (set it in SplatWork)"
             case .offline(let e): status = "offline: \(e)"
             }
             let kind: SplatDeviceInfo.Kind = {
@@ -264,7 +264,7 @@ public enum SplatMaker {
                     ds = try await maskDataset(ds, masking, worker: nil, notes: notes, progress: scaled(0.15...0.25))
                 }
             } else {
-                notes.add("learned moving-object masks skipped (no Splat Worker PC online)\(options.masks != .none ? " — using Apple Vision instead" : "")")
+                notes.add("learned moving-object masks skipped (no SplatWork Node PC online)\(options.masks != .none ? " — using Apple Vision instead" : "")")
                 if options.masks != .none { ds = try await maskDataset(ds, masking, worker: nil, notes: notes, progress: scaled(0.15...0.25)) }
             }
         } else if options.masks != .none {
@@ -277,7 +277,7 @@ public enum SplatMaker {
                 ds = try await maskDataset(ds, sky, worker: processor, notes: notes, progress: scaled(0.25...0.3))
                 cfg.skybox = "auto"   // on when any photo got a sky mask
             } else {
-                notes.add("sky masks skipped (no Splat Worker PC online)")
+                notes.add("sky masks skipped (no SplatWork Node PC online)")
             }
         }
         try Task.checkCancellation()
@@ -287,7 +287,7 @@ public enum SplatMaker {
             if let processor {
                 ds = await refinePoses(ds, worker: processor, notes: notes, progress: scaled(0.3...0.4))
             } else {
-                notes.add("pose refinement skipped (no Splat Worker PC online) — using the ARKit poses as recorded")
+                notes.add("pose refinement skipped (no SplatWork Node PC online) — using the ARKit poses as recorded")
             }
         }
         try Task.checkCancellation()

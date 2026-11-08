@@ -96,7 +96,7 @@ final class SplatJobs {
     /// (Jobs on a Mac / PC keep running there; the app picks up their progress when it returns.)
     func appDidEnterBackground() {
         guard isRunning, trainsHere else { return }
-        cancel(reason: "Stopped because the app left the screen — iOS doesn't allow GPU training in the background. Keep Splat Capture open (plug the phone in) and try again.")
+        cancel(reason: "Stopped because the app left the screen — iOS doesn't allow GPU training in the background. Keep SplatWork Capture open (plug the phone in) and try again.")
     }
 
     private nonisolated static func save(_ r: SplatMakeResult, to out: SplatOutput, work: URL) throws {
