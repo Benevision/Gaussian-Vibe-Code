@@ -163,6 +163,13 @@ final class VideoFrameReader {
 
     /// Next decoded sample, or nil at the end. Throws on decode errors.
     func next() throws -> DecodedVideoSample? {
+        // Each call drains its own autorelease pool: the decode loops run for minutes inside a single async job, whose
+        // pool otherwise only drains at the very end — every decoded frame (≈12 MB of IOSurface in the decoder
+        // process per 2464² 10-bit frame and stream) then stays alive, and a stereo video froze a 24 GB Mac.
+        try autoreleasepool { try nextSample() }
+    }
+
+    private func nextSample() throws -> DecodedVideoSample? {
         guard let output, let reader else { return nil }
         while let sb = output.copyNextSampleBuffer() {
             let t = CMSampleBufferGetPresentationTimeStamp(sb).seconds
@@ -293,14 +300,16 @@ enum VideoFrameSelector {
                 rejected.append(.init(item: String(format: "t=%.2fs", b.sample.time), reason: "static (camera not moving)"))
                 return
             }
-            let fs = try write(b.sample, outIndex, b.sharp)
+            let fs = try autoreleasepool { try write(b.sample, outIndex, b.sharp) }
             outIndex += 1
             lastKeptThumb = b.thumb
             frames.append(contentsOf: fs)
         }
 
+        _ = MemoryGuard.isCritical   // start watching
         while let s = try reader.next() {
             try Task.checkCancellation()
+            if decoded % 30 == 0 { try MemoryGuard.check(stage) }
             decoded += 1
             let t = s.time
             if t < start - 1e-6 { continue }

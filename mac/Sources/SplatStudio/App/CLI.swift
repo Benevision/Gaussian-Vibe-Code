@@ -216,6 +216,8 @@ enum CLI {
                         case .video360(let u):
                             if let r = try await DatasetBuilder.framesOnWorker(u, equirect: opts.equirect, opts, worker: wk, into: dir, progress: p) { fs = r }
                             else { fs = try await Equirect360.extract(video: u, video: opts.video, options: opts.equirect, into: dir, progress: p) }
+                        case .stereoVideo(let l, let r):
+                            fs = try await StereoVideoIngest.ingest(left: l, right: r, video: opts.video, stereo: opts.stereo, into: dir, progress: p)
                         default: throw PipelineError.unsupported("--frames-only needs a video")
                         }
                         let groups = Set(fs.frames.compactMap(\.group)).count

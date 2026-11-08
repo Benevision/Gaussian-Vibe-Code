@@ -5,6 +5,7 @@ import ImageIO
 import Accelerate
 import UniformTypeIdentifiers
 import simd
+import os
 
 // MARK: - Progress
 
@@ -40,6 +41,27 @@ extension PipelineProgress {
 }
 
 // MARK: - Errors
+
+/// System memory pressure, for long pipeline loops: they stop with an error at "critical" instead of pushing the
+/// Mac into swap until it hangs (a leak in video decoding once froze a 24 GB Mac until the watchdog restarted it).
+enum MemoryGuard {
+    private static let critical = OSAllocatedUnfairLock(initialState: false)
+    private static let source: DispatchSourceMemoryPressure = {
+        let s = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .global(qos: .utility))
+        s.setEventHandler { let c = s.data.contains(.critical); critical.withLock { $0 = c } }
+        s.resume()
+        return s
+    }()
+
+    static var isCritical: Bool { _ = source; return critical.withLock { $0 } }
+
+    /// Throws when memory is critically low.
+    static func check(_ stage: String) throws {
+        if isCritical {
+            throw PipelineError.processFailed("\(stage) stopped: this Mac is almost out of memory. Close other apps and try again.")
+        }
+    }
+}
 
 enum PipelineError: LocalizedError {
     case noInput(String)
