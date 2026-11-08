@@ -56,6 +56,7 @@ class SfMContext:
     device: str = "cpu"
     priors: Dict[str, PriorFrame] = field(default_factory=dict)
     masks_dir: Optional[Path] = None
+    sky_masks_dir: Optional[Path] = None   # 255 = sky: no keypoints there (clouds move; the sky is at infinity)
     allow_matching_only: bool = False
     log_path: Optional[Path] = None
 
@@ -188,6 +189,14 @@ class FeatureMatchBackend(Backend):
         feats: List[Any] = []
         for i, p in enumerate(ctx.paths):
             f = self.extract(ctx, i, p)
+            if ctx.sky_masks_dir is not None:
+                kp = self.keypoints_of(f)
+                w, h = image_size(p)
+                sky = load_mask(ctx.sky_masks_dir, ctx.names[i], (h, w))   # True where 255 = sky
+                if sky is not None and len(kp):
+                    xi = np.clip(np.round(kp[:, 0]).astype(int), 0, w - 1)
+                    yi = np.clip(np.round(kp[:, 1]).astype(int), 0, h - 1)
+                    f = self.filter_features(f, ~sky[yi, xi])
             if ctx.masks_dir is not None:
                 kp = self.keypoints_of(f)
                 w, h = image_size(p)

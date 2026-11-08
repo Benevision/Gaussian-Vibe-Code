@@ -27,6 +27,8 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var priorPoses: String? = nil
     /// Keep-masks used to drop keypoints on masked-out pixels (splatprep extension).
     var masksDir: String? = nil
+    /// Sky masks (255 = sky): no keypoints on the sky when solving cameras.
+    var skyMasksDir: String? = nil
     /// sam2_auto | sky | person (task = masks)
     var maskModel: String? = nil
     var maskPrompt: MaskPrompt? = nil
@@ -230,6 +232,7 @@ struct SplatPrepPoseSolver: PoseSolver {
         let sizes = Set(frames.frames.map { "\($0.width)x\($0.height)" })
         r.singleCamera = sizes.count == 1 && frames.rig == nil
         if useMasks, frames.frames.contains(where: { $0.mask != nil }) { r.masksDir = "masks" }
+        if frames.frames.contains(where: { $0.sky != nil }) { r.skyMasksDir = "splatprep-sky/masks" }
         if let rig = frames.rig {
             r.rig = .init(kind: "stereo", baseline: rig.baseline, rightToLeft: rig.rightToLeft,
                           pairs: RigConstraints.stereoPairs(frames).map { [($0.0.image as NSString).lastPathComponent, ($0.1.image as NSString).lastPathComponent] })

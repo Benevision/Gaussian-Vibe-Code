@@ -156,6 +156,7 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         device=device,
         priors=priors,
         masks_dir=_resolve(workdir, req.get("masksDir")),
+        sky_masks_dir=_resolve(workdir, req.get("skyMasksDir")),
         allow_matching_only=allow_mo,
         log_path=out_dir / "splatprep.log",
     )

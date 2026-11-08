@@ -248,6 +248,7 @@ and the worker exposes the same request over HTTP. A **ProcessingRequest**:
                                          // frames on: same direction; rigLoopPairs (2) retrieval pairs per view),
                                          // then COLMAP rig mapping of whole frames (global unless mapper is
                                          // colmap/pycolmap); useRig: false maps the views independently
+  "skyMasksDir": "splatprep-sky/masks",  // optional sky masks (255 = sky): no keypoints on the sky
   "priorPoses": "priors.json",           // optional: ARKit / known poses used as priors
   "priorMode": "auto" | "refine" | "solve", // auto: refine when ≥ 90 % of images have prior poses + intrinsics —
                                          // look-at pairs, triangulate with the priors, pose-only BA ×2 (no mapper,

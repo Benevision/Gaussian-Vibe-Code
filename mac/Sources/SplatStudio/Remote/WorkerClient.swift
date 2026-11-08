@@ -545,7 +545,7 @@ struct RemoteSplatPrepPoseSolver: PoseSolver {
         try? fm.removeItem(at: staging.deletingLastPathComponent())
         try fm.ensureDirectory(staging)
         defer { try? fm.removeItem(at: staging.deletingLastPathComponent()) }
-        for sub in ["images", "masks"] + [req.priorPoses].compactMap({ $0 }) {
+        for sub in ["images", "masks"] + [req.priorPoses, req.skyMasksDir.map { _ in "splatprep-sky" }].compactMap({ $0 }) {
             let src = frames.root.appendingPathComponent(sub)
             try fm.linkOrCopyTree(src, to: staging.appendingPathComponent(sub))
         }
