@@ -4,6 +4,8 @@ import SwiftUI
 /// the decisions that matter; Advanced shows every option. Each step explains what happens.
 struct NewProjectSheet: View {
     let model: AppModel
+    /// Explicit: Swift ≤ 6.3 makes the memberwise initializer private when any stored property is private.
+    init(model: AppModel) { self.model = model }
     @Environment(\.experienceMode) private var mode
     @Environment(\.dismiss) private var dismiss
     @State private var source: SourceDescription?
