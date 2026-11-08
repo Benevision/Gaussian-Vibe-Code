@@ -669,7 +669,12 @@ struct ComputePicker: View {
         let workers = s.subtracting(["local"])
         if workers.isEmpty { session.placement = .thisMac }
         else if s.count == 1, let w = workers.first { session.placement = .remote; session.workerId = w }
-        else { session.placement = .both; session.workerId = workers.sorted().first }
+        else {
+            // the worker that also prepares (splits, masks, solves): one that can process, fastest first
+            session.placement = .both
+            let canProcess = workers.filter { browser.health[$0]?.info?.canProcess ?? false }
+            session.workerId = (canProcess.isEmpty ? workers : Set(canProcess)).sorted().first
+        }
         prepPlacement = session.placement
     }
 

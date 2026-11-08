@@ -517,6 +517,12 @@ final class PrepSession {
                         try await Task.sleep(nanoseconds: 500_000_000)
                     }
                     if worker == nil { self?.ingest(PipelineProgress(stage: "Starting", fraction: 0, message: "worker not found on the network — using this Mac")) }
+                    // Training-only workers (an iPhone running Compute) can't split, mask or solve: prepare here.
+                    if let w = worker, let info = try? await w.info(timeout: 10), !info.canProcess {
+                        worker = nil
+                        self?.ingest(PipelineProgress(stage: "Starting", fraction: 0,
+                                                      message: "\(info.name) only trains — preparing the dataset on this Mac"))
+                    }
                 }
                 try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
                 let ds = try await DatasetBuilder.build(source: source, options: options, into: dsDir, worker: worker) { p in
