@@ -926,7 +926,7 @@ final class MetalTrainer: @unchecked Sendable {
             let perSplat = compactMoments && k == 4
             let count = perSplat ? n : n * Self.widths[k]
             var ap = AdamParams(lr: lrs[k].0, lr2: lrs[k].1, period: lrs[k].2, split: lrs[k].3, bc1: bc1, bc2: bc2, n: UInt32(count),
-                                seed: UInt32(truncatingIfNeeded: adamStep &* 0x9E37_79B1) ^ UInt32(k &* 0x85EB_CA6B))
+                                seed: UInt32(truncatingIfNeeded: adamStep &* 0x9E37_79B1) ^ UInt32(truncatingIfNeeded: k &* 0x85EB_CA6B))
             enc.setBuffer(params[k], offset: 0, index: 0); enc.setBuffer(grads[k], offset: 0, index: 1)
             enc.setBuffer(m1[k], offset: 0, index: 2); enc.setBuffer(m2[k], offset: 0, index: 3)
             enc.setBytes(&ap, length: MemoryLayout<AdamParams>.stride, index: 4)
