@@ -457,12 +457,13 @@ enum CLI {
                 let sched = ComputeScheduler(devices: devices, placement: .both)
                 for (dev, bs) in sched.distribute(blocks, fits: fits) { print("\(dev): blocks \(bs.map { $0.index + 1 })") }
                 let t0 = Date()
-                nonisolated(unsafe) var last: [Int: Int] = [:]
+                nonisolated(unsafe) var last: [Int: String] = [:]
                 let cloud = try await sched.trainBlockParallel(dataset: dataset, config: config, blocks: blocks, name: out.deletingPathExtension().lastPathComponent,
                                                                local: local ? MetalTrainingRunner() : nil, clients: clients, fits: fits) { bp in
                     let pct = Int(bp.snapshot.fraction * 10)
-                    if last[bp.blockIndex] != pct { last[bp.blockIndex] = pct
-                        print(String(format: "  block %d on %@: %d %%  (overall %.0f %%, %.0f s)", bp.blockIndex + 1, bp.deviceId, pct * 10, bp.overall * 100, Date().timeIntervalSince(t0))) }
+                    let key = "\(pct) \(bp.stage.summaryKey)"
+                    if last[bp.blockIndex] != key { last[bp.blockIndex] = key
+                        print(String(format: "  block %d on %@: %@ %d %%  (overall %.0f %%, %.0f s)", bp.blockIndex + 1, bp.deviceId, bp.stage.label, pct * 10, bp.overall * 100, Date().timeIntervalSince(t0))) }
                 }
                 try PLYCodec.writeGaussians(cloud, to: out, up: dataset.upVectorSIMD)
                 print("merged \(cloud.count) splats in \(Int(Date().timeIntervalSince(t0))) s → \(out.path)")
