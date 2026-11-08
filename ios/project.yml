@@ -25,11 +25,11 @@ targets:
       - path: SplatCapture
     dependencies:
       - target: SplatTrainKit
-    entitlements:
-      path: SplatCapture/Resources/SplatCapture.entitlements
-      properties:
-        # Lets the on-device trainer (Compute screen) use more of the A18 Pro's 8 GB.
-        com.apple.developer.kernel.increased-memory-limit: true
+    # No com.apple.developer.kernel.increased-memory-limit entitlement: a personal (free) Apple developer team
+    # can't sign it ("requires a provisioning profile with the Increased Memory Limit feature"). The Compute
+    # screen sizes its splat budget from os_proc_available_memory() either way. With a paid team, add:
+    #   entitlements: { path: SplatCapture/Resources/SplatCapture.entitlements,
+    #                   properties: { com.apple.developer.kernel.increased-memory-limit: true } }
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.splatcapture
@@ -80,8 +80,8 @@ targets:
       - path: ../mac/Sources/SplatStudio/Core/GaussianCloud.swift
       - path: ../mac/Sources/SplatStudio/Core/Orientation.swift
       - path: ../mac/Sources/SplatStudio/Core/TrainingConfig.swift
-      - path: ../mac/Sources/SplatStudio/Train/MetalTrainer.swift
-      - path: ../mac/Sources/SplatStudio/Train/TrainingData.swift
+      # the whole trainer folder, so new trainer files are picked up (AutoClean is Mac-only tooling but compiles)
+      - path: ../mac/Sources/SplatStudio/Train
       - path: ../mac/Sources/SplatStudio/Render/MetalContext.swift
       - path: ../mac/Sources/SplatStudio/Render/SplatScene.swift
       - path: ../mac/Sources/SplatStudio/Render/SplatRenderer.swift
