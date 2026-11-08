@@ -8,6 +8,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from ....studio.presets import FEATURES, PRESETS, SOURCE_KINDS, ProjectOptions
 from ....studio.projects import Project
+from .devices_page import train_on_row
 from .rows import combo_row, group, plain_row, spin_row, switch_row, training_settings_expander
 
 FOLDER_SOURCES = ("photos", "colmap", "dataset")
@@ -132,6 +133,8 @@ class NewProjectDialog(Adw.Window):
         tr.add(switch_row("Start training as soon as ready", o.auto_train, lambda v: setattr(o, "auto_train", v)))
         tr.add(combo_row("Quality preset", [(k, f"{v['title']} — {v['subtitle']}") for k, v in PRESETS.items()],
                          o.preset, lambda v: setattr(o, "preset", v), "train.preset"))
+        self.train_on_row = train_on_row(controller, o)
+        tr.add(self.train_on_row)
         tr.add(switch_row("Local jobs go first", controller.prefs.local_jobs_first, self._prio,
                           subtitle="Ahead of jobs queued by other computers (a running job is never interrupted)."))
         tr.add(training_settings_expander(o.train_overrides, lambda: o.preset))

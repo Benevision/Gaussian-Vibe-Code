@@ -120,6 +120,8 @@ class ProjectOptions:
     preset: str = "high"                     # train.preset
     train_overrides: Dict[str, Any] = field(default_factory=dict)
     auto_train: bool = True
+    train_on: str = "local"                  # net.placement: "local" (this PC) | "all" (block-parallel) | device id
+    split_above: int = 400                   # net.blockThreshold: "all" splits scenes with this many photos or more
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)

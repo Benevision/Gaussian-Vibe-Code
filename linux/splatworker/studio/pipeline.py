@@ -314,9 +314,15 @@ class LocalPipeline:
     def train(self, config: Optional[Dict] = None) -> Path:
         if "Training" in self._titles:
             self._stage("Training")
+        cfg = config or self.o.train_config()
+        if getattr(self.o, "train_on", "local") not in ("", "local"):     # other devices (studio/compute.py)
+            from .compute import train_elsewhere
+
+            out = train_elsewhere(self, cfg)
+            if out is not None:
+                return out
         ds = self.project.dataset_dir
         dataset_id = self._register(ds)
-        cfg = config or self.o.train_config()
         self._log(f"training config: {json.dumps(cfg)}")
         job = self.client.train(dataset_id, cfg, f"{self.project.name}", self.priority)
         self.project.update(lastJob={"jobId": job, "startedAt": time.time()})

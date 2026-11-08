@@ -67,18 +67,35 @@ class T(SplatWorkerApp):
             (1200, lambda: shot("5-worker")),
             (300, lambda: self.window.show_section("inbox")),
             (1200, lambda: shot("6-inbox")),
+            (300, lambda: self.window.studio.devices.add_manual("192.0.2.10", 7878, "Lab PC", check=False)),
+            (300, lambda: self.window.show_section("devices")),
+            (1500, lambda: shot("6b-devices")),
+            (300, lambda: self.window.devices_page.add_dialog()),
+            (1200, lambda: shot("6c-add-worker")),
+            (300, lambda: self.window.devices_page.add_dialog_widget.close()),
             (300, lambda: self.window.show_section("models")),
             (1200, lambda: shot("7-models")),
             (300, lambda: self.window.show_section("reference")),
             (1200, lambda: shot("8-reference")),
             (300, lambda: self.window.new_project("video", None)),
             (1500, lambda: shot("9-newproject")),
+            (300, lambda: self.focus_train_on()),
+            (1200, lambda: shot("9b-newproject-train-on")),
             (500, lambda: self.quit()),
         ]
         t = 0
         for dt, fn in steps:
             t += dt
             GLib.timeout_add(t, lambda f=fn: (f(), False)[1])
+
+    def focus_train_on(self):
+        from gi.repository import Gtk
+        from splatworker.gui.gtk.studio.new_project import NewProjectDialog
+        for w in Gtk.Window.list_toplevels():
+            if isinstance(w, NewProjectDialog):
+                w.train_on_row.grab_focus()
+                print("train on choices", [w.train_on_row.get_model().get_string(i)
+                                           for i in range(w.train_on_row.get_model().get_n_items())], flush=True)
 
     def brush(self):
         vp = self.window.viewer_page

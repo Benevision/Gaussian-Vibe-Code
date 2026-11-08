@@ -13,6 +13,7 @@ from ....studio.projects import Project
 from .rows import plain_row
 from ..common import label, toast
 from .controller import StudioController
+from .devices_page import DevicesPage
 from .new_project import NewProjectDialog
 from .pages import InboxPage, ModelsPage, ReferencePage
 from .projects_page import ProjectsPage
@@ -20,7 +21,8 @@ from .viewer_page import ViewerPage
 
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".insv", ".360", ".webm")
 SECTIONS = [("viewer", "Viewer", "view-reveal-symbolic"), ("projects", "Projects", "folder-symbolic"),
-            ("worker", "Queue & Worker", "network-server-symbolic"), ("inbox", "iPhone Inbox", "phone-symbolic"),
+            ("worker", "Queue & Worker", "network-server-symbolic"),
+            ("devices", "Compute Devices", "network-workgroup-symbolic"), ("inbox", "iPhone Inbox", "phone-symbolic"),
             ("models", "Models & Benchmarks", "applications-science-symbolic"),
             ("reference", "Settings Reference", "accessories-dictionary-symbolic")]
 
@@ -75,6 +77,8 @@ class StudioShell:
         self.pages.add_named(self.viewer_page, "viewer")
         self.pages.add_named(self.projects_page, "projects")
         self.pages.add_named(worker_view, "worker")
+        self.devices_page = page("Compute Devices", lambda: DevicesPage(self, self.studio))
+        self.pages.add_named(self.devices_page, "devices")
         self.pages.add_named(self.inbox_page, "inbox")
         self.pages.add_named(self.models_page, "models")
         self.pages.add_named(page("Settings Reference", ReferencePage), "reference")
@@ -174,6 +178,8 @@ class StudioShell:
             ("●" if on else "○") + (f" {act}" if act else "") + (f" +{q}" if q else ""))
         self._section_rows["worker"].badge.set_tooltip_text(
             f"Server {'on' if on else 'off'} · {act} running · {q} waiting")
+        n = len(self.studio.devices.online())
+        self._section_rows["devices"].badge.set_text(f"{n} online" if n else "")
         if poll is not None and poll.info:
             self.models_page.update(poll.info)
         return True
