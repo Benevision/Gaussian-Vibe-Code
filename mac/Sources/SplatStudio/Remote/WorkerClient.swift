@@ -453,7 +453,17 @@ final class WorkerClient: @unchecked Sendable {
         let dst = FileManager.default.temporaryDirectory.appendingPathComponent("result-\(jid).ply")
         defer { try? FileManager.default.removeItem(at: dst) }
         try await downloadResultRetrying(jid, to: dst, onOffline: onOffline)
-        return try PLYCodec.readGaussians(url: dst)
+        var cloud = try PLYCodec.readGaussians(url: dst)
+        // learned skybox (worker ≥ 1.3.15), when the run had one
+        let skyPNG = dst.deletingPathExtension().appendingPathExtension("sky.png")
+        let skyJSON = dst.deletingPathExtension().appendingPathExtension("sky.json")
+        defer { try? FileManager.default.removeItem(at: skyPNG); try? FileManager.default.removeItem(at: skyJSON) }
+        if (try? await download("v1/jobs/\(jid)/sky.png", to: skyPNG, progress: nil)) == true,
+           (try? await download("v1/jobs/\(jid)/sky.json", to: skyJSON, progress: nil)) == true,
+           let png = try? Data(contentsOf: skyPNG), let meta = try? Data(contentsOf: skyJSON) {
+            cloud.skybox = GaussianCloud.Skybox(png: png, meta: meta)
+        }
+        return cloud
     }
 
     /// Runs a splatprep request remotely: uploads `directory` (containing `images/`, optional `priors.json`,

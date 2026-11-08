@@ -44,7 +44,7 @@ enum PoseAssembly {
             var c = DatasetCamera.make(id: i, image: p.image ?? f.image, width: w, height: h, fx: fx, fy: p.fy ?? p.fx ?? fx,
                                        cx: p.cx ?? f.cx ?? Float(w) / 2, cy: p.cy ?? f.cy ?? Float(h) / 2, c2w: p.c2w)
             if p.image == nil || (p.width == f.width && p.height == f.height) {
-                c.mask = f.mask
+                c.mask = f.mask; c.sky = f.sky
                 c.depth = f.depth; c.depthWidth = f.depthWidth; c.depthHeight = f.depthHeight
             }
             cams.append(c)

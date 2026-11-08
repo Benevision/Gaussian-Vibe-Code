@@ -930,6 +930,23 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             raise ApiError(404, f"result not available (job is {job.state})")
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}.ply")
 
+    @app.get("/v1/jobs/{job_id}/sky.png")
+    def get_sky(job_id: str):
+        """The learned skybox (worker ≥ 1.3.15): equirectangular panorama; orientation in sky.json."""
+        job = manager.get(job_id)
+        path = job.dir / "result.sky.png"
+        if job.state != "completed" or not path.is_file():
+            raise ApiError(404, "no skybox for this job")
+        return FileResponse(path, media_type="image/png", filename=f"{job_id}.sky.png")
+
+    @app.get("/v1/jobs/{job_id}/sky.json")
+    def get_sky_meta(job_id: str):
+        job = manager.get(job_id)
+        path = job.dir / "result.sky.json"
+        if job.state != "completed" or not path.is_file():
+            raise ApiError(404, "no skybox for this job")
+        return json.loads(path.read_text())
+
     def _zip_filter(only: Optional[str], skip: Optional[str]):
         """``only=images,masks`` / ``skip=images,sfm/images``: folders (or files) to include / leave out — a
         top-level name or a nested path (worker ≥ 1.3.12)."""

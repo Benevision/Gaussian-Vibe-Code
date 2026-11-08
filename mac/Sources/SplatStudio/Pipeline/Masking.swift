@@ -29,6 +29,9 @@ struct MaskingOptions: Codable, Hashable, Sendable {
     var dilatePixels: Int = 4
     /// Object classes for the `dynamic` model (nil = defaults below).
     var dynamicClasses: [String]? = nil
+    /// Also find the sky (a separate layer, stacked on the masks above): camera solving ignores it and training
+    /// draws it with a learned skybox at infinity instead of splats (no more haze and shards in the sky).
+    var sky: Bool = false
     static let defaultDynamicClasses = ["person", "dog", "cat", "bird", "car", "truck", "bus", "bicycle", "motorcycle"]
 
     init() {}
@@ -36,6 +39,7 @@ struct MaskingOptions: Codable, Hashable, Sendable {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         model = c(.model, model); invert = c(.invert, invert); dilatePixels = c(.dilatePixels, dilatePixels); dynamicClasses = c(.dynamicClasses, dynamicClasses)
+        sky = c(.sky, sky)
     }
 }
 
@@ -79,6 +83,41 @@ enum FrameMasker {
             return try combineAndWrite(keep, frame: f, root: root)
         }
         for i in frames.frames.indices { frames.frames[i].mask = results[i] }
+    }
+
+    /// Sky layer: splatprep's sky model (SegFormer, or a heuristic without it) on this Mac or the worker, written as
+    /// `splatprep-sky/masks/<image>.png` (255 = sky) and recorded in `frames[i].sky`. Frames with almost no sky
+    /// get no sky mask.
+    static func applySky(to frames: inout FrameSet, runner: SplatPrepRunner = .init(), worker: WorkerClient? = nil,
+                         progress: PipelineProgressHandler?) async throws {
+        var r = ProcessingRequest(task: .masks)
+        r.imagesDir = "images"; r.outputDir = "splatprep-sky"; r.maskModel = "sky"; r.invertMask = true
+        var ranRemotely = false
+        if let worker {
+            do { try await runRemote(r, frames: frames, worker: worker, progress: progress); ranRemotely = true } catch {
+                progress?(PipelineProgress(stage: "Finding the sky", fraction: -1,
+                                           message: "worker couldn't run the sky model (\(error.localizedDescription)) — on this Mac"))
+            }
+        }
+        if !ranRemotely {
+            try await waitForFrames(frames.root, progress: progress)
+            try await runner.run(r, workDir: frames.root, progress: progress)
+        }
+        let dir = frames.root.appendingPathComponent("splatprep-sky/masks")
+        var withSky = 0
+        for i in frames.frames.indices {
+            let f = frames.frames[i]
+            let base = ((f.image as NSString).lastPathComponent as NSString).deletingPathExtension
+            let url = dir.appendingPathComponent(base + ".png")
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let (px, _, _) = try? ImageUtil.readGray8(url, width: 64, height: max(8, 64 * f.height / max(f.width, 1))) else { continue }
+            let sky = px.reduce(0) { $0 + ($1 >= 128 ? 1 : 0) }
+            guard Double(sky) > 0.002 * Double(px.count) else { continue }     // no sky in this photo
+            frames.frames[i].sky = "splatprep-sky/masks/\(base).png"
+            withSky += 1
+        }
+        progress?(PipelineProgress(stage: "Finding the sky", fraction: 1, message: "sky in \(withSky) of \(frames.frames.count) photos"))
+        try frames.save()
     }
 
     static func applySplatPrep(modelId: String, options: MaskingOptions, to frames: inout FrameSet, runner: SplatPrepRunner,

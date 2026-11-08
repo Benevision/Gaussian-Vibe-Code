@@ -96,7 +96,10 @@ dataset/
       "depth": "depth/000000.bin",       // optional
       "depthWidth": 256, "depthHeight": 192,
       "holdout": false,                   // true = evaluation image, never trained on
-      "mask": "masks/000000.png",          // optional 8-bit mask, 255 = keep
+      "mask": "masks/000000.png",          // optional 8-bit mask, 255 = keep (others ignored by the loss)
+      "sky": "splatprep-sky/masks/000000.png", // optional 8-bit sky mask, 255 = sky: drawn by the learned skybox
+                                           // (config skybox auto|on|off, skyboxResolution, skyAlphaWeight);
+                                           // GET /v1/jobs/{id}/sky.png + sky.json (worker ≥ 1.3.15)
       "time": 12.48,                       // optional seconds since sequence start (reserved: 4D splatting)
       "group": "iphone",                   // optional source group (reserved: multi-source datasets)
       "exposure": 0.00079                  // optional relative exposure = shutter s × ISO / 100 (seeds appearance correction)

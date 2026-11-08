@@ -30,7 +30,7 @@ def test_disk_cache_is_bounded_and_correct():
     views = [V(i) for i in range(20)]
     store.prefetch(views[:3])
     for v in views:
-        im, al, _, _ = store.get(v)
+        im, al, _, _, _ = store.get(v)
         assert im[0, 0, 0] == v.i and al.shape == (100, 100)
     assert store.bytes <= store.budget and len(store.cache) <= 5
     # recently used views are served from the cache

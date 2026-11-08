@@ -101,6 +101,10 @@ class TrainingConfig:
     # Adam moment storage: "fp32" (plain torch Adam) or "compact" (8-bit SH-rest moments, bf16 for the rest) —
     # ~1/3 less training memory per splat at SH degree 3, so more splats fit on the GPU (compact_adam.py).
     optimizerPrecision: str = "fp32"
+    # Learned skybox at infinity (skybox.py): "auto" = on when any photo has a sky mask
+    skybox: str = "auto"
+    skyboxResolution: int = 256          # panorama height (width = 2×)
+    skyAlphaWeight: float = 0.05         # keeps splats out of pixels the sky mask marks as sky
     # PROTOCOL.md §7 (block-parallel training)
     region: Optional[Region] = None
     cameraIds: Optional[List[int]] = None
@@ -151,6 +155,9 @@ class TrainingConfig:
         need(self.shDegreeInterval >= 1, "shDegreeInterval must be >= 1")
         need(self.strategy in _STRATEGIES, f"strategy must be one of {list(_STRATEGIES)}")
         need(self.background in _BACKGROUNDS, f"background must be one of {list(_BACKGROUNDS)}")
+        need(self.skybox in ("auto", "on", "off"), "skybox must be auto, on or off")
+        need(16 <= self.skyboxResolution <= 2048, "skyboxResolution must be 16…2048")
+        need(0 <= self.skyAlphaWeight <= 10, "skyAlphaWeight must be 0…10")
         need(self.optimizerPrecision in _OPTIMIZER_PRECISIONS,
              f"optimizerPrecision must be one of {list(_OPTIMIZER_PRECISIONS)}")
         need(self.maxGaussians >= 1, "maxGaussians must be >= 1")

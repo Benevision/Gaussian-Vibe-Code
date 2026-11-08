@@ -18,6 +18,8 @@ struct DatasetCamera: Codable, Identifiable, Hashable {
     var depthHeight: Int? = nil
     /// Optional 8-bit PNG mask (255 = keep). Masked-out pixels are ignored by the loss.
     var mask: String? = nil
+    /// Optional 8-bit PNG sky mask (255 = sky): drawn by the learned skybox at infinity, not by splats.
+    var sky: String? = nil
     var holdout: Bool? = nil
     /// Capture time in seconds from the start of the sequence (reserved for temporal / 4D splatting).
     var time: Double? = nil

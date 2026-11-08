@@ -210,6 +210,8 @@ enum BlockMerger {
         var out = GaussianCloud()
         out.shDegree = parts.map(\.cloud.shDegree).max() ?? 0
         out.antialiased = parts.contains { $0.cloud.antialiased }
+        // every block learns the same sky (same direction → colour): keep the one from the block with most cameras
+        out.skybox = parts.filter { $0.cloud.skybox != nil }.max { $0.block.cameraIds.count < $1.block.cameraIds.count }?.cloud.skybox
         out.reserve(parts.reduce(0) { $0 + $1.cloud.count })
         for (b, g) in parts {
             for i in 0..<g.count where b.owns(g.position(i)) {

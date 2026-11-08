@@ -309,6 +309,7 @@ struct NewProjectSheet: View {
             }
             if maskKind != .none { SettingRow(id: "mask.invert") { Toggle("", isOn: $options.masking.invert).labelsHidden() } }
             SettingRow(id: "mask.staticRegions") { Toggle("", isOn: $options.maskStaticRegions).labelsHidden() }
+            SettingRow(id: "mask.sky") { Toggle("", isOn: $options.masking.sky).labelsHidden() }
         }
     }
 
@@ -574,6 +575,8 @@ struct NewProjectSheet: View {
         p.canChooseDirectories = dir; p.canChooseFiles = !dir || files
         if p.runModal() == .OK, let u = p.url {
             source = make(u)
+            // outdoor-capable sources: find the sky by default (skybox); iPhone object captures don't need it
+            switch source! { case .video, .video360, .photos, .photoFiles, .photos360: options.masking.sky = true; default: options.masking.sky = false }
             if projectName.isEmpty { projectName = defaultName(source!) }
         }
     }

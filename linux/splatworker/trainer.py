@@ -713,6 +713,20 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     gpu_cache: Dict[int, tuple] = {}
     pose_cache: Dict[int, tuple] = {}
     masks: Dict[int, object] = {}   # id(view) → its ignore mask for the current step (set by to_dev)
+    skies: Dict[int, object] = {}   # id(view) → its sky mask (255 = sky) for the current step
+
+    def resized(m, like):
+        if m is None or (m.shape[0] == like.shape[0] and m.shape[1] == like.shape[1]):
+            return m
+        return torch.nn.functional.interpolate(m.permute(2, 0, 1)[None], size=like.shape[:2], mode="area")[0].permute(1, 2, 0)
+
+    from .skybox import Skybox
+    use_sky = cfg.skybox == "on" or (cfg.skybox == "auto" and any(c.sky for c in train_cams))
+    skybox = None
+    if use_sky:
+        skybox = Skybox(torch, ds.up_vector, height=cfg.skyboxResolution, device=dev)
+        log(f"learned skybox {2 * cfg.skyboxResolution}×{cfg.skyboxResolution} at infinity; "
+            f"{sum(1 for c in train_cams if c.sky)} photos have a sky mask (splats kept out, weight {cfg.skyAlphaWeight})")
 
     def to_dev(v: LoadedView):
         key = id(v)
@@ -722,14 +736,16 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if mode == "gpu":
             if key not in gpu_cache:
                 gpu_cache[key] = tuple(torch.from_numpy(a).to(dev) if a is not None else None
-                                       for a in (v.image, v.alpha, v.depth, v.mask))
-            img8, a8, d, m8 = gpu_cache[key]
+                                       for a in (v.image, v.alpha, v.depth, v.mask, v.sky))
+            img8, a8, d, m8, s8 = gpu_cache[key]
         else:
-            im, al, dp, mk = store.get(v)
+            im, al, dp, mk, sk = store.get(v)
             img8 = torch.from_numpy(im).to(dev)
             a8 = torch.from_numpy(al).to(dev) if al is not None else None
             d = torch.from_numpy(dp).to(dev) if dp is not None else None
             m8 = torch.from_numpy(mk).to(dev) if mk is not None else None
+            s8 = torch.from_numpy(sk).to(dev) if sk is not None else None
+        skies[key] = s8.float()[..., None] / 255.0 if s8 is not None else None
         img = img8.float() / 255.0
         alpha = a8.float()[..., None] / 255.0 if a8 is not None else None
         masks[key] = m8.float()[..., None] / 255.0 if m8 is not None else None
@@ -845,10 +861,11 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             for k, v in enumerate(eval_views):
                 img, alpha, _, K, w2c = to_dev(v)
                 renders, alphas, _ = render(w2c, K, v.width, v.height, sh_degree, False)
-                pred = renders[0, ..., :3] + (1 - alphas[0]) * eval_bg
+                ebg = skybox.sample(skybox.directions(K, w2c, v.width, v.height)) if skybox is not None else eval_bg
+                pred = renders[0, ..., :3] + (1 - alphas[0]) * ebg
                 if appearance is not None:  # holdout photos keep their exposure-seeded correction
                     pred = appearance.apply(len(train_views) + k, pred)
-                gt = img if alpha is None else img * alpha + (1 - alpha) * eval_bg
+                gt = img if alpha is None else img * alpha + (1 - alpha) * ebg
                 ignore = masks.get(id(v))
                 if ignore is not None:   # score only the pixels the model is meant to explain
                     gt = gt * ignore + pred.clamp(0, 1) * (1 - ignore)
@@ -909,7 +926,9 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if pose_refiner is not None and step >= cfg.poseRefinementStart:
             w2c = pose_refiner.apply(view_idx, w2c)
         renders, alphas, info = render(w2c, K, width, height, sh_degree, use_depth)
-        if fixed_bg is None:
+        if skybox is not None:      # the backdrop is the learned sky at infinity, per pixel direction
+            bg = skybox.sample(skybox.directions(K, w2c, width, height))
+        elif fixed_bg is None:
             bg = torch.rand(3, device=dev)
         else:
             bg = fixed_bg
@@ -971,6 +990,10 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             loss = loss + bilagrid.tv_loss(view_idx)
         if pose_refiner is not None and step >= cfg.poseRefinementStart:
             loss = loss + pose_refiner.reg_loss()
+        sky_m = resized(skies.get(id(v)), pred)
+        if skybox is not None and sky_m is not None and cfg.skyAlphaWeight > 0:
+            # splats don't belong in the sky: push their coverage there towards zero (the skybox paints it)
+            loss = loss + cfg.skyAlphaWeight * (alphas[0] * sky_m).sum() / sky_m.sum().clamp(min=1.0)
         loss.backward()
 
         # Block training does not kill gaussians that leave the region: the block's cameras also see
@@ -989,6 +1012,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         for opt in optimizers.values():
             opt.step()
             opt.zero_grad(set_to_none=True)
+        if skybox is not None:
+            skybox.step()
         pos_sched.step()
         if appearance is not None:
             appearance.step(view_idx)
@@ -1049,7 +1074,9 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 
     g_up = ds.raw.get("gravityUp") if isinstance(ds.raw, dict) else None
     scene_up = g_up if isinstance(g_up, list) and len(g_up) == 3 else ds.up_vector
-    final_n = export_ply(params, Path(out_path), up=scene_up)  # uncropped: the Mac merger crops with open outer faces
+    final_n = export_ply(params, Path(out_path), up=scene_up)
+    if skybox is not None:
+        log(f"skybox saved: {skybox.save(Path(out_path)).name}")  # uncropped: the Mac merger crops with open outer faces
     elapsed = time.time() - t_start
     stats = {"numGaussians": final_n, "psnr": last_eval_psnr if last_eval_psnr is not None else psnr_ema,
              "loss": loss_ema, "elapsedSeconds": elapsed, "previewStep": preview_step}

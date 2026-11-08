@@ -26,6 +26,10 @@ struct GaussianCloud {
     var shDegree: Int = 0
     /// Whether the scene was trained with the Mip-Splatting style 2D filter (affects rendering).
     var antialiased: Bool = false
+    /// Learned sky at infinity: an equirectangular PNG and its orientation JSON (up / forward / right), stored
+    /// next to the PLY as `<name>.sky.png` / `<name>.sky.json`.
+    var skybox: Skybox? = nil
+    struct Skybox: Sendable { var png: Data; var meta: Data }
 
     var count: Int { opacities.count }
 

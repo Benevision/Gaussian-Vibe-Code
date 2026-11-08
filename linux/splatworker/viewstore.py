@@ -68,7 +68,7 @@ class ViewStore:
 
     def _load(self, v) -> Tuple:
         full = self.loader(v)
-        return full.image, full.alpha, full.depth, getattr(full, "mask", None)
+        return full.image, full.alpha, full.depth, getattr(full, "mask", None), getattr(full, "sky", None)
 
     @staticmethod
     def _size(t: Tuple) -> int:
@@ -86,7 +86,7 @@ class ViewStore:
 
     def get(self, v) -> Tuple:
         if v.image is not None:                       # gpu / ram modes: pixels live on the view
-            return v.image, v.alpha, v.depth, getattr(v, "mask", None)
+            return v.image, v.alpha, v.depth, getattr(v, "mask", None), getattr(v, "sky", None)
         key = id(v)
         with self.lock:
             t = self.cache.get(key)

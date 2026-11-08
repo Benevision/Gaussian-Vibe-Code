@@ -276,6 +276,7 @@ class LoadedView:
     depth: Optional[np.ndarray]  # float32 [H, W] (resized to image), 0 = invalid
     size: Optional[tuple] = None  # (width, height) when image is None
     mask: Optional[np.ndarray] = None  # uint8 [H, W], 255 = train on this pixel (moving objects etc. → 0: ignored)
+    sky: Optional[np.ndarray] = None   # uint8 [H, W], 255 = sky (drawn by the skybox; splats kept out)
 
     @property
     def width(self) -> int:
@@ -363,7 +364,16 @@ def load_view(ds: DatasetInfo, cam: CameraInfo, max_size: int, load_depth_maps: 
     if load_depth_maps and cam.depth:
         d = load_depth(ds.resolve(cam.depth), cam.depth_width, cam.depth_height)
         depth = resize_nearest(d, new_w, new_h).astype(np.float32)
-    return LoadedView(camera=cam, image=arr, alpha=alpha, K=K, world_to_camera=w2c, depth=depth, mask=mask)
+    sky = None
+    if cam.sky:
+        sp = ds.resolve(cam.sky)
+        if sp.is_file():
+            with Image.open(sp) as m:
+                m = m.convert("L")
+                if m.size != (new_w, new_h):
+                    m = m.resize((new_w, new_h), Image.BILINEAR)
+                sky = np.ascontiguousarray(np.asarray(m, dtype=np.uint8))
+    return LoadedView(camera=cam, image=arr, alpha=alpha, K=K, world_to_camera=w2c, depth=depth, mask=mask, sky=sky)
 
 
 # ---------------------------------------------------------------------------

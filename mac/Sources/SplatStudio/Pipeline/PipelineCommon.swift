@@ -94,6 +94,8 @@ struct IngestedFrame: Codable, Hashable, Sendable {
     var depthHeight: Int? = nil
     /// Optional mask (8-bit PNG, 255 = keep) relative to the frame-set root.
     var mask: String? = nil
+    /// Optional sky mask (8-bit PNG, 255 = sky) relative to the frame-set root.
+    var sky: String? = nil
 }
 
 /// Description of a stereo camera rig (two horizontally separated, rectified pinhole cameras).

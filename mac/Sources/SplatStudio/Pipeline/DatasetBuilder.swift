@@ -307,6 +307,10 @@ enum DatasetBuilder {
             try await FrameMasker.apply(o.masking, to: &frames, runner: SplatPrepRunner(),
                                         worker: o.compute != .thisMac ? worker : nil, progress: maskP)
         }
+        if o.masking.sky {   // stacked on top of the masks above: a separate layer for the skybox
+            try await FrameMasker.applySky(to: &frames, runner: SplatPrepRunner(),
+                                           worker: o.compute != .thisMac ? worker : nil, progress: maskP)
+        }
 
         // 4. Poses (+ rig constraints / metric scale).
         let sequential: Bool = { switch source { case .video, .video360, .stereoVideo: return true; default: return false } }()
@@ -380,12 +384,22 @@ enum DatasetBuilder {
     /// Applies masking to an already imported dataset.
     static func maskDataset(_ ds: PreparedDataset, _ o: PrepOptions, worker: WorkerClient? = nil,
                             progress: PipelineProgressHandler?) async throws -> PreparedDataset {
-        guard o.masking.model != .none else { return ds }
+        guard o.masking.model != .none || o.masking.sky else { return ds }
         var frames = frameSet(from: ds)
-        try await FrameMasker.apply(o.masking, to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress)
+        if o.masking.model != .none {
+            try await FrameMasker.apply(o.masking, to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress)
+        }
+        if o.masking.sky {
+            try await FrameMasker.applySky(to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress)
+        }
         var out = ds
-        let masks = Dictionary(frames.frames.map { ($0.image, $0.mask) }, uniquingKeysWith: { a, _ in a })
-        for i in out.manifest.cameras.indices { if let m = masks[out.manifest.cameras[i].image] { out.manifest.cameras[i].mask = m } }
+        let masks = Dictionary(frames.frames.map { ($0.image, ($0.mask, $0.sky)) }, uniquingKeysWith: { a, _ in a })
+        for i in out.manifest.cameras.indices {
+            if let m = masks[out.manifest.cameras[i].image] {
+                if let mk = m.0 { out.manifest.cameras[i].mask = mk }
+                if let sk = m.1 { out.manifest.cameras[i].sky = sk }
+            }
+        }
         try out.save()
         try? FileManager.default.removeItem(at: ds.root.appendingPathComponent(FrameSet.fileName))
         return out
@@ -395,7 +409,7 @@ enum DatasetBuilder {
     static func frameSet(from ds: PreparedDataset) -> FrameSet {
         FrameSet(root: ds.root, frames: ds.manifest.cameras.map { c in
             var f = IngestedFrame(image: c.image, width: c.width, height: c.height)
-            f.focalPx = c.fx; f.cx = c.cx; f.cy = c.cy; f.mask = c.mask
+            f.focalPx = c.fx; f.cx = c.cx; f.cy = c.cy; f.mask = c.mask; f.sky = c.sky
             f.depth = c.depth; f.depthWidth = c.depthWidth; f.depthHeight = c.depthHeight
             return f
         })
