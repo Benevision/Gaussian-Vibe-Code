@@ -265,11 +265,25 @@ enum DatasetBuilder {
         case .photoFiles(let files):
             frames = try await PhotoIngest.ingest(files: files, options: o.photos, into: dir, progress: ingestP)
         case .video(let u):
-            if let f = try await framesOnWorker(u, equirect: nil, o, worker: worker, into: dir, progress: ingestP) { frames = f }
-            else { frames = try await VideoFrameExtractor.extract(video: u, options: o.video, into: dir, progress: ingestP) }
+            let stamp = FrameSourceStamp.make(video: u, video: o.video, equirect: nil)
+            if let f = FrameSourceStamp.reusable(dir, stamp: stamp, worker: worker) {
+                ingestP(PipelineProgress(stage: "Extracting frames", fraction: 1, message: "reusing the \(f.frames.count) frames from the last run"))
+                frames = f
+            } else {
+                if let f = try await framesOnWorker(u, equirect: nil, o, worker: worker, into: dir, progress: ingestP) { frames = f }
+                else { frames = try await VideoFrameExtractor.extract(video: u, options: o.video, into: dir, progress: ingestP) }
+                stamp?.save(dir)
+            }
         case .video360(let u):
-            if let f = try await framesOnWorker(u, equirect: o.equirect, o, worker: worker, into: dir, progress: ingestP) { frames = f }
-            else { frames = try await Equirect360.extract(video: u, video: o.video, options: o.equirect, into: dir, progress: ingestP) }
+            let stamp = FrameSourceStamp.make(video: u, video: o.video, equirect: o.equirect)
+            if let f = FrameSourceStamp.reusable(dir, stamp: stamp, worker: worker) {
+                ingestP(PipelineProgress(stage: "Splitting 360° video", fraction: 1, message: "reusing the \(f.frames.count) views from the last run"))
+                frames = f
+            } else {
+                if let f = try await framesOnWorker(u, equirect: o.equirect, o, worker: worker, into: dir, progress: ingestP) { frames = f }
+                else { frames = try await Equirect360.extract(video: u, video: o.video, options: o.equirect, into: dir, progress: ingestP) }
+                stamp?.save(dir)
+            }
         case .photos360(let folder):
             frames = try await Equirect360.extract(photos: PhotoIngest.listImages(in: folder, recursive: false), options: o.equirect,
                                                    encoding: o.photos.encoding, into: dir, progress: ingestP)

@@ -58,9 +58,12 @@ actor RemoteImageFetch {
                 let src = tmp.appendingPathComponent(d), dst = root.appendingPathComponent(d)
                 guard fm.fileExists(atPath: src.path) else { continue }
                 if fm.fileExists(atPath: dst.path) {
+                    // The worker's copy is the one masks / camera solves were computed from: it replaces any local
+                    // file of the same name (e.g. from an earlier split of the video on this Mac).
                     for f in try fm.contentsOfDirectory(atPath: src.path) {
                         let t = dst.appendingPathComponent(f)
-                        if !fm.fileExists(atPath: t.path) { try fm.moveItem(at: src.appendingPathComponent(f), to: t) }
+                        if fm.fileExists(atPath: t.path) { try fm.removeItem(at: t) }
+                        try fm.moveItem(at: src.appendingPathComponent(f), to: t)
                     }
                 } else {
                     try fm.moveItem(at: src, to: dst)
@@ -155,3 +158,37 @@ func sha256Hex(_ d: Data) -> String { SHA256.hash(data: d).map { String(format: 
 
 extension JSONEncoder { static var iso: JSONEncoder { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e } }
 extension JSONDecoder { static var iso: JSONDecoder { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d } }
+
+/// "These frames were split from this video with these settings" (`.frames-source.json` next to `frames.json`).
+/// A rerun of the same project reuses the frames instead of splitting the video again — which also keeps the
+/// frames identical to the ones earlier masks / camera solves on a worker were computed from.
+struct FrameSourceStamp: Codable, Equatable, Sendable {
+    var video: String
+    var size: Int64
+    var modified: Double
+    var settings: String
+
+    static let fileName = ".frames-source.json"
+
+    static func make(video u: URL, video vo: VideoExtractionOptions, equirect: Equirect360Options?) -> FrameSourceStamp? {
+        guard let a = try? FileManager.default.attributesOfItem(atPath: u.path),
+              let size = (a[.size] as? NSNumber)?.int64Value, let mod = a[.modificationDate] as? Date else { return nil }
+        let e = JSONEncoder(); e.outputFormatting = .sortedKeys
+        let s = [(try? e.encode(vo)), equirect.flatMap { try? e.encode($0) }].compactMap { $0 }
+        return FrameSourceStamp(video: u.standardizedFileURL.path, size: size, modified: mod.timeIntervalSince1970.rounded(),
+                                settings: sha256Hex(s.reduce(Data(), +)))
+    }
+
+    func save(_ root: URL) { if let d = try? JSONEncoder().encode(self) { try? d.write(to: root.appendingPathComponent(Self.fileName), options: .atomic) } }
+
+    /// The earlier frames, when they came from the same video and settings and are still complete
+    /// (images here, or kept on the worker this project uses).
+    static func reusable(_ root: URL, stamp: FrameSourceStamp?, worker: WorkerClient?) -> FrameSet? {
+        guard let stamp, let d = try? Data(contentsOf: root.appendingPathComponent(fileName)),
+              let old = try? JSONDecoder().decode(FrameSourceStamp.self, from: d), old == stamp,
+              let fs = try? FrameSet.load(root), !fs.frames.isEmpty else { return nil }
+        if let w = worker, let s = RemoteStore.usable(at: root, by: w), s.dirs.contains("images") { return fs }
+        let fm = FileManager.default
+        return fs.frames.allSatisfy { fm.fileExists(atPath: root.appendingPathComponent($0.image).path) } ? fs : nil
+    }
+}

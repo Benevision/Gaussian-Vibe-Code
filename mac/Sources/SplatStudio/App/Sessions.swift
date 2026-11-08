@@ -469,9 +469,20 @@ final class PrepSession {
         startedAt = Date(); lastUpdate = startedAt; overall = 0; samples.removeAll(); stageStarts.removeAll(); stageEnds.removeAll(); stageETA = nil
         progress = PipelineProgress(stage: "Starting", fraction: 0, message: "")
         let dsDir = projectDir.appendingPathComponent("dataset", isDirectory: true)
-        let worker: WorkerClient? = options.remoteWorkerId.flatMap { WorkerBrowser.shared.client(for: $0) }
+        let workerId = options.remoteWorkerId
         task = Task { [weak self] in
             do {
+                // Right after launch the worker may not be discovered yet: wait for it rather than quietly doing the
+                // work on this Mac.
+                var worker: WorkerClient? = nil
+                if let id = workerId {
+                    WorkerBrowser.shared.start()
+                    for _ in 0..<40 {
+                        if let c = WorkerBrowser.shared.client(for: id) { worker = c; break }
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                    if worker == nil { self?.ingest(PipelineProgress(stage: "Starting", fraction: 0, message: "worker not found on the network — using this Mac")) }
+                }
                 try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
                 let ds = try await DatasetBuilder.build(source: source, options: options, into: dsDir, worker: worker) { p in
                     Task { @MainActor in self?.ingest(p) }
