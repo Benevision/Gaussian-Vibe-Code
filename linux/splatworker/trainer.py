@@ -39,6 +39,28 @@ class TrainingCancelled(Exception):
     pass
 
 
+class TrainingPaused(Exception):
+    """Raised after the full training state was saved to ``resume_path``; ``train`` continues from it next time."""
+
+    def __init__(self, step: int):
+        super().__init__(f"paused at step {step}")
+        self.step = step
+
+
+RESUME_VERSION = 1
+
+
+def _np_state_out(torch):
+    """numpy's global RNG state with the key array as a tensor, so ``torch.load(weights_only=True)`` reads it."""
+    name, keys, pos, has_gauss, cached = np.random.get_state()
+    return {"name": name, "keys": torch.from_numpy(keys.astype(np.int64)), "pos": int(pos),
+            "has_gauss": int(has_gauss), "cached": float(cached)}
+
+
+def _np_state_in(st) -> tuple:
+    return (st["name"], st["keys"].numpy().astype(np.uint32), st["pos"], st["has_gauss"], st["cached"])
+
+
 def _check_gsplat_kernels(torch, gsplat) -> None:
     """gsplat's prebuilt CUDA kernels only load with the torch build they were compiled for; if something
     replaced torch (e.g. a package that pulled a newer PyTorch), fail with a fix instead of a cryptic
@@ -71,8 +93,12 @@ class Progress:
     def __init__(self, status: Optional[Callable[..., None]] = None,
                  log: Optional[Callable[[str], None]] = None,
                  preview: Optional[Callable[[int], None]] = None,
-                 should_stop: Optional[Callable[[], bool]] = None):
+                 should_stop: Optional[Callable[[], bool]] = None,
+                 should_pause: Optional[Callable[[], bool]] = None,
+                 take_checkpoint_request: Optional[Callable[[], bool]] = None,
+                 checkpoint: Optional[Callable[[int], None]] = None):
         self._status, self._log, self._preview, self._stop = status, log, preview, should_stop
+        self._pause, self._ckpt_req, self._ckpt = should_pause, take_checkpoint_request, checkpoint
 
     def status(self, **fields) -> None:
         if self._status:
@@ -88,6 +114,17 @@ class Progress:
 
     def should_stop(self) -> bool:
         return bool(self._stop and self._stop())
+
+    def should_pause(self) -> bool:
+        return bool(self._pause and self._pause())
+
+    def checkpoint_requested(self) -> bool:
+        """True once per request (the request is consumed)."""
+        return bool(self._ckpt_req and self._ckpt_req())
+
+    def checkpoint(self, step: int) -> None:
+        if self._ckpt:
+            self._ckpt(step)
 
 
 # ---------------------------------------------------------------------------
@@ -637,8 +674,13 @@ def export_preview_splat(splats, path: Path, max_splats: int = PREVIEW_MAX_SPLAT
 # ---------------------------------------------------------------------------
 
 def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
-          preview_path=None, progress: Optional[Progress] = None) -> Dict:
-    """Train a gaussian splat and write ``out_path`` (3DGS PLY). Returns stats."""
+          preview_path=None, progress: Optional[Progress] = None,
+          resume_path=None, checkpoint_path=None) -> Dict:
+    """Train a gaussian splat and write ``out_path`` (3DGS PLY). Returns stats.
+
+    ``resume_path``: where a pause saves the full state (params, optimizer moments, strategy state, RNGs, step;
+    ``TrainingPaused`` is raised after saving) and where the next call continues from if the file exists.
+    ``checkpoint_path``: where an on-demand checkpoint (and every pause) writes the current splats as a PLY."""
     progress = progress or Progress()
     log = progress.log
     t_start = time.time()
@@ -752,22 +794,39 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         return img, alpha, d, K, w2c
 
     # ---------------------------------------------------------------- init
-    xyz, rgb = init_points(ds, cfg, region_box, log)
-    n = xyz.shape[0]
-    dist = _knn_mean_dist(xyz)
-    dist = np.clip(dist, 1e-7, None)
+    resume = None
+    if resume_path is not None and Path(resume_path).is_file():
+        # tensors and plain containers only (see save_state), so the safe loader suffices
+        resume = torch.load(str(resume_path), map_location="cpu", weights_only=True)
+        if resume.get("version") != RESUME_VERSION:
+            raise TrainingError("the saved state of this paused job is from another worker version; "
+                                "it can't be resumed")
+        if resume.get("views") != [len(train_views), len(eval_views)]:
+            raise TrainingError("the dataset changed since this job was paused (different photos); "
+                                "it can't be resumed")
+        t_start -= float(resume.get("elapsed") or 0.0)
+        log(f"resuming from the state saved at step {resume['step']}")
     scene_scale = float(ds.scene_extent)
+    if resume is None:
+        xyz, rgb = init_points(ds, cfg, region_box, log)
+        n = xyz.shape[0]
+        dist = _knn_mean_dist(xyz)
+        dist = np.clip(dist, 1e-7, None)
 
-    num_sh = (cfg.shDegree + 1) ** 2
-    t = lambda a: torch.as_tensor(a, dtype=torch.float32, device=dev)  # noqa: E731
-    params = torch.nn.ParameterDict({
-        "means": torch.nn.Parameter(t(xyz)),
-        "scales": torch.nn.Parameter(t(np.log(dist))[:, None].repeat(1, 3)),
-        "quats": torch.nn.Parameter(torch.rand((n, 4), device=dev)),
-        "opacities": torch.nn.Parameter(torch.logit(torch.full((n,), cfg.initialOpacity, device=dev))),
-        "sh0": torch.nn.Parameter(((t(rgb) - 0.5) / SH_C0)[:, None, :]),
-        "shN": torch.nn.Parameter(torch.zeros((n, num_sh - 1, 3), device=dev)),
-    })
+        num_sh = (cfg.shDegree + 1) ** 2
+        t = lambda a: torch.as_tensor(a, dtype=torch.float32, device=dev)  # noqa: E731
+        params = torch.nn.ParameterDict({
+            "means": torch.nn.Parameter(t(xyz)),
+            "scales": torch.nn.Parameter(t(np.log(dist))[:, None].repeat(1, 3)),
+            "quats": torch.nn.Parameter(torch.rand((n, 4), device=dev)),
+            "opacities": torch.nn.Parameter(torch.logit(torch.full((n,), cfg.initialOpacity, device=dev))),
+            "sh0": torch.nn.Parameter(((t(rgb) - 0.5) / SH_C0)[:, None, :]),
+            "shN": torch.nn.Parameter(torch.zeros((n, num_sh - 1, 3), device=dev)),
+        })
+    else:
+        params = torch.nn.ParameterDict({k: torch.nn.Parameter(v.to(dev).contiguous())
+                                         for k, v in resume["params"].items()})
+        n = int(params["means"].shape[0])
     lrs = {
         "means": cfg.lrPosition * scene_scale,
         "scales": cfg.lrScale,
@@ -904,9 +963,102 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     appearance = AppearanceCorrection(torch, cfg, train_views + eval_views, dev) if use_appearance else None
     pose_refiner = PoseRefiner(torch, len(train_views), cfg, dev) if cfg.poseRefinement else None
 
-    for step in range(cfg.iterations):
+    g_up = ds.raw.get("gravityUp") if isinstance(ds.raw, dict) else None
+    scene_up = g_up if isinstance(g_up, list) and len(g_up) == 3 else ds.up_vector
+
+    def opt_states(opts):
+        return [o.state_dict() for o in opts]
+
+    def save_state(step: int) -> None:
+        """Everything the loop needs to carry on exactly where it stopped (pause, then resume)."""
+        state = {
+            "version": RESUME_VERSION, "step": step, "views": [len(train_views), len(eval_views)],
+            "params": {k: v.detach() for k, v in params.items()},
+            "optimizers": {k: o.state_dict() for k, o in optimizers.items()},
+            "pos_sched": pos_sched.state_dict(),
+            "strategy_state": strategy_state,
+            "order": list(order), "rng": rng.getstate(),
+            "py_random": random.getstate(), "np_random": _np_state_out(torch),
+            "torch_rng": torch.get_rng_state(),
+            "cuda_rng": torch.cuda.get_rng_state(dev) if dev.type == "cuda" else None,
+            "ema": {"psnr": psnr_ema, "loss": loss_ema, "eval": last_eval_psnr, "preview": preview_step},
+            "elapsed": time.time() - t_start, "cap_logged": cap_logged,
+            "transient": [transient.threshold, transient.fraction],
+            "appearance": None if appearance is None else
+            {"params": [p.detach() for p in appearance.params], "opts": opt_states(appearance.opts)},
+            "bilagrid": None if bilagrid is None else
+            {"grids": [g.detach() for g in bilagrid.grids], "opts": opt_states(bilagrid.opts)},
+            "pose": None if pose_refiner is None else
+            {"embed": pose_refiner.embed.state_dict(), "opt": pose_refiner.opt.state_dict()},
+            "skybox": None if skybox is None else {"tex": skybox.tex.detach(), "opt": skybox.opt.state_dict()},
+        }
+        dst = Path(resume_path)
+        tmp = dst.with_name(dst.name + ".tmp")
+        torch.save(state, str(tmp))
+        tmp.replace(dst)   # atomic: a crash mid-save leaves the previous state (or none), never half a file
+
+    def write_checkpoint(step: int) -> None:
+        dst = Path(checkpoint_path)
+        tmp = dst.with_name(dst.name + ".tmp")
+        n_out = export_ply(params, tmp, up=scene_up)
+        tmp.replace(dst)
+        log(f"step {step}: checkpoint written ({n_out} splats)")
+        progress.checkpoint(step)
+
+    start_step = 0
+    if resume is not None:
+        start_step = int(resume["step"])
+        for k, o in optimizers.items():
+            o.load_state_dict(resume["optimizers"][k])
+        if cfg.optimizerPrecision != "fp32":
+            for o in optimizers.values():
+                o.restore_dtypes()   # load_state_dict casts the int8/bf16 moments to the params' fp32
+        pos_sched.load_state_dict(resume["pos_sched"])
+        strategy_state = {k: (v.to(dev) if torch.is_tensor(v) else v) for k, v in resume["strategy_state"].items()}
+        order = list(resume["order"])
+        rng.setstate(resume["rng"])
+        random.setstate(resume["py_random"])
+        np.random.set_state(_np_state_in(resume["np_random"]))
+        torch.set_rng_state(resume["torch_rng"])
+        if resume.get("cuda_rng") is not None and dev.type == "cuda":
+            torch.cuda.set_rng_state(resume["cuda_rng"], dev)
+        ema = resume.get("ema") or {}
+        psnr_ema, loss_ema = ema.get("psnr"), ema.get("loss")
+        last_eval_psnr, preview_step = ema.get("eval"), ema.get("preview")
+        cap_logged = bool(resume.get("cap_logged"))
+        transient.threshold, transient.fraction = resume["transient"]
+        with torch.no_grad():
+            if appearance is not None and resume.get("appearance"):
+                for p_, v_ in zip(appearance.params, resume["appearance"]["params"]):
+                    p_.copy_(v_)
+                for o, st in zip(appearance.opts, resume["appearance"]["opts"]):
+                    o.load_state_dict(st)
+            if bilagrid is not None and resume.get("bilagrid"):
+                for g_, v_ in zip(bilagrid.grids, resume["bilagrid"]["grids"]):
+                    g_.copy_(v_)
+                for o, st in zip(bilagrid.opts, resume["bilagrid"]["opts"]):
+                    o.load_state_dict(st)
+            if pose_refiner is not None and resume.get("pose"):
+                pose_refiner.embed.load_state_dict(resume["pose"]["embed"])
+                pose_refiner.opt.load_state_dict(resume["pose"]["opt"])
+            if skybox is not None and resume.get("skybox"):
+                skybox.tex.copy_(resume["skybox"]["tex"])
+                skybox.opt.load_state_dict(resume["skybox"]["opt"])
+        resume = None   # free the CPU copy
+        progress.status(step=start_step, numGaussians=n, psnr=psnr_ema, evalPsnr=last_eval_psnr, loss=loss_ema)
+
+    for step in range(start_step, cfg.iterations):
         if progress.should_stop():
             raise TrainingCancelled()
+        if checkpoint_path is not None and progress.checkpoint_requested():
+            write_checkpoint(step)
+        if resume_path is not None and progress.should_pause():
+            if checkpoint_path is not None:
+                write_checkpoint(step)   # a paused job always has a downloadable checkpoint
+            progress.status(message="saving the training state")
+            save_state(step)
+            log(f"paused at step {step}: training state saved")
+            raise TrainingPaused(step)
         if not order:
             order = list(range(len(train_views)))
             rng.shuffle(order)
@@ -1062,7 +1214,7 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
         if now - last_report > 1.0 or cur == cfg.iterations:
             last_report = now
             elapsed = now - t_start
-            rate = (now - train_start) / cur
+            rate = (now - train_start) / max(1, cur - start_step)
             ngs = int(params["means"].shape[0])
             progress.status(step=cur, loss=loss_ema,
                             psnr=psnr_ema, evalPsnr=last_eval_psnr,   # train and held-out kept apart
@@ -1072,9 +1224,9 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                 log(f"step {cur}/{cfg.iterations} loss {loss_ema or 0:.4f} psnr {psnr_ema or 0:.2f} "
                     f"gaussians {ngs} sh {sh_degree}")
 
-    g_up = ds.raw.get("gravityUp") if isinstance(ds.raw, dict) else None
-    scene_up = g_up if isinstance(g_up, list) and len(g_up) == 3 else ds.up_vector
     final_n = export_ply(params, Path(out_path), up=scene_up)
+    if resume_path is not None:
+        Path(resume_path).unlink(missing_ok=True)   # finished: the saved state is no longer needed
     if skybox is not None:
         log(f"skybox saved: {skybox.save(Path(out_path)).name}")  # uncropped: the Mac merger crops with open outer faces
     elapsed = time.time() - t_start
@@ -1090,19 +1242,33 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
 # ---------------------------------------------------------------------------
 
 def subprocess_entry(dataset_dir: str, config: dict, job_dir: str, device: str,
-                     queue, cancel_event) -> None:
+                     queue, cancel_event, pause_event=None, checkpoint_event=None) -> None:
     job = Path(job_dir)
+
+    def take_checkpoint_request() -> bool:
+        if checkpoint_event is not None and checkpoint_event.is_set():
+            checkpoint_event.clear()
+            return True
+        return False
+
     progress = Progress(
         status=lambda **f: queue.put(("status", f)),
         log=lambda m: queue.put(("log", m)),
         preview=lambda s: queue.put(("preview", s)),
         should_stop=cancel_event.is_set,
+        should_pause=pause_event.is_set if pause_event is not None else None,
+        take_checkpoint_request=take_checkpoint_request,
+        checkpoint=lambda s: queue.put(("checkpoint", s)),
     )
     try:
         cfg = TrainingConfig.from_dict(config)
         stats = train(dataset_dir, cfg, job / "result.ply", device=device,
-                      preview_path=job / "preview.splat", progress=progress)
+                      preview_path=job / "preview.splat", progress=progress,
+                      resume_path=job / "resume.pt" if pause_event is not None else None,
+                      checkpoint_path=job / "checkpoint.ply")
         queue.put(("done", stats))
+    except TrainingPaused as e:
+        queue.put(("paused", e.step))
     except TrainingCancelled:
         queue.put(("cancelled", None))
     except BaseException as e:  # noqa: BLE001

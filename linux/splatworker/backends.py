@@ -26,6 +26,14 @@ class JobFailed(RuntimeError):
     pass
 
 
+class JobPaused(Exception):
+    """The trainer saved its full state (``resume.pt`` in the job dir) and stopped; the job can be resumed."""
+
+    def __init__(self, step: int = 0):
+        super().__init__(f"paused at step {step}")
+        self.step = int(step)
+
+
 @dataclass
 class JobContext:
     job_id: str
@@ -38,9 +46,16 @@ class JobContext:
     log: Callable[[str], None]
     preview: Callable[[int], None]  # preview.ply for this step has been written
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    # train jobs on a pausable backend: set → save state and stop (raise JobPaused); set → write checkpoint.ply
+    # of the current splats and call ``checkpoint(step)`` (the backend clears it once forwarded)
+    pause_event: threading.Event = field(default_factory=threading.Event)
+    checkpoint_event: threading.Event = field(default_factory=threading.Event)
+    checkpoint: Callable[[int], None] = lambda step: None
 
 
 class Backend:
+    pausable = False   # train jobs honour JobContext.pause_event / checkpoint_event
+
     def capabilities(self) -> List[str]:
         raise NotImplementedError
 
@@ -53,6 +68,8 @@ class Backend:
 
 
 class SubprocessBackend(Backend):
+    pausable = True
+
     def __init__(self, cancel_grace_seconds: float = 30.0):
         self.cancel_grace = cancel_grace_seconds
         self._mp = mp.get_context("spawn")
@@ -78,11 +95,13 @@ class SubprocessBackend(Backend):
     def run(self, ctx: JobContext) -> Dict[str, Any]:
         q = self._mp.Queue()
         cancel = self._mp.Event()
+        pause = self._mp.Event()
+        ckpt = self._mp.Event()
         if ctx.kind == "train":
             from .trainer import subprocess_entry
 
             device = f"cuda:{ctx.device_index}" if ctx.device_index is not None else "cuda:0"
-            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), device, q, cancel)
+            args = (str(ctx.dataset_dir), ctx.spec, str(ctx.job_dir), device, q, cancel, pause, ckpt)
         elif ctx.kind == "process":
             from .processing import subprocess_entry
 
@@ -106,6 +125,12 @@ class SubprocessBackend(Backend):
                     cancel.set()
                     cancel_sent_at = time.time()
                     ctx.log("cancellation requested")
+                if ctx.pause_event.is_set() and not pause.is_set():
+                    pause.set()            # no grace timer: saving the state of a big scene takes a while
+                    ctx.log("pause requested")
+                if ctx.checkpoint_event.is_set():
+                    ctx.checkpoint_event.clear()
+                    ckpt.set()
                 if cancel_sent_at is not None and time.time() - cancel_sent_at > self.cancel_grace:
                     ctx.log("worker did not stop in time; terminating")
                     proc.terminate()
@@ -132,7 +157,9 @@ class SubprocessBackend(Backend):
                     ctx.log(payload)
                 elif kind == "preview":
                     ctx.preview(int(payload))
-                elif kind in ("done", "cancelled", "error"):
+                elif kind == "checkpoint":
+                    ctx.checkpoint(int(payload))
+                elif kind in ("done", "cancelled", "error", "paused"):
                     outcome = (kind, payload)
                     break
         finally:
@@ -143,6 +170,8 @@ class SubprocessBackend(Backend):
         kind, payload = outcome
         if kind == "cancelled":
             raise JobCancelled()
+        if kind == "paused":
+            raise JobPaused(int(payload or 0))
         if kind == "error":
             raise JobFailed(payload)
         return payload or {}

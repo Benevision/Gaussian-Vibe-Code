@@ -198,6 +198,27 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 (in the `/v1/jobs`, `/v1/process` and `/v1/census` bodies, 0–1000): it uses 1 so the person at that PC goes ahead of
 jobs queued by other machines; everybody else's requests queue at 0.
 
+**Pause / resume and checkpoints (worker ≥ 1.4.0, capability `pause`).**
+
+| Method & path | Body | Response |
+|---|---|---|
+| `POST /v1/jobs/{id}/pause` | – | `JobStatus`. A **queued** job (any kind) is held back at once (`state` `"paused"`, never started). A **running training** job is asked to stop: the trainer saves its full state (splats, optimizer moments, densification state, RNGs, step) in the job folder and exits, and the job becomes `"paused"` (`message` is `"pausing"` meanwhile) — the GPU goes to the next queued job. `409` for finished jobs and running processing / census jobs; no-op when already paused |
+| `POST /v1/jobs/{id}/resume` | – | `JobStatus`; a **paused** job goes back into the queue (normal priority rules) and training continues from the saved step; `409` while it is still pausing or if it isn't paused |
+| `POST /v1/jobs/{id}/checkpoint?wait=<s>` | – | `JobStatus`; asks a running training job to write `checkpoint.ply` of its current splats without stopping. With `wait` (≤ 300 s) the answer comes once it is written (or the job stops); `checkpointStep` says which step it holds. A paused job already has one (written when it paused). `409` for jobs that are queued, finished or not training |
+| `GET /v1/jobs/{id}/checkpoint.ply` | – | the latest checkpoint (3DGS PLY, same layout as `result.ply`); header `X-Checkpoint-Step`; `404` until one was written |
+
+Who may pause, resume or checkpoint a job: the desktop app on the worker PC (the person who owns the GPU, see
+below) and the client that submitted the job (its address equals the job's `origin`); others get `403`. Pausing
+parks somebody's job and a checkpoint briefly stalls it, so another machine on the LAN must not do either to a job
+it didn't send. (`cancel` stays open to every authenticated client, as before.) A client whose address changed
+since it submitted (e.g. Wi-Fi → ethernet) can't pause that job.
+
+`"paused"` is neither active nor finished: `JobStatus` keeps `step`, `elapsedSeconds` (carried on after resuming)
+and `checkpointStep`; `etaSeconds` is `null`; the job keeps its dataset (`DELETE /v1/datasets/{id}` → `409`);
+`cancel` and `DELETE` work as for a queued job. Paused jobs survive a worker restart, and a resumed job that was
+running when the worker stopped returns to `"paused"` (from its last pause) instead of `"failed"`. Clients that
+don't know the state see an unknown, non-terminal value and keep polling (the Mac's `JobState` is tolerant).
+
 **The desktop app on the worker PC.** "Local" means more than a 127.0.0.1 connection (SSH tunnels, `tailscale serve`
 and reverse proxies arrive from loopback too): the app generates a secret at every launch, passes it to the server
 it starts in the environment (`SPLATWORK_LOCAL_SECRET`, read once and removed), and sends it with every request as
@@ -219,12 +240,13 @@ delete answer `404` for them.
 // JobStatus
 {
   "jobId": "j1", "name": "Kitchen",
-  "state": "queued",            // queued | loading | training | completed | failed | cancelled
+  "state": "queued",            // queued | loading | training | completed | failed | cancelled (| paused, capability "pause")
   "step": 1200, "totalSteps": 30000,
   "loss": 0.051, "psnr": 24.3,  // psnr is the latest eval/holdout or train-batch PSNR
   "numGaussians": 812345,
   "elapsedSeconds": 64.2, "etaSeconds": 1540.0,
   "previewStep": 1000,          // step of latest preview.ply, null if none
+  "checkpointStep": 900,        // step of checkpoint.ply (capability "pause"), null/absent if none
   "message": "optional human readable status or error"
 }
 ```

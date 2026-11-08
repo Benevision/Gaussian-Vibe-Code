@@ -9,6 +9,8 @@ Layout under ``data_dir``::
     jobs/<jobId>/preview.splat            latest compact snapshot (train; .splat, ≤400 k splats)
     jobs/<jobId>/preview.ply              full snapshot (only written by test/fake backends)
     jobs/<jobId>/result.ply               final splat (train)
+    jobs/<jobId>/checkpoint.ply           on-demand / pause-time snapshot of the splats (train, capability "pause")
+    jobs/<jobId>/resume.pt                full trainer state of a paused train job (removed when the job ends)
     jobs/<jobId>/output.zip               output of a processing job
     tmp/                                  in-flight uploads
 """
@@ -38,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import PROTOCOL_VERSION, __version__
-from .backends import Backend, JobCancelled, JobContext, SubprocessBackend
+from .backends import Backend, JobCancelled, JobContext, JobPaused, SubprocessBackend
 from .config import ConfigError, ServerSettings, TrainingConfig
 from .dataset import DatasetError, find_upload_root, parse_dataset
 from .processing import ProcessingError, validate_request
@@ -49,9 +51,11 @@ log = logging.getLogger("splatworker")
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ACTIVE_STATES = ("loading", "training", "running")
 FINAL_STATES = ("completed", "failed", "cancelled")
+# "paused" (worker ≥ 1.4.0, capability "pause") is neither active nor final: the job holds no GPU and waits for
+# POST /v1/jobs/{id}/resume. Old clients see an unknown, non-terminal state and simply keep polling.
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
-               "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin")
+               "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep")
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 LOCAL_HEADER = "X-SplatWork-Local"   # per-launch secret of the desktop app that started this server
 
@@ -119,6 +123,9 @@ class Job:
         self.spec = spec          # {"kind","datasetId","name","config"|"request"}
         self.status = status
         self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.checkpoint_event = threading.Event()
+        self.checkpoints = 0            # checkpoints written since the server started (POST …/checkpoint?wait=)
         self.deleted = False
         self.started_monotonic: Optional[float] = None
         self.lock = threading.Lock()
@@ -143,7 +150,8 @@ class Job:
         with self.lock:
             for k, v in fields.items():
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
-                         "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority"):
+                         "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
+                         "checkpointStep"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -202,7 +210,14 @@ class JobManager:
             except Exception as e:
                 log.warning("skipping unreadable job %s: %s", d.name, e)
                 continue
-            if job.state in ACTIVE_STATES:
+            if job.state in ACTIVE_STATES and (d / "resume.pt").is_file():
+                # a resumed job that was running when the worker stopped: its last pause is still on disk
+                job.status["state"] = "paused"
+                job.status["message"] = "interrupted by a worker restart; resume continues from the last pause"
+                job.status["etaSeconds"] = None
+                job.persist()
+                job.log("job was interrupted by a worker restart; it can be resumed from its last pause")
+            elif job.state in ACTIVE_STATES:
                 job.status["state"] = "failed"
                 job.status["message"] = "interrupted by worker restart"
                 job.status["etaSeconds"] = None
@@ -288,9 +303,77 @@ class JobManager:
                            etaSeconds=None)
                 job.log("cancelled while queued")
                 return job
+            if job.state == "paused":
+                job.update(persist=True, state="cancelled", message="cancelled while paused", etaSeconds=None)
+                (job.dir / "resume.pt").unlink(missing_ok=True)
+                job.log("cancelled while paused")
+                return job
         if job.state in ACTIVE_STATES:
             job.cancel_event.set()
             job.update(message="cancelling")
+        return job
+
+    # --------------------------------------------------------- pause / resume
+    def pausable(self, job: Job) -> bool:
+        return job.spec.get("kind") == "train" and bool(getattr(self.backend, "pausable", False))
+
+    def pause(self, job_id: str) -> Job:
+        """Queued job (any kind): held back. Running train job: the trainer saves its state and stops, freeing the
+        GPU for the next queued job (the state becomes "paused" once it has). Paused: nothing to do."""
+        job = self.get(job_id)
+        with self.cond:
+            if job.state == "paused":
+                return job
+            if job.state == "queued":
+                try:
+                    self.queue.remove(job_id)
+                except ValueError:
+                    pass
+                job.update(persist=True, state="paused", message="paused before it started", etaSeconds=None)
+                job.log("paused while queued")
+                return job
+        if job.state in ACTIVE_STATES:
+            if not self.pausable(job):
+                raise ApiError(409, "only training jobs can be paused while they run")
+            if job.cancel_event.is_set():
+                raise ApiError(409, "the job is being cancelled")
+            job.pause_event.set()
+            job.update(message="pausing")
+            job.log("pause requested")
+            return job
+        raise ApiError(409, f"a {job.state} job can't be paused")
+
+    def resume(self, job_id: str) -> Job:
+        job = self.get(job_id)
+        with self.cond:
+            if job.state in ("queued",) + ACTIVE_STATES:
+                if job.pause_event.is_set():
+                    raise ApiError(409, "the job is still pausing; resume it once it has paused")
+                return job
+            if job.state != "paused":
+                raise ApiError(409, f"a {job.state} job can't be resumed")
+            job.pause_event.clear()
+            job.checkpoint_event.clear()
+            step = job.status.get("step") or 0
+            resumable = (job.dir / "resume.pt").is_file()
+            job.update(persist=True, state="queued",
+                       message=f"queued (continues from step {step:,})" if resumable else "queued")
+            job.log("resumed: back in the queue" + (f", continues from step {step}" if resumable else ""))
+            self.queue.append(job.id)
+            self.cond.notify()
+        return job
+
+    def request_checkpoint(self, job_id: str) -> Job:
+        """Ask a running train job to write checkpoint.ply now. A paused job already has one (written at pause)."""
+        job = self.get(job_id)
+        if job.state == "paused":
+            if not (job.dir / "checkpoint.ply").is_file():
+                raise ApiError(409, "the job was paused before training started; there is nothing to save yet")
+            return job
+        if job.state not in ACTIVE_STATES or not self.pausable(job):
+            raise ApiError(409, "checkpoints can only be taken of a running or paused training job")
+        job.checkpoint_event.set()
+        job.log("checkpoint requested")
         return job
 
     def delete(self, job_id: str) -> None:
@@ -361,8 +444,10 @@ class JobManager:
         if device is not None:
             gpus = list_gpus([device])
             gpu_name = gpus[0]["name"] if gpus else f"GPU {device}"
-        job.started_monotonic = time.monotonic()
-        job.update(persist=True, state="loading", message="starting", gpu=gpu_name)
+        resuming = job.spec.get("kind") == "train" and (job.dir / "resume.pt").is_file()
+        prior = float(job.status.get("elapsedSeconds") or 0.0) if resuming else 0.0
+        job.started_monotonic = time.monotonic() - prior     # elapsed time carries on across a pause
+        job.update(persist=True, state="loading", message="resuming" if resuming else "starting", gpu=gpu_name)
         job.log(f"starting on {'GPU ' + str(device) if device is not None else 'default device'}"
                 f"{' (' + gpu_name + ')' if gpu_name else ''}")
 
@@ -375,22 +460,37 @@ class JobManager:
             fields.pop("elapsedSeconds", None)  # server measures wall time itself
             if fields.get("state") not in (None, "loading", "training", "running"):
                 fields.pop("state")
-            if job.cancel_event.is_set():
+            if job.cancel_event.is_set() or job.pause_event.is_set():
                 fields.pop("message", None)
             job.update(**fields)
 
         def preview(step: int):
             job.update(persist=True, previewStep=step)
 
+        def checkpoint(step: int):
+            job.checkpoints += 1
+            job.update(persist=True, checkpointStep=step)
+
         kind = job.spec["kind"]
         ctx = JobContext(
             job_id=job.id, kind=kind, job_dir=job.dir, dataset_dir=dataset_dir,
             spec=job.spec.get({"train": "config", "census": "census"}.get(kind, "request")) or {},
             device_index=device, status=status, log=job.log, preview=preview,
-            cancel_event=job.cancel_event,
+            cancel_event=job.cancel_event, pause_event=job.pause_event, checkpoint_event=job.checkpoint_event,
+            checkpoint=checkpoint,
         )
         try:
             stats = self.backend.run(ctx) or {}
+        except JobPaused as e:
+            job.pause_event.clear()
+            if job.cancel_event.is_set():        # cancelled while pausing: cancel wins
+                self._finish(job, "cancelled", "cancelled")
+                return
+            elapsed = round(time.monotonic() - job.started_monotonic, 1)
+            job.update(persist=True, state="paused", step=e.step, message=f"paused at step {e.step:,}",
+                       etaSeconds=None, elapsedSeconds=elapsed)
+            job.log(f"paused at step {e.step}; the GPU is free (resume continues from here)")
+            return
         except JobCancelled:
             if self.stopping and not job.deleted:
                 self._finish(job, "failed", "worker shut down while the job was running")
@@ -435,6 +535,8 @@ class JobManager:
             elapsed = round(time.monotonic() - job.started_monotonic, 1)
         job.update(persist=True, state=state, message=message, etaSeconds=0.0 if state == "completed" else None,
                    elapsedSeconds=elapsed)
+        job.pause_event.clear()
+        (job.dir / "resume.pt").unlink(missing_ok=True)      # only a paused job needs its saved state
         job.log(f"job {state}: {message}")
 
 
@@ -675,6 +777,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         caps = caps + ["priority"]        # ≥ 1.4.0: POST /v1/jobs/{id}/prioritize, JobStatus.priority / origin
         if "train" in caps:
             caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)
+        if "train" in caps and getattr(backend, "pausable", False):
+            caps = caps + ["pause"]       # ≥ 1.4.0: POST /v1/jobs/{id}/pause|resume|checkpoint, checkpoint.ply
         if settings.local_enabled:
             caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (the desktop app on this PC only)
         try:
@@ -1049,6 +1153,53 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         if not _is_local(request):
             raise ApiError(403, "only the desktop app on this computer can reorder the queue")
         return manager.prioritize(job_id).snapshot()
+
+    def _may_control(request: Request, job: Job) -> None:
+        """Pause / resume / checkpoint: the person at this PC (the desktop app, who owns the GPU) and whoever
+        submitted the job (same origin). Other LAN clients may not stall or park somebody else's job."""
+        origin = _origin(request)
+        if origin == "local" or (origin not in ("", "unknown") and origin == job.status.get("origin")):
+            return
+        raise ApiError(403, "only the desktop app on this computer or the client that submitted the job "
+                            "can pause, resume or checkpoint it")
+
+    @app.post("/v1/jobs/{job_id}/pause")
+    def pause_job(job_id: str, request: Request):
+        job = manager.get(job_id)
+        _may_control(request, job)
+        return manager.pause(job_id).snapshot()
+
+    @app.post("/v1/jobs/{job_id}/resume")
+    def resume_job(job_id: str, request: Request):
+        job = manager.get(job_id)
+        _may_control(request, job)
+        return manager.resume(job_id).snapshot()
+
+    @app.post("/v1/jobs/{job_id}/checkpoint")
+    async def checkpoint_job(job_id: str, request: Request, wait: float = 0.0):
+        """Ask for checkpoint.ply of the current splats. ``?wait=<s>`` (≤ 300) returns once it is written (or the
+        job stops running, or the time is up); the JobStatus' ``checkpointStep`` says which step it holds."""
+        import asyncio
+
+        job = manager.get(job_id)
+        _may_control(request, job)
+        before = job.checkpoints
+        manager.request_checkpoint(job_id)
+        deadline = time.monotonic() + max(0.0, min(float(wait), 300.0))
+        while job.state in ACTIVE_STATES and job.checkpoints == before and time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+        return job.snapshot()
+
+    @app.get("/v1/jobs/{job_id}/checkpoint.ply")
+    def get_checkpoint(job_id: str):
+        job = manager.get(job_id)
+        path = job.dir / "checkpoint.ply"
+        if not path.is_file():
+            raise ApiError(404, "no checkpoint yet")
+        step = job.status.get("checkpointStep")
+        headers = {"X-Checkpoint-Step": str(step)} if step is not None else None
+        return FileResponse(path, media_type="application/octet-stream",
+                            filename=f"{job_id}-step{step if step is not None else 0}.ply", headers=headers)
 
     @app.get("/v1/jobs")
     def list_jobs():
