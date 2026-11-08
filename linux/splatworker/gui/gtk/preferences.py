@@ -197,6 +197,9 @@ class Preferences:
         self._switch(g, "autostart", "Start automatically when you log in",
                      "Starts SplatWork Node in the background at login (the system may ask for permission). "
                      "Useful for a dedicated GPU box.", after=self.on_autostart)
+        self._switch(g, "auto_update", "Install updates automatically",
+                     "New versions from the SplatWork repository are downloaded and installed, and the app "
+                     "restarts into them, only while no job is running (Flatpak installs).")
         return g
 
     def _runtime(self) -> Adw.PreferencesGroup:

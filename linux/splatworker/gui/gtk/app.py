@@ -71,6 +71,8 @@ class SplatWorkerApp(Adw.Application):
                 self.window.start_server()
 
     def do_shutdown(self) -> None:
+        if self.window is not None:
+            self.window.updater.close()
         if self.state is not None:
             self.state.shutdown()  # stops the server (jobs are cancelled cleanly)
         Adw.Application.do_shutdown(self)

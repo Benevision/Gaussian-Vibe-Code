@@ -149,7 +149,10 @@ shared through the file chooser portal.
 Every push to `main` that touches `linux/` or `tools/` is built by GitHub Actions
 (`.github/workflows/splat-worker-flatpak.yml`) and published as a Flatpak repository on GitHub Pages.
 Install from there once and updates arrive like any other Flatpak app: GNOME Software / KDE Discover
-offer them, or run `flatpak update`. The app also shows a banner when a newer version is published.
+offer them, or run `flatpak update`. From 1.3.16 the app also updates itself: it installs a newly published
+version through the Flatpak portal and restarts into it once no job is running or queued (Preferences →
+Install updates automatically; off = a banner with Update / Restart buttons). Headless installs
+(`--headless`, systemd) don't self-update: use `flatpak update` (e.g. from a timer).
 
 ```bash
 # one time: remove a locally built copy, then install from the published repository

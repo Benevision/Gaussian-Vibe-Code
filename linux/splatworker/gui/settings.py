@@ -36,6 +36,7 @@ class AppSettings:
     start_server_on_launch: bool = True
     run_in_background: bool = True
     autostart: bool = False
+    auto_update: bool = True            # Flatpak: install updates and restart into them when no job runs
     log_level: str = "info"
     # Extra components the setup assistant installed (informational, kept here so the
     # "repair" button can reinstall the same set).
@@ -116,7 +117,7 @@ class AppSettings:
         check("log_level", self.log_level in ("critical", "error", "warning", "info", "debug"),
               "Unknown log level.")
         for name in ("require_token", "mdns", "start_server_on_launch", "run_in_background",
-                     "autostart", "with_splatprep", "with_lightglue"):
+                     "autostart", "auto_update", "with_splatprep", "with_lightglue"):
             check(name, is_bool(getattr(self, name)), "Must be on or off.")
         return errors
 

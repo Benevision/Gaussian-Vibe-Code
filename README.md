@@ -18,6 +18,12 @@ Ready-built releases are on the [Releases page](https://github.com/Benevision/Ga
   time, right-click the app → **Open**.
 * **SplatWork Node for Linux** (NVIDIA GPU) — single-file `.flatpak`: `flatpak install --user SplatWorkNode-*.flatpak`.
 
+Both update themselves from here: the Mac app checks the latest release at launch and every 6 hours, downloads
+and verifies it (SHA-256) in the background, and installs it when you relaunch or quit (**SplatWork → Check for
+Updates…**; turn off in Settings). SplatWork Node installs new versions through Flatpak and restarts into them
+when no job is running. Mac updates arrive with each release tag; the Linux app's repository is rebuilt on every
+push to `main`.
+
 Releases are cut by pushing a tag (`git tag -a v1.4.0 -m "…" && git push origin v1.4.0`); see
 `.github/workflows/release.yml`.
 

@@ -26,7 +26,14 @@ struct SplatStudioApp: App {
                     MacWorker.shared.restore()
                     if UserDefaults.standard.object(forKey: "receiveFromiPhone") as? Bool ?? true { CaptureReceiverHolder.shared.receiver.start() }
                     CaptureReceiverHolder.shared.receiver.onCapture = { _ in NSSound(named: "Purr")?.play() }
+                    AppUpdater.shared.isBusy = { [weak model] in
+                        guard let model else { return false }
+                        return model.training.isActive || model.prep.running || MacWorker.shared.isTraining
+                    }
+                    AppUpdater.shared.startAutomaticChecks()
                 }
+                .sheet(isPresented: Binding(get: { AppUpdater.shared.showPrompt && !model.showNewProject },
+                                            set: { AppUpdater.shared.showPrompt = $0 })) { UpdateSheet() }
         }
         .defaultLaunchBehavior(.presented)   // also when launched to open a file/folder
         .commands { AppCommands(model: model) }
@@ -57,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
         }
     }
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AppUpdater.shared.installOnQuitIfReady() }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
@@ -65,6 +75,10 @@ struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { Task { await AppUpdater.shared.check(userInitiated: true) } }
+                .disabled(!AppUpdater.shared.isSupported)
+        }
         CommandGroup(replacing: .newItem) {
             Button("Home") { model.goHome() }.keyboardShortcut("h", modifiers: [.command, .shift])
             Button("New Project…") { model.newProjectSource = nil; model.showNewProject = true }.keyboardShortcut("n")
@@ -128,6 +142,13 @@ struct PreferencesView: View {
             }
             Text("Easy mode shows presets and essential options. Advanced shows every parameter with full documentation.").font(.caption).foregroundStyle(.secondary)
             Toggle("Receive captures from iPhone at launch", isOn: $receive)
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: Bindable(AppUpdater.shared).autoCheck)
+                Toggle("Download updates in the background", isOn: Bindable(AppUpdater.shared).autoDownload)
+                    .disabled(!AppUpdater.shared.autoCheck)
+                Text("New releases come from GitHub, are checked against their published SHA-256, and install when you relaunch or quit.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .padding(20)
         .frame(width: 460)

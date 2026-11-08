@@ -31,7 +31,11 @@ cd "$HERE"
   "$HERE/build-dir" "$HERE/$APP_ID.yml"
 
 mkdir -p "$OUT_DIR"
-flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+# SPLAT_REPO_URL (set by the release workflow): the GitHub Pages Flatpak repo becomes the bundle's update
+# origin, so installs from the .flatpak file get updates (and the app's self-update) like remote installs.
+REPO_URL_ARGS=()
+[ -n "${SPLAT_REPO_URL:-}" ] && REPO_URL_ARGS=(--repo-url="$SPLAT_REPO_URL")
+flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo ${REPO_URL_ARGS[@]+"${REPO_URL_ARGS[@]}"} \
   "$HERE/repo" "$OUT" "$APP_ID" stable
 echo "bundle: $OUT ($(du -h "$OUT" | cut -f1))"
 echo "install: flatpak install --user $(basename "$OUT")"

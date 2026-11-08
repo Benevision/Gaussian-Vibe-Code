@@ -36,6 +36,38 @@ enum CLI {
             print("Serving \"\(name)\" (\(e.gpuName)) on port \(port); Ctrl-C to stop"); fflush(stdout)
             withExtendedLifetime(server) { dispatchMain() }
         }
+        if a.contains("--update-check") {
+            // Latest GitHub release vs this build; --download also fetches, verifies and unpacks it (not installed).
+            let cases: [(String, String, Bool)] = [("1.1.0", "1.0.0", true), ("1.0.0", "1.0.0", false), ("1.0.0", "1.0.0-dev", false),
+                                                  ("1.1.0", "1.0.0-dev", true), ("1.0.0", "1.0.0-rc1", true), ("1.0.10", "1.0.9", true),
+                                                  ("1.0", "1.0.1", false), ("2.0.0-rc1", "1.9.0", true)]
+            for (r, l, want) in cases where AppUpdater.isNewer(r, than: l) != want { print("isNewer(\(r), \(l)) != \(want)"); exit(1) }
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "none"
+            let sem = DispatchSemaphore(value: 0)
+            Task.detached {
+                do {
+                    guard let r = try await AppUpdater.fetchLatest() else { print("no release"); sem.signal(); return }
+                    print("latest \(r.version) (\(r.dmgName), \(r.dmgSize) bytes, sums: \(r.checksums != nil)); this build \(current); newer: \(AppUpdater.isNewer(r.version, than: current))")
+                    if CommandLine.arguments.contains("--download") {
+                        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("splatwork-update-\(UUID().uuidString)")
+                        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                        let dmg = dir.appendingPathComponent(r.dmgName)
+                        let (tmp, _) = try await URLSession.shared.download(from: r.dmg)
+                        try FileManager.default.moveItem(at: tmp, to: dmg)
+                        if let sums = r.checksums {
+                            let (d, _) = try await URLSession.shared.data(from: sums)
+                            let want = AppUpdater.checksum(in: String(decoding: d, as: UTF8.self), for: r.dmgName)
+                            let have = try AppUpdater.sha256(of: dmg)
+                            print("sha256 \(have == want ? "ok" : "MISMATCH") \(have)")
+                        }
+                        let app = try AppUpdater.extractApp(from: dmg, into: dir, version: r.version)
+                        print("staged \(app.path)")
+                    }
+                } catch { print("error: \(error.localizedDescription)") }
+                sem.signal()
+            }
+            sem.wait(); exit(0)
+        }
         if let v = value("--frames-fingerprint") {
             // Fingerprint a worker frames job would be filed under, with the default new-project settings
             // (pass --360 for 360° video). Lets an earlier job be registered in a project's .remote-jobs.json.

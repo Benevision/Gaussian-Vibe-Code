@@ -99,7 +99,9 @@ jobs:
           key: fpb-bundle-${{ hashFiles('linux/flatpak/*.yml', 'linux/flatpak/python3-deps.json') }}-${{ github.sha }}
           restore-keys: fpb-bundle-${{ hashFiles('linux/flatpak/*.yml', 'linux/flatpak/python3-deps.json') }}-
       - name: Build single-file bundle
-        run: linux/flatpak/make-bundle.sh
+        run: |
+          export SPLAT_REPO_URL="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/flatpak/repo/"
+          linux/flatpak/make-bundle.sh
       - uses: actions/upload-artifact@v4
         with:
           name: worker

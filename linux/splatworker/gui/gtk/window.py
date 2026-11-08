@@ -66,11 +66,16 @@ class MainWindow(Adw.ApplicationWindow):
         self.banner.connect("button-clicked", lambda *_: self.app.activate_action("setup", None))
         view.add_top_bar(self.banner)
         self.update_banner = Adw.Banner(button_label="How to Update")
-        self.update_banner.connect("button-clicked", lambda *_: self._show_update_help())
+        self.update_banner.connect("button-clicked", lambda *_: self._update_clicked())
         view.add_top_bar(self.update_banner)
         self._update_info = None
-        GLib.timeout_add_seconds(5, self._check_updates)
+        self._update_busy = False
+        from .flatpak_update import SelfUpdater
+        self.updater = SelfUpdater(lambda: GLib.idle_add(self._render_update))
+        self.updater.start()
+        GLib.timeout_add_seconds(5, self._check_updates_once)
         GLib.timeout_add_seconds(6 * 3600, self._check_updates)
+        GLib.timeout_add_seconds(30, self._auto_update_tick)
 
         view.set_content(self.stack)
         bottom = Adw.ViewSwitcherBar(stack=self.stack)
@@ -363,6 +368,10 @@ class MainWindow(Adw.ApplicationWindow):
         finally:
             self._updating = False
 
+    def _check_updates_once(self) -> bool:
+        self._check_updates()
+        return False
+
     def _check_updates(self) -> bool:
         from .. import updates
 
@@ -374,16 +383,89 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _set_update_info(self, info) -> bool:
         self._update_info = info
-        if info:
-            self.update_banner.set_title(f"SplatWork Node {info.get('version')} is available.")
-        self.update_banner.set_revealed(bool(info))
+        if self.updater.supported:
+            self.updater.published(info)
+        else:
+            self._render_update()
+        return False
+
+    def _render_update(self) -> bool:
+        from .. import updates as U
+        auto = self.state.settings.auto_update
+        if self.updater.supported:
+            u = self.updater
+            title, button = U.banner_text(u.state, u.version or (self._update_info or {}).get("version", ""),
+                                          auto, self._update_busy, u.fraction, u.error)
+        elif self._update_info:      # not a Flatpak install: tell, don't act
+            title, button = f"SplatWork Node {self._update_info.get('version')} is available.", "How to Update"
+        else:
+            title, button = "", None
+        self.update_banner.set_title(title)
+        if button:
+            self.update_banner.set_button_label(button)
+        self.update_banner.set_revealed(bool(title))
+        return False
+
+    def _update_clicked(self) -> None:
+        from .. import updates as U
+        u = self.updater
+        if not u.supported or u.state == U.FAILED:
+            self._show_update_help()
+        elif u.state == U.AVAILABLE:
+            u.update()               # downloading + installing doesn't touch running jobs; only the restart does
+        elif u.state == U.INSTALLED:
+            self._confirm_if_busy("Restart now?", "restart into the new version", self._restart_for_update)
+
+    def _confirm_if_busy(self, heading: str, what: str, action) -> None:
+        jobs = self._last_poll.jobs if self._last_poll else []
+        from .. import updates as U
+        busy = U.busy_jobs(jobs)
+        if not busy:
+            action()
+            return
+        alert(self, heading, f"{len(busy)} job(s) are running or queued. To {what} now, they are stopped "
+                             "(the Mac can start them again).",
+              (("cancel", "Cancel", "default"), ("go", "Stop Jobs and Continue", "destructive")),
+              lambda r: action() if r == "go" else None)
+
+    def _restart_for_update(self) -> None:
+        background = not self.get_visible()
+        self.updater.restart(background, self.app._really_quit)
+
+    def _auto_update_tick(self) -> bool:
+        """Every 30 s: with automatic updates on, install / restart once no job is running or queued."""
+        from .. import updates as U
+        if not self.updater.supported or self.updater.state not in (U.AVAILABLE, U.INSTALLED):
+            return True
+        client = self.state.client() if self.state.server.is_active else None
+
+        def work():
+            try:
+                busy = bool(U.busy_jobs(client.jobs())) if client is not None else False
+            except Exception:
+                busy = True          # can't tell: don't restart under a job
+            GLib.idle_add(self._auto_update_decide, busy)
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _auto_update_decide(self, busy: bool) -> bool:
+        from .. import updates as U
+        self._update_busy = busy
+        action = U.next_action(self.updater.state, self.state.settings.auto_update, busy)
+        if action == "update":
+            self.updater.update()
+        elif action == "restart":
+            self._restart_for_update()
+        self._render_update()
         return False
 
     def _show_update_help(self) -> None:
         from .. import updates
         v = (self._update_info or {}).get("version", "")
-        alert(self, f"Update to {v}",
-              "Updates arrive like any other Flatpak: GNOME Software or Discover offer them automatically, "
+        err = self.updater.error if self.updater.supported else ""
+        alert(self, f"Update to {v}" if v else "Update",
+              (f"The automatic update failed: {err}\n\n" if err else "")
+              + "Updates arrive like any other Flatpak: GNOME Software or Discover offer them automatically, "
               "or run this in a terminal (then restart SplatWork Node):\n\n" + updates.UPDATE_COMMAND,
               responses=(("close", "Close", "default"), ("copy", "Copy Command", "suggested")),
               callback=lambda r: copy_text(self, updates.UPDATE_COMMAND) if r == "copy" else None,
