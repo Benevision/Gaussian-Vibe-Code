@@ -12,7 +12,7 @@ settings:
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
     # Set your Apple Developer Team ID here (or pick it in Xcode > Signing & Capabilities).
-    DEVELOPMENT_TEAM: "Ben Gunn"
+    DEVELOPMENT_TEAM: 8VBNKP8K93          # Benjamin Gunn (Personal Team)
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     SWIFT_STRICT_CONCURRENCY: complete
