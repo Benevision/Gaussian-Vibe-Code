@@ -112,18 +112,20 @@ public enum TrainKit {
 
     /// Clamps `maxGaussians` (and, when even a modest budget wouldn't fit, `maxImageSize`) to what fits in
     /// `availableBytes` (`os_proc_available_memory()` at job start).
-    static func budget(dataset: PreparedDataset, config: inout TrainingConfig, availableBytes: UInt64) -> TrainKitBudget {
+    static func budget(dataset: PreparedDataset, config: inout TrainingConfig, availableBytes: UInt64) throws -> TrainKitBudget {
         let cams = dataset.manifest.cameras.filter { c in config.cameraIds.map { Set($0).contains(c.id) } ?? true }
         let requestedG = config.maxGaussians, requestedS = config.maxImageSize
-        let usable = Double(availableBytes) * 0.80
+        // 65 %: the rest of the app (camera session, UI, decode buffers, Metal driver) and iOS's jetsam margin
+        // need the remainder — at 80 % a 965-photo job was killed at the 3.4 GB high-watermark limit.
+        let usable = Double(availableBytes) * 0.65
         func imageBytes(_ maxSize: Int) -> (all: Double, largest: Double) {
             var all = 0.0, largest = 0.0
             for c in cams {
                 let longest = max(c.width, c.height)
                 let s = longest > maxSize ? Double(maxSize) / Double(longest) : 1
                 let px = Double(c.width) * s * Double(c.height) * s
-                // RGBA target (+ coarse levels / masks ≈ 40 %), depth maps are small
-                all += px * 4 * 1.4 + Double((c.depthWidth ?? 0) * (c.depthHeight ?? 0) * 4)
+                // RGBA target (+ coarse levels, ignore and sky masks, decode staging ≈ 60 %), depth maps are small
+                all += px * 4 * 1.6 + Double((c.depthWidth ?? 0) * (c.depthHeight ?? 0) * 4)
                 largest = max(largest, px)
             }
             // per-photo bilateral grid (GPU + 2 CPU Adam moments)
@@ -134,9 +136,16 @@ public enum TrainKit {
         var img = imageBytes(size)
         let minGaussians = 150_000
         func gaussianRoom() -> Double { usable - fixedBytes - img.all - img.largest * bytesPerTrainPixel }
-        while gaussianRoom() < Double(minGaussians) * bytesPerGaussian && size > 800 {
-            size = max(800, Int(Double(size) * 0.85))
+        while gaussianRoom() < Double(minGaussians) * bytesPerGaussian && size > 480 {
+            size = max(480, Int(Double(size) * 0.85))
             img = imageBytes(size)
+        }
+        // Still no room for a minimal splat set: refuse with a reason instead of being killed by iOS.
+        if gaussianRoom() < 50_000 * bytesPerGaussian {
+            let need = fixedBytes + img.all + img.largest * bytesPerTrainPixel + 50_000 * bytesPerGaussian
+            throw TrainKitError.invalidConfig(String(format: "too large for this device: %d photos need about %.0f MB even at %d px, "
+                + "%.0f MB can be used — split it into blocks (tick more devices) or use fewer photos",
+                cams.count, need / 1_048_576, size, usable / 1_048_576))
         }
         config.maxImageSize = size
         let fit = max(50_000, Int(gaussianRoom() / bytesPerGaussian))
@@ -183,7 +192,7 @@ public final class TrainKitJob: @unchecked Sendable {
             ds.recomputeSceneBounds()
         }
         if let r = cfg.region, r.min.count != 3 || r.max.count != 3 { throw TrainKitError.invalidConfig("region needs 3-element min and max") }
-        budget = TrainKit.budget(dataset: ds, config: &cfg, availableBytes: availableBytes)
+        budget = try TrainKit.budget(dataset: ds, config: &cfg, availableBytes: availableBytes)
         config = cfg
         dataset = ds
     }

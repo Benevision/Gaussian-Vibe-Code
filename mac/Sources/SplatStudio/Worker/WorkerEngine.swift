@@ -62,6 +62,8 @@ final class WorkerEngine: @unchecked Sendable {
         var models: [String] = []
         var auth = false
         var kind = WorkerEngine.kind
+        /// Memory this app may still use (os_proc_available_memory on iOS), so a Mac can size jobs before sending.
+        var memory: [String: Int] = ["availableMB": Int(TrainKit.availableMemory / 1_048_576)]
     }
 
     private final class Job {

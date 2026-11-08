@@ -513,14 +513,14 @@ struct PhoneTrainingRunner: LocalTrainingRunner {
     /// Whether a (block) job fits the phone without cutting its splat budget below 80 %.
     static func fits(dataset: PreparedDataset, config: TrainingConfig) -> Bool {
         var c = config
-        let b = TrainKit.budget(dataset: dataset, config: &c, availableBytes: TrainKit.availableMemory)
+        guard let b = try? TrainKit.budget(dataset: dataset, config: &c, availableBytes: TrainKit.availableMemory) else { return false }
         return Double(b.maxGaussians) >= 0.8 * Double(b.requestedGaussians) && b.maxImageSize == b.requestedImageSize
     }
 
     func train(dataset: PreparedDataset, config: TrainingConfig,
                progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud {
         var cfg = config
-        let budget = TrainKit.budget(dataset: dataset, config: &cfg, availableBytes: TrainKit.availableMemory)
+        let budget = try TrainKit.budget(dataset: dataset, config: &cfg, availableBytes: TrainKit.availableMemory)
         SplatMaker.log.notice("\(budget.summary, privacy: .public)")
         if budget.maxGaussians != budget.requestedGaussians || budget.maxImageSize != budget.requestedImageSize {
             notes?.add("iPhone memory: " + budget.summary)
