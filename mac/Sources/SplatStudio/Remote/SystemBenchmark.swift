@@ -359,6 +359,40 @@ enum MemoryForecast {
         return images + splats + maxPx * 180 + 300_000_000      // + pipelines, sort scratch, app
     }
 
+    /// Why a run would not fit on this worker (GPU memory for the splats; host RAM for the photos on workers
+    /// that hold every photo in memory), with what to change; nil when it fits or nothing is known.
+    static func workerProblem(info: WorkerInfo, dataset: PreparedDataset, config: TrainingConfig) -> String? {
+        var images: Int64 = 0, maxPx: Int64 = 0
+        for c in dataset.manifest.cameras {
+            let longest = max(c.width, c.height)
+            let s = longest > config.maxImageSize ? Double(config.maxImageSize) / Double(longest) : 1
+            let px = Int64((Double(c.width) * s).rounded()) * Int64((Double(c.height) * s).rounded())
+            images += px * 4; maxPx = max(maxPx, px)
+        }
+        let name = info.name
+        // Photos: workers before 1.3.13 load all of them into RAM (and pinned copies) — the PC froze on a
+        // 9,824-view 360° set. Newer workers stream them from disk.
+        if !info.streamsImages, info.capabilities?.contains("train") ?? true {
+            let ram = Int64(info.memory?.availableMB ?? 0) * 1_048_576
+            if images > 3 << 30, ram == 0 || images * 2 > ram {
+                return "\(name) would hold all \(dataset.manifest.cameras.count) photos in memory (about \(formatBytes(Int(images * 2)))), "
+                    + "which can freeze it. Update Splat Worker on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
+            }
+        }
+        // GPU: splat state (params, gradients, Adam, rasteriser buffers) + per-pixel scratch + CUDA context.
+        if let vram = info.gpus?.compactMap(\.memoryMB).max(), vram > 0 {
+            let bytesPerSplat: Int64 = config.optimizerPrecision == "compact" ? 800 : 1_150
+            let need = Int64(Double(config.maxGaussians) * 1.05) * bytesPerSplat + maxPx * 200 + 1_400_000_000
+            let have = Int64(Double(vram) * 0.92) * 1_048_576
+            if need > have {
+                let fit = max(100_000, Int((Double(have - maxPx * 200 - 1_400_000_000) / Double(bytesPerSplat) / 1.05) / 100_000) * 100_000)
+                return "\(formatCount(config.maxGaussians)) splats need about \(formatBytes(Int(need))) of GPU memory; \(name) has \(formatBytes(Int(have))). "
+                    + "Set Max splats to \(formatCount(fit)) or less."
+            }
+        }
+        return nil
+    }
+
     /// GPU memory this Mac can use for one app (Metal's recommended working set).
     static var macAvailable: Int64 { Int64(MetalContext.shared.device.recommendedMaxWorkingSetSize) }
 

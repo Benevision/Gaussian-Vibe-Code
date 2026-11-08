@@ -63,6 +63,9 @@ struct TrainingConfig: Codable, Equatable {
     /// On by default since 2026-11-08: drone +0.8 dB (Mac 16.37 → 17.18, PC 17.16 → 17.91), bedroom neutral
     /// (23.44 → 23.46, same training time).
     var bilateralGrid = true
+    /// Optimizer state precision: "fp32" (full) or "compact" (8-bit moments for the higher-order colour
+    /// coefficients, 16-bit for the rest — roughly a third less GPU memory per splat; Linux worker ≥ 1.3.14).
+    var optimizerPrecision = "fp32"
     /// Down-weight LiDAR / stereo depth at image edges, where depth sensors are least reliable.
     var depthEdgeAware = true
     /// Penalty on splats whose longest axis exceeds `anisotropyMaxRatio` × their shortest (needle splats
@@ -110,6 +113,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.depthEdgeAware, &depthEdgeAware); d(.anisotropyReg, &anisotropyReg); d(.anisotropyMaxRatio, &anisotropyMaxRatio); d(.longAxisSplit, &longAxisSplit)
         d(.bigSplatReg, &bigSplatReg); d(.bigSplatMaxAngle, &bigSplatMaxAngle); d(.progressiveResolution, &progressiveResolution); d(.errorDrivenDensify, &errorDrivenDensify); d(.backgroundShell, &backgroundShell)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
+        d(.optimizerPrecision, &optimizerPrecision)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
     }

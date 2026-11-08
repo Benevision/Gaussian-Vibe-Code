@@ -18,6 +18,11 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     /// Worker ≥ 1.3.10: LAN addresses, preferred first (`kind` "ethernet" or "wifi").
     struct Address: Codable, Hashable, Sendable { var address: String; var kind: String? }
     var addresses: [Address]?
+    /// Host RAM (worker ≥ 1.3.14).
+    struct Memory: Codable, Hashable, Sendable { var totalMB: Int?; var availableMB: Int? }
+    var memory: Memory?
+    /// Worker ≥ 1.3.13: training images are streamed from disk when they don't fit in RAM.
+    var streamsImages: Bool { capabilities?.contains("stream") ?? false }
 
     var canTrain: Bool { capabilities?.contains("train") ?? true }
     var canProcess: Bool { capabilities?.contains("process") ?? false }

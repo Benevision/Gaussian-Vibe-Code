@@ -77,6 +77,20 @@ def _lan_interfaces() -> list:
     return _IF_CACHE["value"]
 
 
+def _host_memory() -> dict:
+    """{"totalMB", "availableMB"} from /proc/meminfo (empty off Linux)."""
+    out = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, v = line.split(":", 1)
+                if k in ("MemTotal", "MemAvailable"):
+                    out["totalMB" if k == "MemTotal" else "availableMB"] = int(v.split()[0]) // 1024
+    except OSError:
+        pass
+    return out
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -625,6 +639,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             caps = []
         if "process" in caps or "frames" in caps:
             caps = caps + ["chain"]       # outputDatasetId, /v1/datasets/compose, /v1/datasets/{id}/archive.zip
+            caps = caps + ["stream"]      # ≥ 1.3.13: training images streamed from disk when RAM is short
         try:
             models = backend.models() if "process" in caps else []
         except Exception:
@@ -642,6 +657,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             "auth": settings.token is not None,
             # LAN addresses, preferred first (ethernet, then Wi-Fi) — the Mac switches to the first that answers
             "addresses": [{"address": a, "kind": k} for a, k in _lan_interfaces() if k != "virtual"],
+            # host RAM (worker ≥ 1.3.14): the Mac checks a job fits before sending it
+            "memory": _host_memory(),
         }
 
     # ------------------------------------------------------------ runtime

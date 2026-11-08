@@ -76,7 +76,7 @@ def test_info(client):
     assert isinstance(info["gpus"], list)
     assert info["backend"].startswith("gsplat")
     assert info["busy"] is False and info["queueLength"] == 0
-    assert info["capabilities"] == ["train", "process", "chain"]
+    assert info["capabilities"] == ["train", "process", "chain", "stream"]
     assert info["models"] == ["superpoint_lightglue"]
 
 
@@ -553,3 +553,10 @@ def test_dataset_json_layer_without_images(client, dataset_dir, tmp_path):
     assert c.get("hasDatasetJson") is True, c
     r = client.post("/v1/jobs", headers=AUTH, json={"datasetId": c["datasetId"], "config": {"iterations": 5}})
     assert r.status_code == 200, r.text
+
+
+def test_info_reports_memory_and_streaming(client):
+    """The Mac checks a job fits before sending it: host RAM and the 'stream' capability (≥ 1.3.13)."""
+    d = client.get("/v1/info", headers=AUTH).json()
+    assert "stream" in d["capabilities"]
+    assert isinstance(d["memory"], dict)   # {"totalMB", "availableMB"} on Linux, {} elsewhere

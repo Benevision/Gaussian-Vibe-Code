@@ -176,6 +176,10 @@ final class TrainingSession {
         guard let id = workerId ?? WorkerBrowser.shared.workers.first?.id, let client = WorkerBrowser.shared.client(for: id) else {
             state = .failed("No Linux worker selected. Add one under Compute in the sidebar."); return
         }
+        if let info = WorkerBrowser.shared.health[id]?.info,
+           let problem = MemoryForecast.workerProblem(info: info, dataset: dataset, config: cfg) {
+            state = .failed(problem); return
+        }
         state = .preparing("Uploading dataset")
         let host = client.baseURL.host ?? "the worker"
         let start = Date()

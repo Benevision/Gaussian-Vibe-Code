@@ -656,6 +656,11 @@ struct ComputePicker: View {
         if let ds = dataset, session.placement != .remote, let problem = MemoryForecast.macProblem(dataset: ds, config: session.config) {
             Label(problem, systemImage: "memorychip").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
         }
+        if let ds = dataset, session.placement != .thisMac,
+           let wid = session.workerId ?? browser.workers.first?.id, let info = browser.health[wid]?.info,
+           let problem = MemoryForecast.workerProblem(info: info, dataset: ds, config: session.config) {
+            Label(problem, systemImage: "memorychip").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
         if let ds = dataset {
             let est = TrainingTimeEstimate.entries(dataset: ds, config: session.config, workers: browser.workers)
             if est.isEmpty || (est.count == 1 && !browser.workers.isEmpty) {
