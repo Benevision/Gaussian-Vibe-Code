@@ -63,7 +63,6 @@ TRAIN_FIELDS: List[tuple] = [
     ("train.depthEdgeAware", "depthEdgeAware", "bool", None),
     ("train.anisotropyReg", "anisotropyReg", "float", (0.0, 10.0)),
     ("train.anisotropyMaxRatio", "anisotropyMaxRatio", "float", (1.0, 100.0)),
-    ("train.bigSplatReg", "bigSplatReg", "float", (0.0, 100.0)),
     ("train.bilateralGrid", "bilateralGrid", "bool", None),
     ("train.appearanceCorrection", "appearanceCorrection", "bool", None),
     ("train.appearanceLR", "appearanceLR", "float", (0.0, 1.0)),

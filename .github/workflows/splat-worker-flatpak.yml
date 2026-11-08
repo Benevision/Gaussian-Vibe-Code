@@ -14,6 +14,9 @@ on:
   push:
     branches: [main]
     paths: ["linux/**", "tools/**", ".github/workflows/splat-worker-flatpak.yml"]
+  # Pull requests run the tests and build the Flatpak without publishing anything.
+  pull_request:
+    paths: ["linux/**", "tools/**", ".github/workflows/splat-worker-flatpak.yml"]
   workflow_dispatch:
 
 permissions:
@@ -22,7 +25,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: splat-worker-pages
+  group: splat-worker-${{ github.event_name == 'pull_request' && github.ref || 'pages' }}
   cancel-in-progress: true
 
 env:
@@ -30,10 +33,50 @@ env:
   BRANCH: stable
 
 jobs:
+  # Worker + Studio tests (the OpenGL viewer tests render with Mesa llvmpipe through a headless EGL context).
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libegl-mesa0 libgl1-mesa-dri libopengl0
+          python -m pip install fastapi "uvicorn[standard]" zeroconf numpy pillow httpx pytest pyyaml qrcode
+      - name: pytest
+        working-directory: linux
+        env:
+          PYTHONPATH: ../tools
+        run: python -m pytest -q tests
+
+  # Pull requests: the Flatpak must build (no repository, nothing published).
+  flatpak-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Build
+        run: |
+          cd linux/flatpak
+          flatpak-builder --user --install-deps-from=flathub --force-clean --disable-rofiles-fuse build-dir \
+            "$APP_ID.yml"
+          ls build-dir/files/share/splatworker/lib/splatworker/studio/catalog.json
+
   # gsplat 1.6 is unreleased and has no prebuilt wheels: compile the pinned commit for the cu128 runtime
   # profile (PyTorch 2.7.1 + CUDA 12.8, RTX 20 → RTX 50 series). Cached per pin, so this only compiles
   # when linux/flatpak/gsplat-pin.env changes.
   gsplat-wheel:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
@@ -105,7 +148,8 @@ jobs:
           path: wheels
 
   build:
-    needs: gsplat-wheel
+    needs: [gsplat-wheel, tests]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

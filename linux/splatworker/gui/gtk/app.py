@@ -118,7 +118,7 @@ class SplatWorkerApp(Adw.Application):
             if not self._background_requested:
                 self._request_background(s.autostart)
             n = Gio.Notification.new(f"{APP_NAME} is still running")
-            n.set_body("The server keeps working for your Mac. Open Splat Worker again to see it, or choose "
+            n.set_body("The worker server keeps working for your Mac. Open Splat Studio again to see it, or choose "
                        "Quit in its menu to stop it.")
             n.set_default_action("app.show")
             self.send_notification("background", n)
@@ -136,7 +136,7 @@ class SplatWorkerApp(Adw.Application):
             def answer(rid):
                 if rid == "quit":
                     self._really_quit()
-            alert(self.window, "Quit Splat Worker?",
+            alert(self.window, "Quit Splat Studio?",
                   f"{len(running)} job(s) are running and will be stopped.",
                   (("cancel", "Cancel", "default"), ("quit", "Quit", "destructive")), answer)
         else:
@@ -181,8 +181,8 @@ class SplatWorkerApp(Adw.Application):
     def _about(self, *_args) -> None:
         kwargs = dict(application_name=APP_NAME, application_icon=APP_ID, version=__version__,
                       developer_name="Splat Studio", license_type=Gtk.License.MIT_X11,
-                      comments="Lets Splat Studio on your Mac train Gaussian splats on this computer's NVIDIA "
-                               "GPU.")
+                      comments="View, create and edit Gaussian splats on this PC, and train them for Splat "
+                               "Studio on your Mac with this computer's NVIDIA GPU.")
         if hasattr(Adw, "AboutDialog"):  # libadwaita 1.5
             Adw.AboutDialog(**kwargs).present(self.window)
         else:  # pragma: no cover

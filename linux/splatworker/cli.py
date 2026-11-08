@@ -133,6 +133,29 @@ def cmd_gen_token(args) -> int:
     return 0
 
 
+def cmd_convert(args) -> int:
+    """Splat format conversion (the Mac's ``--convert``): PLY / compressed PLY / .splat / .spz, skybox kept."""
+    from .studio import formats
+
+    g = formats.load(args.input)
+    out = formats.save(g, args.output, fmt=args.format, sh_degree=args.sh)
+    print(f"{g.count} splats → {out} ({out.stat().st_size / 1e6:.1f} MB)")
+    return 0
+
+
+def cmd_splat_info(args) -> int:
+    from .studio import formats
+
+    g = formats.load(args.file)
+    lo, hi = g.robust_bounds(0.0)
+    print(json.dumps({"file": str(args.file), "format": formats.format_for_path(args.file), "splats": g.count,
+                      "shDegree": g.sh_degree, "antialiased": g.antialiased,
+                      "up": None if g.up is None else [float(x) for x in g.up], "skybox": g.skybox is not None,
+                      "bounds": [[float(x) for x in lo], [float(x) for x in hi]],
+                      "meanOpacity": float(g.opacities.mean()) if g.count else None}, indent=1))
+    return 0
+
+
 def cmd_info(args) -> int:
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     from .gpu import backend_description, list_gpus, training_available
@@ -192,6 +215,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     i = sub.add_parser("info", help="print GPU / backend information")
     i.set_defaults(func=cmd_info)
+
+    c = sub.add_parser("convert", help="convert a splat between PLY, compressed PLY, .splat and .spz")
+    c.add_argument("input")
+    c.add_argument("output", help="format from the extension (.ply, .compressed.ply, .splat, .spz)")
+    c.add_argument("--format", choices=["ply", "compressed.ply", "splat", "spz"])
+    c.add_argument("--sh", type=int, choices=[0, 1, 2, 3], help="SH degree to keep")
+    c.set_defaults(func=cmd_convert)
+
+    si = sub.add_parser("splat-info", help="print what a splat file contains")
+    si.add_argument("file")
+    si.set_defaults(func=cmd_splat_info)
     return p
 
 

@@ -116,3 +116,32 @@ def test_capture_receiver(tmp_path):
         assert (caps[0].path / "images" / "000000.jpg").read_bytes() == b"jpeg"
     finally:
         r.stop()
+
+
+def test_cli_convert_and_info(tmp_path, capsys):
+    import json
+
+    from splatworker.cli import main
+    from splatworker.studio import formats
+    from splatworker.studio.splats import GaussianCloud
+
+    n = 300
+    rot = np.zeros((n, 4))
+    rot[:, 0] = 1
+    g = GaussianCloud(np.random.default_rng(0).normal(size=(n, 3)), np.full((n, 3), -3.0), rot, np.zeros(n),
+                      np.zeros((n, 4, 3)))
+    formats.save(g, tmp_path / "a.ply")
+    assert main(["convert", str(tmp_path / "a.ply"), str(tmp_path / "b.spz"), "--sh", "0"]) == 0
+    assert formats.load(tmp_path / "b.spz").sh_degree == 0
+    capsys.readouterr()
+    assert main(["splat-info", str(tmp_path / "b.spz")]) == 0
+    info = json.loads(capsys.readouterr().out)
+    assert info["splats"] == n and info["format"] == "spz"
+
+
+def test_train_fields_exist_in_worker_config():
+    from splatworker.config import TrainingConfig
+    from splatworker.studio.presets import TRAIN_FIELDS
+
+    base = TrainingConfig().to_dict()
+    assert [k for _, k, _, _ in TRAIN_FIELDS if k not in base] == []

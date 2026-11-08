@@ -235,6 +235,14 @@ class ViewerPage(Gtk.Box):
             vb.append(b)
         nav.add(vb)
         nav.add(button_row("Frame scene", "Frame", lambda: self.area.frame(), subtitle="F"))
+        p = self.ctl.prefs
+        for title, attr, sid in (("Rotation speed", "rotate_speed", "nav.rotateSpeed"),
+                                 ("Pan speed", "pan_speed", "nav.panSpeed"),
+                                 ("Zoom speed", "zoom_speed", "nav.zoomSpeed"),
+                                 ("Fly speed", "fly_speed", "nav.flySpeed")):
+            nav.add(spin_row(title, 0.1, 5.0, 0.1, getattr(p, attr), lambda v, a_=attr: self._nav_pref(a_, v), 1, sid))
+        nav.add(switch_row("Invert vertical rotation", p.invert_vertical,
+                           lambda v: self._nav_pref("invert_vertical", v), "nav.invertVertical"))
 
         perf = group("Performance")
         perf.add(combo_row("Render resolution", [("1.0", "100 %"), ("0.75", "75 %"), ("0.5", "50 %"), ("0.33", "33 %")],
@@ -368,6 +376,11 @@ class ViewerPage(Gtk.Box):
     def _nav_mode(self, mode: str) -> None:
         self.area.camera.set_mode(mode)
         self.area.camera_moved()
+
+    def _nav_pref(self, attr: str, v) -> None:
+        setattr(self.ctl.prefs, attr, v)
+        setattr(self.area, attr, v)
+        self.ctl.save_prefs()
 
     def _fov(self, v: float) -> None:
         self.area.camera.fov_y = v

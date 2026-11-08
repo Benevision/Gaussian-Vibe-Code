@@ -108,3 +108,39 @@ def plain_expander(title: str = "", subtitle: str = "", **kw) -> Adw.ExpanderRow
     row.set_title(title)
     row.set_subtitle(subtitle)
     return row
+
+
+def training_settings_expander(overrides: dict, preset: Callable[[], str]) -> Adw.ExpanderRow:
+    """"All training settings": one row per TrainingConfig field (``train.*`` ids). Values start at the preset's
+    (or the Mac's default) and every change is stored in ``overrides``."""
+    from ....config import TrainingConfig
+    from ....studio.presets import TRAIN_FIELDS, training_config
+
+    exp = plain_expander("All training settings", "Advanced: every TrainingConfig value (sent to the trainer as is)")
+    base = TrainingConfig().to_dict()
+
+    def current(key):
+        if key in overrides:
+            return overrides[key]
+        return training_config(preset()).get(key, base.get(key))
+
+    def setter(key):
+        return lambda v: overrides.__setitem__(key, v)
+    for sid, key, kind, extra in TRAIN_FIELDS:
+        v = current(key)
+        if kind == "bool":
+            r = switch_row(key, bool(v), setter(key), sid)
+        elif kind == "choice":
+            r = combo_row(key, [(c, c) for c in extra], str(v), setter(key), sid)
+        elif kind == "int":
+            r = spin_row(key, extra[0], extra[1], 1, int(v), lambda x, k=key: overrides.__setitem__(k, int(x)),
+                         setting_id=sid)
+        else:
+            lo, hi = extra
+            digits = 6 if hi <= 0.01 else (4 if hi <= 1 else 2)
+            r = spin_row(key, lo, hi, (hi - lo) / 1000, float(v), setter(key), digits, sid)
+        d = catalog.doc(sid)
+        if d:
+            r.set_title(d["title"])
+        exp.add_row(r)
+    return exp

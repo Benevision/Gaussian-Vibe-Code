@@ -8,7 +8,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from ....studio.presets import FEATURES, PRESETS, SOURCE_KINDS, ProjectOptions
 from ....studio.projects import Project
-from .rows import combo_row, group, plain_row, spin_row, switch_row
+from .rows import combo_row, group, plain_row, spin_row, switch_row, training_settings_expander
 
 FOLDER_SOURCES = ("photos", "colmap", "dataset")
 VIDEO_SOURCES = ("video", "video360")
@@ -134,6 +134,7 @@ class NewProjectDialog(Adw.Window):
                          o.preset, lambda v: setattr(o, "preset", v), "train.preset"))
         tr.add(switch_row("Local jobs go first", controller.prefs.local_jobs_first, self._prio,
                           subtitle="Ahead of jobs queued by other computers (a running job is never interrupted)."))
+        tr.add(training_settings_expander(o.train_overrides, lambda: o.preset))
         page.add(tr)
         self._kind(self.o.source_kind)
         self._valid()
