@@ -51,6 +51,7 @@ class T(SplatWorkerApp):
             (5000, lambda: shot("1-viewer")),
             (300, lambda: self.window.viewer_page.mode_row.set_selected(1)),
             (1500, lambda: shot("2-depth")),
+            (300, lambda: self.coverage_disabled()),
             (300, lambda: (self.window.viewer_page.mode_row.set_selected(0), self.window.viewer_page.insp_stack.set_visible_child_name("edit"))),
             (1500, lambda: shot("3-edit")),
             (300, lambda: self.brush()),
@@ -58,6 +59,12 @@ class T(SplatWorkerApp):
             (300, lambda: self.window.viewer_page.undo()),
             (300, lambda: self.offscreen()),
             (300, lambda: self.fake_run()),
+            (300, lambda: self.coverage_project()),
+            (4000, lambda: (self.window.viewer_page.insp_stack.set_visible_child_name("view"),
+                            self.window.viewer_page.mode_row.set_selected(5))),
+            (8000, lambda: self.coverage_check()),
+            (300, lambda: shot("2b-coverage")),
+            (300, lambda: self.window.viewer_page.mode_row.set_selected(0)),
             (300, lambda: self.window.show_section("projects")),
             (300, lambda: self.window.projects_page.select(self.proj.root)),
             (1500, lambda: shot("4-projects")),
@@ -89,6 +96,35 @@ class T(SplatWorkerApp):
         vp._edit(lambda e: e.delete_selected())
         print("brush selected+deleted", n, "visible now", a.edit.visible_count, flush=True)
         assert n > 0 and a.edit.visible_count == a.edit.cloud.count - n
+
+    def coverage_disabled(self):
+        vp = self.window.viewer_page
+        assert vp.coverage_unavailable() is not None        # a loose splat file: no cameras
+        vp.mode_row.set_selected(5)
+        assert vp._mode == "depth" and vp.area.settings.mode == "depth", vp._mode
+        print("coverage disabled without a project ok", flush=True)
+
+    def coverage_project(self):
+        """Give the Garden project a dataset (cameras on one side of the sphere) and open its output."""
+        import math
+        cams = []
+        for i, a in enumerate(np.linspace(-1.2, 1.2, 24)):
+            eye = np.array([4 * math.sin(a), -0.5, -4 * math.cos(a)])
+            f = -eye / np.linalg.norm(eye)
+            r = np.cross(f, [0, 1.0, 0]); r /= np.linalg.norm(r)
+            dn = np.cross(f, r)
+            m = np.eye(4); m[:3, 0], m[:3, 1], m[:3, 2], m[:3, 3] = r, dn, f, eye
+            cams.append({"id": i, "image": f"images/{i:04d}.jpg", "width": 640, "height": 480, "fx": 500.0,
+                         "fy": 500.0, "cx": 320.0, "cy": 240.0, "cameraToWorld": m.tolist()})
+        (self.proj.dataset_dir / "dataset.json").write_text(json.dumps({"version": 1, "cameras": cams}))
+        out = self.proj.outputs_dir / "Garden-2026-11-08T10-00-00.ply"
+        self.window.open_path(out)
+
+    def coverage_check(self):
+        vp = self.window.viewer_page
+        assert vp.coverage_unavailable() is None, vp.coverage_unavailable()
+        assert vp._mode == "coverage" and vp.area.renderer.has_coverage, (vp._mode, vp.cov_info.get_text())
+        print("coverage:", vp.cov_info.get_text(), flush=True)
 
     def offscreen(self):
         img = self.window.viewer_page.area.screenshot(640, 360)

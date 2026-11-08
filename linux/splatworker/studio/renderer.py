@@ -4,7 +4,7 @@ Same pipeline and math as the Mac's Metal viewer (``RenderShaders.swift``):
 
 1. ``project`` compute shader: per splat, 3D covariance → screen ellipse (EWA, 0.3 px dilation, optional
    Mip-Splatting opacity compensation), opacity-aware extent (< 1/255 beyond), SH colour (degree ≤ 3) or a
-   display mode (depth / centres / ellipses / opacity), selection highlight;
+   display mode (depth / centres / ellipses / opacity / coverage), selection highlight;
 2. instanced quads in back-to-front order (an SSBO filled by :class:`~.sorting.BackgroundSorter`),
    premultiplied alpha blending;
 3. the learned skybox, a full-screen triangle drawn first (``sky_fragment``);
@@ -25,7 +25,7 @@ import numpy as np
 from . import gl
 from .splats import GaussianCloud, Skybox
 
-MODES = {"color": 0, "depth": 1, "centers": 2, "ellipses": 3, "opacity": 4}
+MODES = {"color": 0, "depth": 1, "centers": 2, "ellipses": 3, "opacity": 4, "coverage": 5}
 
 _COMMON = r"""
 #version 430 core
@@ -39,6 +39,8 @@ layout(std430, binding = 1) readonly buffer Cov { vec4 cov[]; };
 layout(std430, binding = 2) readonly buffer SH { uint sh[]; };
 layout(std430, binding = 3) readonly buffer Flags { uint flags[]; };
 layout(std430, binding = 4) writeonly buffer Verts { SplatVertex verts[]; };
+layout(std430, binding = 6) readonly buffer Coverage { float coverage[]; };
+uniform uint uHasCoverage;     // coverage[] holds a score per splat (Coverage mode)
 uniform mat4 uView;            // world → camera (OpenCV)
 uniform vec4 uIntr;            // fx fy cx cy (render pixels)
 uniform vec2 uViewport;        // render pixels
@@ -153,6 +155,13 @@ void main() {
         rgb = turbo(1.0 - dn);
     } else if (uMode == 4u) {
         rgb = turbo(po.w);
+    } else if (uMode == 5u) {
+        // coverage: red (poorly seen) → yellow → green (well seen); grey until computed
+        if (uHasCoverage != 0u) {
+            float cv = clamp(coverage[i], 0.0, 1.0);
+            rgb = cv < 0.5 ? mix(vec3(0.86, 0.16, 0.12), vec3(0.96, 0.78, 0.12), cv * 2.0)
+                           : mix(vec3(0.96, 0.78, 0.12), vec3(0.20, 0.72, 0.32), (cv - 0.5) * 2.0);
+        } else rgb = vec3(0.55);
     } else {
         rgb = eval_sh(i, normalize(po.xyz - uCamPos));
     }
@@ -325,6 +334,7 @@ class SplatRenderer:
         self.n_draw = 0
         self.depth_range = (0.0, 1.0)
         self.has_sky = False
+        self.has_coverage = False
         self.sky_basis = np.eye(3, dtype=np.float32)
         self._bufs = {}
         self._fbo = 0
@@ -349,7 +359,7 @@ class SplatRenderer:
                                      gl.compile_shader(gl.FRAGMENT_SHADER, SKY_FS))
         self.p_line = gl.link_program(gl.compile_shader(gl.VERTEX_SHADER, LINE_VS),
                                       gl.compile_shader(gl.FRAGMENT_SHADER, LINE_FS))
-        names = ["posop", "cov", "sh", "flags", "verts", "order", "lines"]
+        names = ["posop", "cov", "sh", "flags", "verts", "order", "lines", "coverage"]
         for name, b in zip(names, gl.gen("glGenBuffers", len(names))):
             self._bufs[name] = b
         self.vao_empty, self.vao_lines = gl.gen("glGenVertexArrays", 2)
@@ -363,7 +373,7 @@ class SplatRenderer:
         self.sky_tex = gl.gen("glGenTextures")[0]
         self._uniforms = {}
         # empty buffers so binding never fails
-        for name in ("posop", "cov", "sh", "flags", "verts", "order"):
+        for name in ("posop", "cov", "sh", "flags", "verts", "order", "coverage"):
             self._upload(name, np.zeros(16, np.uint32))
         self.ready = True
         gl.check("init")
@@ -410,6 +420,7 @@ class SplatRenderer:
         gl.glBufferData(gl.SHADER_STORAGE_BUFFER, max(self.count * 32, 32), None, gl.DYNAMIC_DRAW)
         gl.glBindBuffer(gl.SHADER_STORAGE_BUFFER, 0)
         self.set_flags(np.zeros(self.count, np.uint32))
+        self.set_coverage(None)
         self.set_order(np.arange(self.count, dtype=np.uint32), 0)
         self.set_sky(g.skybox)
 
@@ -425,6 +436,14 @@ class SplatRenderer:
         if selected is not None:
             f |= selected.astype(np.uint32) << 1
         return f
+
+    def set_coverage(self, score: Optional[np.ndarray]) -> None:
+        """Coverage score per splat (0 poor … 1 good) for the Coverage mode; None = not computed (grey)."""
+        if score is None or len(score) != self.count:
+            self.has_coverage = False
+            return
+        self._upload("coverage", np.asarray(score, np.float32))
+        self.has_coverage = True
 
     def set_order(self, order: np.ndarray, n_draw: int) -> None:
         self._upload("order", order.astype(np.uint32))
@@ -510,6 +529,8 @@ class SplatRenderer:
             gl.glUseProgram(p)
             for binding, name in enumerate(("posop", "cov", "sh", "flags", "verts")):
                 gl.glBindBufferBase(gl.SHADER_STORAGE_BUFFER, binding, self._bufs[name])
+            gl.glBindBufferBase(gl.SHADER_STORAGE_BUFFER, 6, self._bufs["coverage"])
+            gl.glUniform1ui(self._u(p, "uHasCoverage"), 1 if self.has_coverage else 0)
             gl.glUniformMatrix4fv(self._u(p, "uView"), 1, 1, view.ctypes.data_as(ctypes.c_void_p))
             gl.glUniform4f(self._u(p, "uIntr"), fx, fy, cx, cy)
             gl.glUniform2f(self._u(p, "uViewport"), rw, rh)

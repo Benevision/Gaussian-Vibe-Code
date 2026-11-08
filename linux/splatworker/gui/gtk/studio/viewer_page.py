@@ -9,7 +9,7 @@ from typing import Callable, Optional
 import numpy as np
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from ....studio import autoclean, formats
+from ....studio import autoclean, coverage, formats
 from ....studio.camera import UP_CHOICES
 from ....studio.edit import EditState, estimate_size
 from ....studio.projects import Project
@@ -20,7 +20,10 @@ from .rows import button_row, combo_row, group, plain_expander, plain_row, scrol
 from .viewer_area import ViewerArea
 
 DISPLAY_MODES = [("color", "Colour"), ("depth", "Depth"), ("centers", "Centres"), ("ellipses", "Ellipses"),
-                 ("opacity", "Opacity")]
+                 ("opacity", "Opacity"), ("coverage", "Coverage")]
+COVERAGE_NO_PROJECT = ("Coverage needs the project's camera positions: open a splat from a project's outputs "
+                       "folder (or a project made on the Mac), not just the splat file.")
+COVERAGE_LIVE = "Coverage is shown once training finishes (the live preview changes every few seconds)."
 EXPORT_FORMATS = [(k, v) for k, v in formats.FORMATS.items()]
 
 
@@ -54,6 +57,11 @@ class ViewerPage(Gtk.Box):
         self.project: Optional[Project] = None
         self._live_job = None
         self._building = False
+        self.is_live = False
+        self._cov_gen = 0              # bumped whenever the scene changes: a running computation is dropped
+        self._cov_done_gen = -1        # the scene generation whose coverage is on the GPU
+        self._cov_busy = False
+        self._mode = "color"
 
         view = Adw.ToolbarView(hexpand=True, vexpand=True)
         self.append(view)
@@ -199,8 +207,10 @@ class ViewerPage(Gtk.Box):
         a = self.area
         s = a.settings
         disp = group("Display")
-        self.mode_row = combo_row("Display mode", DISPLAY_MODES, s.mode, a.set_mode, "viewer.displayMode")
+        self.mode_row = combo_row("Display mode", DISPLAY_MODES, s.mode, self._mode_changed, "viewer.displayMode")
+        self._mode_list_factory()
         disp.add(self.mode_row)
+        disp.add(self._coverage_panel())
         disp.add(spin_row("View-dependent colour", 0, 3, 1, s.sh_degree, lambda v: self._set("sh_degree", int(v)),
                           setting_id="viewer.maxSHDegree"))
         disp.add(spin_row("Splat scale", 0.1, 3.0, 0.05, s.splat_scale, lambda v: self._set("splat_scale", v), 2,
@@ -256,6 +266,122 @@ class ViewerPage(Gtk.Box):
         self.cams_group.add(self.cams_expander)
         self._cam_rows = []
         return scrolled(disp, nav, perf, self.cams_group)
+
+    # ------------------------------------------------------------------ coverage
+    def coverage_unavailable(self) -> Optional[str]:
+        """Why the Coverage mode can't be used for the open splat (None = it can)."""
+        if self.project is None or not self.project.has_dataset:
+            return COVERAGE_NO_PROJECT
+        if self.is_live:
+            return COVERAGE_LIVE
+        return None
+
+    def _mode_list_factory(self) -> None:
+        """Popup list of the display modes: Coverage greyed out (with the reason as tooltip) when unavailable.
+        Set again whenever availability changes, so the popup rebinds its rows."""
+        f = Gtk.SignalListItemFactory()
+        f.connect("setup", lambda _f, li: li.set_child(Gtk.Label(xalign=0.0)))
+
+        def bind(_f, li):
+            lab = li.get_child()
+            lab.set_text(li.get_item().get_string())
+            why = self.coverage_unavailable() if DISPLAY_MODES[li.get_position()][0] == "coverage" else None
+            lab.set_sensitive(why is None)
+            lab.set_tooltip_text(why)
+            li.set_activatable(why is None)
+            li.set_selectable(why is None)
+        f.connect("bind", bind)
+        self.mode_row.set_list_factory(f)
+
+    def _coverage_panel(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=10, visible=False)
+        bar = Gtk.Box(height_request=8, hexpand=True, css_classes=["coverage-ramp"])   # coverage.RAMP, common.CSS
+        box.append(bar)
+        ends = Gtk.Box()
+        ends.append(label("Seen by 1–2 photos, or only from far away", ("caption", "dim-label"), wrap=False))
+        right = label("Seen closely by many", ("caption", "dim-label"), wrap=False)
+        right.set_hexpand(True)
+        right.set_halign(Gtk.Align.END)
+        ends.append(right)
+        box.append(ends)
+        row = Gtk.Box(spacing=8)
+        self.cov_spinner = Gtk.Spinner(visible=False, valign=Gtk.Align.START)
+        self.cov_info = label("", ("caption",))
+        self.cov_info.set_hexpand(True)
+        row.append(self.cov_spinner)
+        row.append(self.cov_info)
+        box.append(row)
+        box.append(label("Red areas will stay blurry however long you train: capture them again from closer, from a "
+                         "few more angles.", ("caption", "dim-label")))
+        self.cov_panel = box
+        return box
+
+    def _mode_changed(self, mode: str) -> None:
+        if mode == "coverage" and self.area.cloud is not None:
+            why = self.coverage_unavailable()
+            if why is not None and self._mode != "coverage":
+                self.ctl.toast(why)
+                set_combo(self.mode_row, self._mode)         # back to the previous mode
+                return
+        self._mode = mode
+        self.area.set_mode(mode)
+        self.cov_panel.set_visible(mode == "coverage")
+        self.ensure_coverage()
+
+    def _coverage_scene_changed(self) -> None:
+        """A new scene (or preview) is shown: drop old scores, recompute if Coverage is on."""
+        self._cov_gen += 1
+        self._cov_busy = False
+        self.cov_spinner.set_visible(False)
+        self.cov_spinner.set_spinning(False)
+        self.cov_info.set_text("")
+        self._mode_list_factory()
+        self.ensure_coverage()
+
+    def ensure_coverage(self) -> None:
+        """Compute per-splat coverage on a background thread when the Coverage mode is on (Mac: ensureCoverage)."""
+        if self._mode != "coverage" or self.area.cloud is None or self._cov_busy or self._cov_done_gen == self._cov_gen:
+            return
+        why = self.coverage_unavailable()
+        if why is not None:
+            self.cov_info.set_text(why)
+            return
+        gen = self._cov_gen
+        cloud = self.area.cloud
+        ds = self.project.dataset_dir
+        self._cov_busy = True
+        self.cov_spinner.set_visible(True)
+        self.cov_spinner.set_spinning(True)
+        self.cov_info.set_text("Working out which photos saw each part of the scene…")
+
+        def progress(f):
+            GLib.idle_add(lambda: (gen == self._cov_gen and self._cov_busy and self.cov_info.set_text(
+                f"Working out which photos saw each part of the scene… {f * 100:.0f} %"), False)[-1])
+
+        def work():
+            try:
+                r = coverage.compute(cloud, ds, progress=progress, cancelled=lambda: gen != self._cov_gen)
+                GLib.idle_add(self._coverage_done, gen, r, None)
+            except coverage.CoverageCancelled:
+                pass
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(self._coverage_done, gen, None, str(e))
+        threading.Thread(target=work, daemon=True, name="coverage").start()
+
+    def _coverage_done(self, gen, result, error) -> bool:
+        if gen != self._cov_gen:
+            return False
+        self._cov_busy = False
+        self.cov_spinner.set_spinning(False)
+        self.cov_spinner.set_visible(False)
+        if result is None:
+            self.cov_info.set_text(f"Couldn't compute coverage: {error}")
+            self._cov_done_gen = gen          # don't retry in a loop; a new scene tries again
+            return False
+        self._cov_done_gen = gen
+        self.area.set_coverage(result.score)
+        self.cov_info.set_text(result.summary())
+        return False
 
     def _edit_tab(self) -> Gtk.Widget:
         hist = group("History")
@@ -629,6 +755,7 @@ class ViewerPage(Gtk.Box):
         self._busy(None)
         self.path = path if not live else self.path
         self.project = proj
+        self.is_live = live
         edit = EditState(g)
         self.area.cameras_c2w = np.array([np.asarray(c["cameraToWorld"], float) for c in cams]) if cams else None
         self.area.set_cloud(g, edit, reset_camera=not keep_camera, packed=packed)
@@ -642,6 +769,7 @@ class ViewerPage(Gtk.Box):
         self._sync_crop_rows()
         self._fill_cameras(cams)
         self.gl_row.set_subtitle(f"{self.area.renderer.gl_renderer or 'OpenGL'} · {self.area.renderer.gl_version}")
+        self._coverage_scene_changed()
         self._stats_changed()
         if not live:
             self.ctl.recents.add(path)

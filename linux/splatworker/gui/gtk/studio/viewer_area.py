@@ -2,7 +2,7 @@
 
 Input (same as the Mac, Ctrl for ⌘): drag orbit (Select tool: paint a selection, Alt erases), Shift-drag /
 right / middle drag pan, scroll / pinch zoom, double-click sets the orbit centre, W A S D Q E fly (Shift ×4,
-Alt ×¼), Tab orbit ↔ fly, F frame, R reset, 1–5 display modes, Delete removes the selection.
+Alt ×¼), Tab orbit ↔ fly, F frame, R reset, 1–6 display modes, Delete removes the selection.
 """
 from __future__ import annotations
 
@@ -48,6 +48,7 @@ class ViewerArea(Gtk.GLArea):
         self.on_gl_error: Optional[Callable[[str], None]] = None
         self.on_key_action: Optional[Callable[[str], None]] = None
         self._pending_cloud = None
+        self._pending_coverage = None
         self._order_pending = None
         self._sort_gen = 0
         self._sorted_gen = -1
@@ -116,6 +117,7 @@ class ViewerArea(Gtk.GLArea):
     def set_cloud(self, cloud: Optional[GaussianCloud], edit: Optional[EditState] = None, reset_camera: bool = True,
                   packed: Optional[dict] = None) -> None:
         self.cloud = cloud
+        self._pending_coverage = None
         self.edit = edit if edit is not None else (EditState(cloud) if cloud is not None else None)
         self._proj_cache = None
         if cloud is not None and cloud.count:
@@ -137,6 +139,9 @@ class ViewerArea(Gtk.GLArea):
     def _upload(self, cloud, packed) -> None:
         self._pending_cloud = None
         self.renderer.set_cloud(cloud, packed if packed is not None else (pack_cloud(cloud) if cloud else None))
+        if self._pending_coverage is not None:
+            self.renderer.set_coverage(self._pending_coverage)
+            self._pending_coverage = None
         self.refresh_flags()
         self.queue_render()
 
@@ -307,7 +312,7 @@ class ViewerArea(Gtk.GLArea):
             return True
         actions = {"f": "frame", "r": "reset", "tab": "toggle-mode", "delete": "delete", "backspace": "delete",
                    "question": "shortcuts", "1": "mode-color", "2": "mode-depth", "3": "mode-centers",
-                   "4": "mode-ellipses", "5": "mode-opacity"}
+                   "4": "mode-ellipses", "5": "mode-opacity", "6": "mode-coverage"}
         if name in actions and self.on_key_action:
             self.on_key_action(actions[name])
             return True
@@ -340,6 +345,15 @@ class ViewerArea(Gtk.GLArea):
         if mode in MODES:
             self.settings.mode = mode
             self.queue_render()
+
+    def set_coverage(self, score: Optional[np.ndarray]) -> None:
+        """Coverage scores for the open cloud (Coverage display mode); None clears them."""
+        if self.renderer.ready and self._pending_cloud is None:
+            self.make_current()
+            self.renderer.set_coverage(score)
+        else:
+            self._pending_coverage = score
+        self.queue_render()
 
     def frame(self, view: Optional[str] = None) -> None:
         if self.cloud is None or not self.cloud.count:
