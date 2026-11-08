@@ -117,7 +117,7 @@ class GpuProfile:
 
 # gsplat 1.6 is unreleased: GitHub Actions compiles the pinned development commit (linux/flatpak/gsplat-pin.env)
 # for PyTorch 2.7.1 + CUDA 12.8 (sm 7.5–12.0, so RTX 20 to RTX 50 series) and publishes it here.
-OWN_WHEELS = "https://benevision.github.io/Gaussian-Vibe-Code/wheels/"
+OWN_WHEELS = "https://benevision.github.io/SplatWork/wheels/"
 
 GPU_PROFILES: List[GpuProfile] = [  # newest first
     GpuProfile("cu128", "PyTorch 2.7 + CUDA 12.8 · gsplat 1.6 (development build)", (12, 8), "2.7.1", "0.22.1",

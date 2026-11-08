@@ -16,7 +16,7 @@ import Observation
 @Observable
 final class AppUpdater {
     static let shared = AppUpdater()
-    nonisolated static let repository = "Benevision/Gaussian-Vibe-Code"
+    nonisolated static let repository = "Benevision/SplatWork"
     static let checkInterval: TimeInterval = 6 * 3600
 
     struct Release: Equatable {

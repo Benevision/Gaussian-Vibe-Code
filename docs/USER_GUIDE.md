@@ -232,7 +232,7 @@ Full details: [`linux/README.md`](../linux/README.md).
 
 1. **Install the Flatpak** on the PC. It is best to install from the published repository so updates arrive through `flatpak update` or GNOME Software / KDE Discover:
    ```bash
-   flatpak install --user https://benevision.github.io/Gaussian-Vibe-Code/flatpak/splatworker.flatpakref
+   flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
    ```
    You can instead build it from `linux/flatpak` with `bash build.sh`. Copy the project to a folder in your home directory first, because USB drives are often mounted noexec.
 2. **Open SplatWork Node.** The setup assistant (**Set Up…**) finds your NVIDIA driver and lists the downloads (about 2.7 GB, needing about 6 GB of disk). It then installs a private Python, PyTorch and gsplat. You can cancel and retry, and it resumes from the failed step. A failed setup leaves the working runtime untouched.

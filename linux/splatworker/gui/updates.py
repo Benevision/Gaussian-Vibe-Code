@@ -20,7 +20,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from .. import __version__
 
-DEFAULT_URL = "https://benevision.github.io/Gaussian-Vibe-Code/flatpak/version.json"
+DEFAULT_URL = "https://benevision.github.io/SplatWork/flatpak/version.json"
 APP_ID = "com.example.SplatWorker"
 UPDATE_COMMAND = f"flatpak update --user {APP_ID}"
 

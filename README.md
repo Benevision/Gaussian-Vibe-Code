@@ -12,7 +12,7 @@ A networked Gaussian-splatting suite: your Mac, your iPhone and your Linux GPU P
 
 ## Download
 
-Ready-built releases are on the [Releases page](https://github.com/Benevision/Gaussian-Vibe-Code/releases):
+Ready-built releases are on the [Releases page](https://github.com/Benevision/SplatWork/releases):
 
 * **SplatWork for Mac** (Apple silicon, macOS 15+) — `.dmg`, drag to Applications. Not notarized yet: the first
   time, right-click the app → **Open**.

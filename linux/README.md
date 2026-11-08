@@ -169,9 +169,9 @@ Install updates automatically; off = a banner with Update / Restart buttons). He
 ```bash
 # one time: remove a locally built copy, then install from the published repository
 flatpak uninstall --user com.example.SplatWorker
-flatpak install --user https://benevision.github.io/Gaussian-Vibe-Code/flatpak/splatworker.flatpakref
+flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
 # if the repository is unsigned (no FLATPAK_GPG_PRIVATE_KEY secret), add the remote first instead:
-flatpak remote-add --user --no-gpg-verify splatworker https://benevision.github.io/Gaussian-Vibe-Code/flatpak/repo/
+flatpak remote-add --user --no-gpg-verify splatworker https://benevision.github.io/SplatWork/flatpak/repo/
 flatpak install --user splatworker com.example.SplatWorker
 ```
 
