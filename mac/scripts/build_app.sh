@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 # SPLAT_VERSION: marketing version (e.g. 1.4.0, set by the release workflow from the tag); build number = commit count.
-VERSION="${SPLAT_VERSION:-1.0}"
+LAST_TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v1.0.0)"
+VERSION="${SPLAT_VERSION:-${LAST_TAG#v}-dev}"   # local builds: last release + "-dev"
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 # SPLAT_BUILD_PATH: build somewhere else, e.g. while a command-line run uses the default .build binary
 # (relinking a binary that is running can crash it).
