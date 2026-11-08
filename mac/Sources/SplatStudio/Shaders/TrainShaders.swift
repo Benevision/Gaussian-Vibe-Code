@@ -608,7 +608,15 @@ kernel void normal_loss(device const float* img [[buffer(0)]], device const floa
                 float h = max(0.5f * (1.0f - c), 0.0f);
                 float sq = sqrt(h + 1e-4f);
                 lossOut = h + sq; validOut = 1;
-                float dLdc = rp.normalWeight * rp.invNumPixels * (-0.5f - 0.25f / sq);
+                // Edge-aware like the depth loss (rp.pad = 1): sensor normals are least reliable at photo edges.
+                float ew = 1.0f;
+                if (rp.pad > 0.5f) {
+                    float4 tl = float4(target[il]), tr = float4(target[ir]), tu = float4(target[iu]), td = float4(target[id]);
+                    float gx = dot(tr.xyz - tl.xyz, float3(0.299f, 0.587f, 0.114f)) / 510.0f;
+                    float gy = dot(td.xyz - tu.xyz, float3(0.299f, 0.587f, 0.114f)) / 510.0f;
+                    ew = exp(-10.0f * sqrt(gx * gx + gy * gy));
+                }
+                float dLdc = ew * rp.normalWeight * rp.invNumPixels * (-0.5f - 0.25f / sq);
                 float3 gm = dLdc * (t - c * n) / lm;          // dL/dm
                 float3 g1 = cross(e2, gm), g2 = cross(gm, e1); // dL/de1, dL/de2
                 nbuf[0 * hw + pid] = -dot(g1, al);   // → left neighbour's depth

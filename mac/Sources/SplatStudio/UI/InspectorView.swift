@@ -516,6 +516,14 @@ struct AdvancedTrainingSettings: View {
             SettingRow(id: "train.ssimWeight", showSummary: false) { NumberSlider(value: c.ssimWeight.double, range: 0...1, width: 90) }
             SettingRow(id: "train.depthWeight", showSummary: false) { NumberSlider(value: c.depthWeight.double, range: 0...1, width: 90) }
             SettingRow(id: "train.depthEdgeAware", showSummary: false) { Toggle("", isOn: c.depthEdgeAware).labelsHidden() }
+            SettingRow(id: "train.normalWeight", showSummary: false) { NumberSlider(value: c.normalWeight.double, range: 0...0.5, width: 90, decimals: 2) }
+            if session.config.normalWeight > 0 {
+                SettingRow(id: "train.depthPriors", showSummary: false) {
+                    Picker("", selection: c.depthPriors) { Text("Auto").tag("auto"); Text("On").tag("on"); Text("Off").tag("off") }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                }
+            }
+            SettingRow(id: "train.flatnessReg", showSummary: false) { NumberSlider(value: c.flatnessReg.double, range: 0...0.1, width: 90, decimals: 3) }
             SettingRow(id: "train.anisotropyReg", showSummary: false) { NumberSlider(value: c.anisotropyReg.double, range: 0...1, width: 90) }
             SettingRow(id: "train.bigSplatReg", showSummary: false) { NumberSlider(value: c.bigSplatReg.double, range: 0...30, width: 90, decimals: 1) }
             SettingRow(id: "train.transientMasking", showSummary: false) { Toggle("", isOn: c.transientMasking).labelsHidden() }

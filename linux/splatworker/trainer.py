@@ -258,7 +258,7 @@ def depth_normals(torch, depth, K, k: int = 1, rel_tol: float = 0.05):
     return n, valid
 
 
-def normal_consistency_loss(torch, rendered_depth, alpha, sensor_depth, K, sensor_width: int):
+def normal_consistency_loss(torch, rendered_depth, alpha, sensor_depth, K, sensor_width: int, edge_weight=None):
     """(1−c)/2 + sqrt((1−c)/2) between rendered-depth normals and sensor-depth normals, summed over pixels where
     both are valid and the render is opaque, divided by the pixel count (as on the Mac)."""
     W = rendered_depth.shape[1]
@@ -271,6 +271,8 @@ def normal_consistency_loss(torch, rendered_depth, alpha, sensor_depth, K, senso
     c = (nr * nt.detach()).sum(-1).clamp(-1, 1)
     h = (0.5 * (1 - c)).clamp_min(0)
     per = h + torch.sqrt(h + 1e-4)
+    if edge_weight is not None:      # edge-aware, as the depth loss: sensor normals are least reliable at edges
+        per = per * edge_weight
     return per[valid].sum() / rendered_depth.numel()
 
 
@@ -1211,7 +1213,14 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
                 loss = loss + dw * derr[valid].sum() / valid.sum().clamp_min(1)
             if cfg.normalWeight > 0 and step >= cfg.normalStart:
                 sw = v.camera.depth_width or (priors.maps[v.camera.id].shape[1] if priors is not None and v.camera.id in priors.maps else 0)
-                nl = normal_consistency_loss(torch, ed, alphas[0, ..., 0], depth_gt, K, sw)
+                ew = None
+                if cfg.depthEdgeAware:
+                    g = (img[..., :3] * torch.tensor([0.299, 0.587, 0.114], device=dev)).sum(-1)
+                    gx = torch.zeros_like(g); gy = torch.zeros_like(g)
+                    gx[:, 1:-1] = (g[:, 2:] - g[:, :-2]) * 0.5
+                    gy[1:-1, :] = (g[2:, :] - g[:-2, :]) * 0.5
+                    ew = torch.exp(-10.0 * torch.sqrt(gx * gx + gy * gy))
+                nl = normal_consistency_loss(torch, ed, alphas[0, ..., 0], depth_gt, K, sw, ew)
                 if nl is not None:
                     loss = loss + cfg.normalWeight * nl
         if opacity_reg > 0:

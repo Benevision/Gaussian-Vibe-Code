@@ -197,8 +197,24 @@ final class MetalTrainer: @unchecked Sendable {
     // MARK: setup
 
     func prepare(progress: (String) -> Void) throws {
+        // No depth sensor in this dataset: predicted depth (Depth Anything V2, fitted to the scene) for the
+        // flat-surfaces loss — the Linux worker's depthPriors, on this Mac.
+        var priors: [Int: MonoDepth.Map] = [:]
+        var cams = dataset.manifest.cameras
+        if let ids = config.cameraIds { let s = Set(ids); cams = cams.filter { s.contains($0.id) } }
+        if config.normalWeight > 0, config.depthPriors == "auto" || config.depthPriors == "on",
+           !cams.contains(where: { $0.depth != nil && !($0.holdout ?? false) }) {
+            let pts = (dataset.pointCloudURL).flatMap { try? PLYCodec.readPointCloud(url: $0) }?.points ?? []
+            do {
+                priors = try MonoDepth.priors(dataset: dataset, cameras: cams.filter { !($0.holdout ?? false) }, points: pts,
+                                              log: { progress($0) }, progress: { f in progress(String(format: "Predicting depth %.0f %%", f * 100)) })
+                progress("Predicted depth for \(priors.count) of \(cams.count) photos (flat-surfaces loss)")
+            } catch {
+                progress("Predicted depth unavailable (\(error.localizedDescription)); training without it")
+            }
+        }
         progress("Loading images")
-        views = try TrainingDataLoader.load(dataset: dataset, config: config, ctx: ctx) { _ in }
+        views = try TrainingDataLoader.load(dataset: dataset, config: config, ctx: ctx, priors: priors) { _ in }
         trainViews = views.filter { !$0.holdout }
         evalViews = views.filter { $0.holdout }
         if trainViews.isEmpty { trainViews = views }
@@ -511,7 +527,7 @@ final class MetalTrainer: @unchecked Sendable {
         rp.tilesX = UInt32((v.width + 15) / 16); rp.tilesY = UInt32((v.height + 15) / 16)
         rp.bg = SIMD4(bg, 0)
         rp.absGrad = config.absGrad && config.strategy == .adaptive ? 1 : 0
-        rp.hasDepth = (v.depth != nil && config.depthWeight > 0) ? 1 : 0
+        rp.hasDepth = (v.depth != nil && config.depthWeight > 0 && !v.depthPredicted) ? 1 : 0
         rp.numGaussians = UInt32(n)
         rp.step = UInt32(step)
         rp.ssimWeight = config.ssimWeight
@@ -720,6 +736,7 @@ final class MetalTrainer: @unchecked Sendable {
         c.fx *= sx; c.fy *= sy; c.cx = (c.cx + 0.5) * sx - 0.5; c.cy = (c.cy + 0.5) * sy - 0.5
         c.width = w; c.height = h
         let child = TrainView(camera: c, width: w, height: h, target: buf, depth: v.depth, depthSize: v.depthSize, holdout: v.holdout)
+        child.depthPredicted = v.depthPredicted
         if let sky = v.sky {
             let ss = sky.contents().bindMemory(to: UInt8.self, capacity: v.width * v.height)
             let sb = ctx.buffer(w * h, label: "sky/\(factor)")
@@ -1168,7 +1185,7 @@ final class MetalTrainer: @unchecked Sendable {
     /// but `delta`. Flat walls and floors that render wavy or with floaters show up in the normal error.
     struct GeometryScore { var absRel: Float; var delta105: Float; var normalMeanDeg: Float; var normalMedianDeg: Float; var views: Int }
 
-    func evaluateGeometry(cloud g: GaussianCloud) throws -> GeometryScore? {
+    func evaluateGeometry(cloud g: GaussianCloud, saveNormalsTo dir: URL? = nil) throws -> GeometryScore? {
         load(g)
         useSkybox(of: g)
         step = config.shDegreeInterval * (config.shDegree + 1)
@@ -1207,10 +1224,24 @@ final class MetalTrainer: @unchecked Sendable {
                 let n = simd_cross(point(zr, x + 1, y) - point(zl, x - 1, y), point(zd, x, y + 1) - point(zu, x, y - 1))
                 let l = simd_length(n); return l > 0 ? n / l : nil
             }
+            var nsImg = [UInt8](repeating: 0, count: dw * dh * 4), nrImg = nsImg
+            func paint(_ img: inout [UInt8], _ i: Int, _ n: SIMD3<Float>) {
+                let c = (n * -1 + 1) * 127.5   // facing the camera: normals point back towards it
+                img[i * 4] = UInt8(max(0, min(255, c.x))); img[i * 4 + 1] = UInt8(max(0, min(255, c.y))); img[i * 4 + 2] = UInt8(max(0, min(255, c.z))); img[i * 4 + 3] = 255
+            }
             for y in 1..<(dh - 1) { for x in 1..<(dw - 1) {
-                guard let ns = normal({ sensor[$0] }, x, y), let nr = normal({ rend[$0] }, x, y) else { continue }
+                let ns = normal({ sensor[$0] }, x, y), nr = normal({ rend[$0] }, x, y)
+                if let ns { paint(&nsImg, y * dw + x, ns) }
+                if let nr { paint(&nrImg, y * dw + x, nr) }
+                guard let ns, let nr else { continue }
                 angles.append(acos(min(1, abs(simd_dot(ns, nr)))) * 180 / .pi)
             } }
+            if let dir {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let stem = ((v.camera.image as NSString).lastPathComponent as NSString).deletingPathExtension
+                try SystemBenchmark.writeJPEG(nsImg, width: dw, height: dh, to: dir.appendingPathComponent(stem + "_sensor.jpg"))
+                try SystemBenchmark.writeJPEG(nrImg, width: dw, height: dh, to: dir.appendingPathComponent(stem + "_render.jpg"))
+            }
             used += 1
         }
         guard relN > 0 else { return nil }

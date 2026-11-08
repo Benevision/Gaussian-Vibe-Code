@@ -376,7 +376,7 @@ enum CLI {
                 if a.contains("--per-view") { for (n, p) in zip(r.names, r.perView) { print(String(format: "  %@ %.2f", n, p)) } }
                 if a.contains("--geometry") {
                     // vs the dataset's sensor depth (LiDAR / stereo) on held-out views
-                    if let gs = try t.evaluateGeometry(cloud: g) {
+                    if let gs = try t.evaluateGeometry(cloud: g, saveNormalsTo: value("--save-normals").map { URL(fileURLWithPath: $0) }) {
                         print(String(format: "geometry: depth AbsRel %.4f, within 5 %% %.1f %%, normal error mean %.1f° median %.1f° (%d views)",
                                      gs.absRel, gs.delta105 * 100, gs.normalMeanDeg, gs.normalMedianDeg, gs.views))
                     } else { print("geometry: no held-out view has a depth map") }

@@ -17,6 +17,8 @@ final class TrainView {
     /// Sky mask (uchar per pixel, > 127 = sky; learned skybox) and its sky-pixel count, when the photo has one.
     var sky: MTLBuffer?
     var skyCount = 0
+    /// The depth map was predicted by a depth model (no sensor): used for the flat-surfaces loss, not the depth loss.
+    var depthPredicted = false
     /// Lower-resolution copies for coarse-to-fine training (factor → view), built on first use.
     var levels: [Int: TrainView] = [:]
 
@@ -31,7 +33,7 @@ final class TrainView {
 enum TrainingDataLoader {
     /// Loads all images of the dataset, downscaled so the longest side ≤ maxImageSize.
     static func load(dataset: PreparedDataset, config: TrainingConfig, ctx: MetalContext,
-                     progress: (Double) -> Void) throws -> [TrainView] {
+                     priors: [Int: MonoDepth.Map] = [:], progress: (Double) -> Void) throws -> [TrainView] {
         var cams = dataset.manifest.cameras
         if let ids = config.cameraIds { let s = Set(ids); cams = cams.filter { s.contains($0.id) } }
         var views = [TrainView?](repeating: nil, count: cams.count)
@@ -40,7 +42,7 @@ enum TrainingDataLoader {
         var firstError: Error?
         DispatchQueue.concurrentPerform(iterations: cams.count) { i in
             do {
-                let v = try loadView(cams[i], dataset: dataset, maxSize: config.maxImageSize, ctx: ctx)
+                let v = try loadView(cams[i], dataset: dataset, maxSize: config.maxImageSize, ctx: ctx, prior: priors[cams[i].id])
                 lock.lock(); views[i] = v; done += 1; lock.unlock()
             } catch {
                 lock.lock(); if firstError == nil { firstError = error }; lock.unlock()
@@ -52,7 +54,8 @@ enum TrainingDataLoader {
         return views.compactMap { $0 }
     }
 
-    static func loadView(_ cam: DatasetCamera, dataset: PreparedDataset, maxSize: Int, ctx: MetalContext) throws -> TrainView {
+    static func loadView(_ cam: DatasetCamera, dataset: PreparedDataset, maxSize: Int, ctx: MetalContext,
+                         prior: MonoDepth.Map? = nil) throws -> TrainView {
         let url = dataset.url(cam.image)
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw FormatError.invalid("cannot open \(cam.image)") }
         let longest = max(cam.width, cam.height)
@@ -108,8 +111,14 @@ enum TrainingDataLoader {
             depthBuf = ctx.buffer(values, label: "depth")
             dsize = SIMD2(UInt32(dw), UInt32(dh))
         }
+        var predicted = false
+        if depthBuf == nil, let prior {
+            depthBuf = ctx.buffer(prior.values, label: "predicted depth")
+            dsize = SIMD2(UInt32(prior.width), UInt32(prior.height))
+            predicted = true
+        }
         let view = TrainView(camera: c, width: w, height: h, target: buf, depth: depthBuf, depthSize: dsize, holdout: cam.holdout ?? false)
-        view.sky = skyBuf; view.skyCount = skyCount
+        view.sky = skyBuf; view.skyCount = skyCount; view.depthPredicted = predicted
         return view
     }
 }

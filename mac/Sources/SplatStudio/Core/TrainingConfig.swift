@@ -102,6 +102,9 @@ struct TrainingConfig: Codable, Equatable {
     /// Pushes splats towards flat discs (penalises the smallest axis's share of the splat's size), which gives each
     /// splat a clear surface normal. 0 = off.
     var flatnessReg: Float = 0
+    /// Datasets without depth maps: predict depth with a depth model (Depth Anything V2 Small), fitted to the
+    /// dataset's 3D points, for the flat-surfaces loss. "auto" (with normalWeight > 0), "on", "off".
+    var depthPriors = "auto"
     var region: Region? = nil
     var cameraIds: [Int]? = nil
 
@@ -129,7 +132,7 @@ struct TrainingConfig: Codable, Equatable {
         d(.skybox, &skybox); d(.skyboxResolution, &skyboxResolution); d(.skyAlphaWeight, &skyAlphaWeight)
         d(.appearanceCorrection, &appearanceCorrection); d(.appearanceLR, &appearanceLR); d(.appearanceReg, &appearanceReg); d(.bilateralGrid, &bilateralGrid)
         d(.optimizerPrecision, &optimizerPrecision)
-        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg)
+        d(.normalWeight, &normalWeight); d(.normalStart, &normalStart); d(.flatnessReg, &flatnessReg); d(.depthPriors, &depthPriors)
         region = try? c.decode(Region.self, forKey: .region)
         cameraIds = try? c.decode([Int].self, forKey: .cameraIds)
     }
