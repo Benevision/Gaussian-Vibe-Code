@@ -60,6 +60,8 @@ def stage_titles(o: ProjectOptions, train: bool = True) -> List[str]:
         if o.sky:
             s.append("Finding the sky")
         s.append("Solving cameras")
+        if o.source_kind == "stereo" and getattr(o, "stereo_depth", False):
+            s.append("Stereo depth")
     s.append("Finalising dataset")
     if train:
         s.append("Training")
@@ -130,6 +132,17 @@ class LocalPipeline:
             except OSError:
                 os.symlink(video.resolve(), dst)
         return d
+
+    def _stereo_frames(self, ds: Path) -> None:
+        from . import stereo
+
+        st = stereo.prepare_frames(ds, self.o.stereo_both_eyes)
+        b = st["baseline"]
+        self._log(f"stereo: {st['pairs']} pairs, {st['layout']}, "
+                  + (f"baseline {b * 1000:.1f} mm ({st['origin']})" if b else "baseline unknown")
+                  + (", fisheye" if st["lens"] == "fisheye" else "")
+                  + ("" if st["parallel"] else ", not a rectified pair (scale only, no rig / depth)")
+                  + (f", {st['droppedRight']} right-eye images left out" if st["droppedRight"] else ""))
 
     def _register(self, folder: Path) -> str:
         info = self.client.local_dataset(folder)
@@ -329,9 +342,29 @@ class LocalPipeline:
             rig = importers.rig_from_frames(ds)
             if rig:
                 req["rig"] = rig
+            if o.source_kind == "stereo":
+                from . import stereo
+
+                srig = stereo.sfm_rig(ds)
+                if srig:
+                    req["rig"] = srig
+                if stereo.rig_info(ds).get("lens") == "fisheye" and o.camera_model == "auto":
+                    req["cameraModel"] = "fisheye"
             self._process(dataset_id, req, "camera solve", ds)
             if not (ds / "dataset.json").is_file():
                 raise PipelineError("camera solving produced no dataset.json")
+            if o.source_kind == "stereo":
+                st = stereo.apply_constraints(ds)
+                if st["scale"]:
+                    self._log(f"metric scale from the {stereo.rig_info(ds)['baseline'] * 1000:.1f} mm stereo "
+                              f"baseline: ×{st['scale']:.4f}; right eyes from the rig: {st['enforced']} "
+                              f"(+{st['added']} the solver missed)")
+                else:
+                    self._log("stereo: baseline unknown or too few registered pairs — the scale stays arbitrary")
+                if o.stereo_depth:
+                    self._stage("Stereo depth")
+                    d = stereo.compute_depth(ds, progress=self._progress, check=self._check)
+                    self._log(f"stereo depth: {d}")
         else:
             masks = {p.stem: f"masks/{p.name}" for p in (ds / "masks").glob("*.png")} if (ds / "masks").is_dir() else {}
 

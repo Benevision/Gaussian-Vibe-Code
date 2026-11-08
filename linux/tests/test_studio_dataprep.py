@@ -216,3 +216,94 @@ def test_processing_validates_new_tasks():
         validate_request({"task": "frames", "video": "a.mp4", "stereo": {"rightVideo": "/etc/passwd"}})
     with pytest.raises(ProcessingError):
         validate_request({"task": "frames", "video": "a.mp4", "stereo": "sbs"})
+
+
+# ------------------------------------------------------------------------------------------ stereo
+
+def test_stereo_disparity_and_depth():
+    from splatworker.studio import stereo
+
+    rng = np.random.default_rng(2)
+    tex = (rng.random((60, 160)) * 255).astype(np.uint8)
+    left, right = tex[:, 20:140], tex[:, 27:147]                       # 7 px disparity everywhere
+    d = stereo.disparity(left, right, {"maxDisparity": 24, "blockRadius": 3})
+    inner = d[8:-8, 30:-8]
+    assert (inner > 0).mean() > 0.9 and np.median(inner[inner > 0]) == pytest.approx(7, abs=0.2)
+    assert (d[:, :5] == 0).all()                                       # no match left of the search range
+    z = stereo.depth_map(np.dstack([left] * 3), np.dstack([right] * 3), focal=100.0, baseline=0.07,
+                         o={"maxDisparity": 24, "blockRadius": 3})
+    assert np.median(z[z > 0]) == pytest.approx(1.0, rel=0.03)         # f·b/d = 100 · 0.07 / 7
+    # featureless: no confident matches
+    flat = np.full((40, 80), 128, np.uint8)
+    zf = stereo.depth_map(np.dstack([flat] * 3), np.dstack([flat] * 3), 100.0, 0.07, {"maxDisparity": 16})
+    assert (zf == 0).mean() > 0.9                                      # (disparity ~0 → beyond maxDepth)
+
+
+def _stereo_ds(root: Path, n=5, baseline=0.064, solved_gap=0.5, parallel=True):
+    (root / "images").mkdir(parents=True)
+    frames, cams = [], []
+    for i in range(n):
+        for k, (eye, t) in enumerate((("left", "L"), ("right", "R"))):
+            name = f"{i:06d}_{t}.png"
+            Image.fromarray(np.zeros((8, 8, 3), np.uint8)).save(root / "images" / name)
+            frames.append({"image": f"images/{name}", "group": i, "eye": eye, "width": 8, "height": 8})
+            if eye == "right" and i == 3:
+                continue                                                  # the solver missed this right eye
+            m = np.eye(4)
+            m[:3, 3] = [i * 2.0 + k * solved_gap * (1 + 0.01 * i), 1.0, 0.0]
+            cams.append({"id": len(cams), "image": f"images/{name}", "width": 8, "height": 8, "fx": 8.0,
+                         "fy": 8.0, "cx": 4.0, "cy": 4.0, "cameraToWorld": m.tolist()})
+    (root / "frames.json").write_text(json.dumps({"frames": frames, "stereoLayout": "sideBySide",
+                                                  "rig": {"baseline": baseline, "parallel": parallel}}))
+    (root / "dataset.json").write_text(json.dumps({"format": "splatdataset", "version": 1, "cameras": cams,
+                                                   "sceneCenter": [1, 1, 1], "sceneExtent": 10.0,
+                                                   "points": "points3d.ply"}))
+    sys.path.insert(0, str(TOOLS))
+    try:
+        from splatprep.ply import write_points_ply  # type: ignore
+    finally:
+        sys.path.remove(str(TOOLS))
+    write_points_ply(root / "points3d.ply", np.array([[2.0, 4.0, 6.0]], np.float32))
+    return root
+
+
+def test_stereo_metric_scale_and_rig_enforcement(tmp_path):
+    from splatworker.studio import stereo
+
+    ds = _stereo_ds(tmp_path / "ds")
+    rig = stereo.sfm_rig(ds)
+    assert rig["kind"] == "multiview" and len(rig["groups"]) == 5
+    assert rig["groups"][0]["000000_R.png"]["t"] == [0.064, 0.0, 0.0]
+    st = stereo.apply_constraints(ds)
+    assert st["scale"] == pytest.approx(0.064 / 0.505, rel=1e-6)     # median of the inner 50 % (Mac rule)
+    assert st["enforced"] == 4 and st["added"] == 1
+    doc = json.loads((ds / "dataset.json").read_text())
+    by = {Path(c["image"]).stem: c for c in doc["cameras"]}
+    for i in range(5):
+        l = np.asarray(by[f"{i:06d}_L"]["cameraToWorld"])
+        r = np.asarray(by[f"{i:06d}_R"]["cameraToWorld"])
+        np.testing.assert_allclose(r[:3, 3] - l[:3, 3], [0.064, 0, 0], atol=1e-9)
+    assert doc["sceneExtent"] == pytest.approx(10 * st["scale"])
+    sys.path.insert(0, str(TOOLS))
+    try:
+        from splatprep.ply import read_points_ply  # type: ignore
+    finally:
+        sys.path.remove(str(TOOLS))
+    np.testing.assert_allclose(read_points_ply(ds / "points3d.ply")[0][0], np.array([2, 4, 6]) * st["scale"],
+                               rtol=1e-6)
+    # a toed-out fisheye rig (Arcturus): scale only, no rig hint, no depth
+    ds2 = _stereo_ds(tmp_path / "ds2", parallel=False)
+    assert stereo.sfm_rig(ds2) is None
+    st2 = stereo.apply_constraints(ds2)
+    assert st2["scale"] and st2["enforced"] == 0 and st2["added"] == 0
+    assert stereo.compute_depth(ds2)["written"] == 0
+
+
+def test_stereo_left_eye_only(tmp_path):
+    from splatworker.studio import stereo
+
+    ds = _stereo_ds(tmp_path / "ds")
+    st = stereo.prepare_frames(ds, both_eyes=False)
+    assert st["droppedRight"] == 5 and st["pairs"] == 5
+    assert sorted(p.name for p in (ds / "images").iterdir()) == [f"{i:06d}_L.png" for i in range(5)]
+    assert stereo.sfm_rig(ds) is None
