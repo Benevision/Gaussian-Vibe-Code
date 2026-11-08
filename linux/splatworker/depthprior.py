@@ -13,6 +13,7 @@ other blocks of a block-parallel run reuse them.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -179,7 +180,11 @@ class DepthPriors:
                 # beyond 50× the median fitted depth is sky / noise, not a surface
                 depth[depth > 50 * np.median(z)] = 0
                 self.maps[c.id] = depth
-                np.save(self.cache_dir / f"{cache_key(c)}.npy", depth)
+                # atomic: blocks of a block-parallel run on one worker may cache the same photo at once
+                final = self.cache_dir / f"{cache_key(c)}.npy"
+                tmp = final.with_name(f"{final.stem}.{os.getpid()}.tmp.npy")
+                np.save(tmp, depth)
+                os.replace(tmp, final)
                 fitted += 1
                 errs.append(err)
             del model

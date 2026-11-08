@@ -234,7 +234,7 @@ enum MonoDepth {
                 withUnsafeBytes(of: UInt32(ow).littleEndian) { d.append(contentsOf: $0) }
                 withUnsafeBytes(of: UInt32(oh).littleEndian) { d.append(contentsOf: $0) }
                 depth.withUnsafeBytes { d.append(contentsOf: $0) }
-                try? d.write(to: dir.appendingPathComponent(cacheKey(c) + ".bin"))
+                try? d.write(to: dir.appendingPathComponent(cacheKey(c) + ".bin"), options: .atomic)
                 fitted += 1; errs.append(f.error)
             }
         }
