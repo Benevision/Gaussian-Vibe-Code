@@ -860,6 +860,27 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         _write_json_atomic(d / "meta.json", info)
         return {k: v for k, v in info.items() if k != "external"} | {"path": str(root)}
 
+    @app.post("/v1/datasets/{dataset_id}/export-local")
+    async def export_local_dataset(dataset_id: str, request: Request):
+        """``{"path": "/abs/folder"}``: recreate the dataset's files there with hard links (copies across file
+        systems), merging into what is already there. Loopback clients with ``--allow-local-datasets`` only."""
+        from .processing import link_tree
+
+        if not settings.allow_local_datasets or _origin(request) != "local":
+            raise ApiError(403, "only the desktop app on this computer can export datasets to a folder")
+        _check_id(dataset_id, "dataset")
+        root = dataset_root(settings, dataset_id)
+        if root is None:
+            raise ApiError(404, "dataset not found")
+        body = await json_body(request)
+        dest = body.get("path")
+        if not isinstance(dest, str) or not os.path.isabs(dest):
+            raise ApiError(400, "path must be an absolute folder path")
+        dest_p = Path(dest)
+        dest_p.mkdir(parents=True, exist_ok=True)
+        n = await run_in_threadpool(link_tree, root, dest_p, [root])
+        return {"files": n, "path": str(dest_p)}
+
     @app.get("/v1/datasets")
     def list_datasets():
         out = []

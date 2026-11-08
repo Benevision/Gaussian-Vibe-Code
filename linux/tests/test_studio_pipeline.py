@@ -1,0 +1,202 @@
+"""End to end: New Project → frames / photos → stacked masks → sky → solve → train, against a real HTTP server
+(FakeBackend + a stand-in splatprep), through the Studio's urllib client."""
+import json
+import socket
+import sys
+import threading
+import time
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+pytest.importorskip("uvicorn")
+from PIL import Image  # noqa: E402
+
+from conftest import FakeBackend  # noqa: E402
+from splatworker.config import ServerSettings  # noqa: E402
+from splatworker.server import create_app  # noqa: E402
+from splatworker.studio import formats, importers  # noqa: E402
+from splatworker.studio.client import Client  # noqa: E402
+from splatworker.studio.pipeline import LocalPipeline, stage_titles  # noqa: E402
+from splatworker.studio.presets import ProjectOptions  # noqa: E402
+from splatworker.studio.projects import Project, list_projects  # noqa: E402
+
+FAKE_RUNNER = r'''
+import json
+from pathlib import Path
+import numpy as np
+from PIL import Image
+
+def run_request(req, workdir, progress):
+    w = Path(workdir)
+    out = w / req["outputDir"]
+    if req["task"] == "frames":
+        (out / "images").mkdir(parents=True)
+        for i in range(6):
+            Image.fromarray(np.full((24, 32, 3), 40 * i, np.uint8)).save(out / "images" / f"{i:06d}.jpg")
+        progress({"stage": "frames", "progress": 1.0, "message": "6 frames"})
+        return {"stats": {}}
+    images = sorted((w / req["imagesDir"]).iterdir())
+    if req["task"] == "masks":
+        (out / "masks").mkdir(parents=True)
+        for k, p in enumerate(images):
+            m = np.full((24, 32), 255, np.uint8)
+            if req["maskModel"] == "sky":
+                m[:] = 0
+                m[:6] = 255            # top quarter is sky (invertMask: 255 = sky)
+            elif k % 2 == 0:
+                m[10:14, 10:14] = 0     # a person in every other photo
+            Image.fromarray(m).save(out / "masks" / (p.stem + ".png"))
+        (out / "request.json").write_text(json.dumps(req))
+        return {"stats": {}}
+    if req["task"] == "sfm":
+        (out / "images").mkdir(parents=True)
+        cams = []
+        for i, p in enumerate(images):
+            (out / "images" / p.name).write_bytes(p.read_bytes())
+            c2w = np.eye(4); c2w[0, 3] = i * 0.1
+            cams.append({"id": i, "image": "images/" + p.name, "width": 32, "height": 24, "fx": 30.0, "fy": 30.0,
+                         "cx": 16.0, "cy": 12.0, "cameraToWorld": c2w.tolist()})
+        (out / "dataset.json").write_text(json.dumps({"format": "splatdataset", "version": 1,
+            "convention": "opencv", "cameras": cams, "request": req}))
+        return {"stats": {}}
+    raise ValueError(req["task"])
+'''
+
+
+@pytest.fixture
+def server(tmp_path, monkeypatch):
+    import uvicorn
+
+    pkg = tmp_path / "pkgs" / "splatprep"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "models.py").write_text("def available_models():\n    return []\n")
+    (pkg / "runner.py").write_text(FAKE_RUNNER)
+    monkeypatch.syspath_prepend(str(pkg.parent))
+    for mod in list(sys.modules):
+        if mod == "splatprep" or mod.startswith("splatprep."):
+            monkeypatch.delitem(sys.modules, mod)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    settings = ServerSettings(data_dir=tmp_path / "data", token="t", name="w", mdns=False, host="127.0.0.1",
+                              port=port, allow_local_datasets=True)
+    backend = FakeBackend()
+    app = create_app(settings, backend=backend, devices=[None])
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    th = threading.Thread(target=srv.run, daemon=True)
+    th.start()
+    for _ in range(200):
+        if srv.started:
+            break
+        time.sleep(0.02)
+    yield Client(f"http://127.0.0.1:{port}", "t"), backend, settings
+    srv.should_exit = True
+    th.join(5)
+
+
+def run(client, project, opts, train=True):
+    events = []
+    p = LocalPipeline(client, project, opts, lambda k, d: events.append((k, d)), train=train)
+    p.poll_seconds = 0.02
+    p.preview_seconds = 0.0
+    out = p.run()
+    return out, events
+
+
+def test_video_pipeline_with_stacked_masks_sky_and_training(server, tmp_path):
+    client, backend, settings = server
+    video = tmp_path / "in" / "walk.mp4"
+    video.parent.mkdir()
+    video.write_bytes(b"not really a video")
+    opts = ProjectOptions(name="Walk", source_kind="video", source=str(video), mask_models=["person"], sky=True,
+                          holdout_every=3, preset="preview")
+    proj = Project.create(tmp_path / "projects", "Walk", opts.to_dict())
+    out, events = run(client, proj, opts)
+    kinds = [k for k, _ in events]
+    assert "failed" not in kinds, [d for k, d in events if k in ("failed", "log")]
+    assert [d["title"] for k, d in events if k == "stage"] == stage_titles(opts)
+    assert out is not None and out.parent == proj.outputs_dir and out.suffix == ".ply"
+    assert formats.load(out).count == 10
+    doc = json.loads((proj.dataset_dir / "dataset.json").read_text())
+    cams = doc["cameras"]
+    assert len(cams) == 6
+    assert [c.get("holdout") for c in cams] == [False, False, True, False, False, True]
+    assert sum(1 for c in cams if "mask" in c) == 3          # every other photo had a person
+    assert all(c["sky"].startswith("splatprep-sky/masks/") for c in cams)
+    m = np.asarray(Image.open(proj.dataset_dir / cams[0]["mask"]))
+    assert m[12, 12] == 0 and m[12, 7] == 0 and m[12, 3] == 255      # 4 px dilation of the ignored area
+    sfm_req = doc["request"]
+    assert sfm_req["masksDir"] == "masks" and sfm_req["skyMasksDir"] == "splatprep-sky/masks"
+    # the trainer got the project folder itself and the Mac's defaults + preset
+    train_ctx = [c for c in backend.contexts if c.kind == "train"][-1]
+    assert train_ctx.dataset_dir == proj.dataset_dir.resolve()
+    assert train_ctx.spec["iterations"] == 5000 and train_ctx.spec["bilateralGrid"] is True
+    # nothing left registered on the server
+    assert client.get("/v1/datasets") == []
+    assert proj.outputs() == [out]
+    assert list_projects(tmp_path / "projects")[0].root == proj.root
+
+
+def test_photos_pipeline_without_training_and_cancel(server, tmp_path):
+    client, backend, _ = server
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    rng = np.random.default_rng(0)
+    for i in range(10):
+        img = (rng.random((60, 80, 3)) * 255).astype(np.uint8)
+        if i == 4:
+            img[:] = 128            # featureless → rejected as blurry
+        Image.fromarray(img).save(photos / f"IMG_{i:04d}.png")
+    opts = ProjectOptions(name="P", source_kind="photos", source=str(photos), sky=False, max_image_size=40)
+    proj = Project.create(tmp_path / "projects", "P", opts.to_dict())
+    out, events = run(client, proj, opts, train=False)
+    assert out is None and events[-1][0] == "done", events[-3:]
+    imgs = sorted((proj.dataset_dir / "images").iterdir())
+    assert len(imgs) == 9 and max(Image.open(imgs[0]).size) == 40
+    assert (proj.dataset_dir / "dataset.json").is_file()
+
+
+def test_nerfstudio_import(tmp_path):
+    src = tmp_path / "ns"
+    (src / "images").mkdir(parents=True)
+    Image.fromarray(np.zeros((10, 20, 3), np.uint8)).save(src / "images" / "a.png")
+    m = np.eye(4)
+    m[:3, 3] = [1, 2, 3]
+    (src / "transforms.json").write_text(json.dumps({"fl_x": 15, "w": 20, "h": 10,
+                                                     "frames": [{"file_path": "images/a.png", "transform_matrix": m.tolist()}]}))
+    ds = tmp_path / "ds"
+    importers.import_nerfstudio(src / "transforms.json", ds)
+    cam = json.loads((ds / "dataset.json").read_text())["cameras"][0]
+    c2w = np.asarray(cam["cameraToWorld"])
+    np.testing.assert_allclose(c2w[:3, 3], [1, 2, 3])
+    np.testing.assert_allclose(c2w[:3, 1], [0, -1, 0])       # OpenGL +Y up → OpenCV +Y down
+    from splatworker.dataset import parse_dataset
+
+    assert len(parse_dataset(ds).cameras) == 1
+
+
+def test_capture_import_priors(tmp_path, monkeypatch):
+    b = tmp_path / "K.splatcapture"
+    (b / "images").mkdir(parents=True)
+    Image.fromarray(np.zeros((4, 4, 3), np.uint8)).save(b / "images" / "000000.jpg")
+    c2w = np.eye(4).T.reshape(-1).tolist()
+    (b / "manifest.json").write_text(json.dumps({"format": "splatcapture", "version": 1, "coordinateSystem": "arkit",
+        "imageWidth": 4, "imageHeight": 4, "frames": [
+            {"index": 0, "image": "images/000000.jpg", "intrinsics": [3, 3, 2, 2], "cameraToWorld": c2w},
+            {"index": 1, "image": "images/000001.jpg", "intrinsics": [3, 3, 2, 2], "cameraToWorld": c2w,
+             "trackingState": "notAvailable"}]}))
+    ds = tmp_path / "ds"
+    st = importers.import_capture(b, ds)
+    assert st["images"] == 1
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "tools"))
+    for mod in list(sys.modules):
+        if mod == "splatprep" or mod.startswith("splatprep."):
+            monkeypatch.delitem(sys.modules, mod)
+    from splatprep.priors import load_priors
+
+    pri = load_priors(ds / "priors.json")
+    assert len(pri) == 1
+    np.testing.assert_allclose(pri[0].c2w[:3, :3], np.diag([1, -1, -1]))
