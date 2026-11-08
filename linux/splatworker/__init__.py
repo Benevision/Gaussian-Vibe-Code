@@ -1,4 +1,4 @@
-"""Splat Worker: CUDA Gaussian-splat training server for Splat Studio.
+"""SplatWork Node: CUDA Gaussian-splat training server for SplatWork.
 
 The HTTP server and dataset parsing only need the standard library, numpy,
 Pillow, FastAPI and zeroconf. PyTorch and gsplat are imported lazily by

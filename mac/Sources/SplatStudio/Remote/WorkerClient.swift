@@ -7,6 +7,8 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     struct GPU: Codable, Hashable, Sendable { var name: String; var memoryMB: Int?; var freeMemoryMB: Int? }
     var name: String
     var version: Int?
+    /// e.g. "1.3.15" (Linux), "ios-1.0" (iPhone Compute screen).
+    var workerVersion: String?
     var gpus: [GPU]?
     var backend: String?
     var busy: Bool?
@@ -86,7 +88,7 @@ struct WorkerError: LocalizedError, Sendable {
 
 // MARK: - Client
 
-/// HTTP client for a Splat Worker (PROTOCOL.md §4 training API and §6 processing API).
+/// HTTP client for a SplatWork Node (PROTOCOL.md §4 training API and §6 processing API).
 final class WorkerClient: @unchecked Sendable {
     let baseURL: URL
     let token: String?

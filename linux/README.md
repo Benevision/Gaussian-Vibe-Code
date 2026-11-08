@@ -1,11 +1,11 @@
-# Splat Worker
+# SplatWork Node
 
-A Linux CUDA training server that Splat Studio (macOS) can offload Gaussian-splat training, and optionally
+A Linux CUDA training server that SplatWork (macOS) can offload Gaussian-splat training, and optionally
 dataset processing, to over the LAN. It implements `docs/PROTOCOL.md` §2–§4, §6 and §7. The training
 backend is [gsplat](https://github.com/nerfstudio-project/gsplat), nerfstudio's CUDA rasterizer.
 
 ```
-Splat Studio (Mac) ──Bonjour _splatworker._tcp──▶ discovers worker
+SplatWork (Mac) ──Bonjour _splatworker._tcp──▶ discovers worker
                    ──POST /v1/datasets (zip)────▶ datasets/<id>/
                    ──POST /v1/jobs {config}─────▶ queue ─▶ GPU slot ─▶ spawned trainer process
                    ◀─GET /v1/jobs/{id} (poll)───   JobStatus (step, loss, psnr, numGaussians, eta)
@@ -30,7 +30,7 @@ bash build.sh         # builds and installs for your user ("bash" works even if 
 bash make-bundle.sh   # optional: dist/SplatWorker-<version>-x86_64.flatpak to share
 ```
 
-Open **Splat Worker** from the app grid. On first launch the setup assistant runs:
+Open **SplatWork Node** from the app grid. On first launch the setup assistant runs:
 
 1. It finds your NVIDIA GPU and driver through NVML / `nvidia-smi`, and reads the highest CUDA version
    the driver supports.
@@ -54,7 +54,7 @@ After setup:
 * **Jobs**: progress bars with step/total, PSNR, splat count and time left. Each job has cancel,
   delete, log, and "save result" buttons (saves to Downloads).
 * **Log**: the server's output.
-* **Connect**: step-by-step instructions for Splat Studio on the Mac, firewall commands and checks.
+* **Connect**: step-by-step instructions for SplatWork on the Mac, firewall commands and checks.
 * **Settings** (Ctrl+,): port, Bonjour name, token on/off, data folder, maximum upload size, which GPUs
   to use, start the server when the app opens, keep running when the window is closed, start at login
   (through the XDG Background portal), log detail, and repair/remove the GPU runtime. Each setting is
@@ -244,7 +244,7 @@ docker build --build-context tools=../tools --target worker-splatprep -t splatwo
 
 Docker needs the NVIDIA Container Toolkit. `--network host` is required for mDNS to reach the LAN. With
 port mapping instead (`-p 7878:7878`), discovery fails and you have to add the worker by address in
-Splat Studio.
+SplatWork.
 
 ### Local training without the server
 
@@ -262,7 +262,7 @@ records:
 * `gpu=<GPU name>`, or `2x <name>` when there are several GPUs
 * `auth=1|0`
 
-Splat Studio lists it under remote workers. When `auth=1` it asks for the token and then sends
+SplatWork lists it under remote workers. When `auth=1` it asks for the token and then sends
 `Authorization: Bearer <token>` on every request. To check from the Mac:
 
 ```bash
@@ -272,7 +272,7 @@ curl -H "Authorization: Bearer $TOKEN" http://render-box.local:7878/v1/info
 ```
 
 mDNS does not cross subnets or VLANs, and some Wi-Fi networks block multicast (guest networks, "client
-isolation"). In those cases, add the worker in Splat Studio by IP and port.
+isolation"). In those cases, add the worker in SplatWork by IP and port.
 
 ## API summary
 
@@ -384,7 +384,7 @@ sudo firewall-cmd --permanent --add-port=7878/tcp --add-service=mdns && sudo fir
   * In Docker, use `--network host`.
   * Or add the worker by IP.
 * **Wrong address advertised** (Docker bridge, VPN): use `--advertise-ip <LAN IP>`.
-* **401 errors**: the token in Splat Studio doesn't match `/etc/splatworker/token`. Whitespace and
+* **401 errors**: the token in SplatWork doesn't match `/etc/splatworker/token`. Whitespace and
   newlines are stripped from token files.
 * **Processing jobs fail with "splatprep is not installed"**: run `./install.sh --with-splatprep`, or
   `pip install -e ../tools/splatprep` inside the venv. `models` in `/v1/info` lists what imports.
@@ -428,7 +428,7 @@ cd linux/flatpak
 ./build-gsplat-wheel.sh --all  # every supported card (RTX 20 – RTX 50) — for publishing
 ```
 
-The wheel is copied to Splat Worker's `wheels/` folder (`~/.var/app/com.example.SplatWorker/data/splatworker/wheels`)
+The wheel is copied to SplatWork Node's `wheels/` folder (`~/.var/app/com.example.SplatWorker/data/splatworker/wheels`)
 and Set Up uses it from there. To publish an `--all` build for everyone, create a GitHub Release tagged
 `gsplat-1.6.0-cu128` and attach the `.whl`: the Flatpak workflow then uses it instead of compiling. When gsplat 1.6
 is officially released with prebuilt wheels, switch the profile back to the public index and delete the release.

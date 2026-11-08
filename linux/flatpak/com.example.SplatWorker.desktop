@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Splat Worker
+Name=SplatWork Node
 GenericName=GPU Training Server
-Comment=Train Gaussian splats for Splat Studio on this computer's NVIDIA GPU
+Comment=Train Gaussian splats for SplatWork on this computer's NVIDIA GPU
 Exec=splatworker-app
 Icon=com.example.SplatWorker
 Terminal=false

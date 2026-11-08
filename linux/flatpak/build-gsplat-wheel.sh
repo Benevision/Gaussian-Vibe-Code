@@ -6,9 +6,9 @@
 #   ./build-gsplat-wheel.sh            build for the GPU(s) in this PC only (fast; e.g. RTX 4080 = 8.9)
 #   ./build-gsplat-wheel.sh --all      build for every card the runtime supports (RTX 20 – RTX 50; slow)
 #   ./build-gsplat-wheel.sh --arch "8.6;8.9"
-#   ... --no-install                   don't hand the wheel to Splat Worker
+#   ... --no-install                   don't hand the wheel to SplatWork Node
 #
-# The wheel lands in ./wheels/ and (unless --no-install) in Splat Worker's own wheel folder
+# The wheel lands in ./wheels/ and (unless --no-install) in SplatWork Node's own wheel folder
 # (~/.var/app/com.example.SplatWorker/data/splatworker/wheels/), where Set Up finds it: then choose
 # "PyTorch 2.7 + CUDA 12.8 · gsplat 1.6" in Set Up's advanced options (or let it pick automatically).
 #
@@ -102,6 +102,6 @@ if [[ "$INSTALL" == 1 ]]; then
   mkdir -p "$DEST"
   rm -f "$DEST"/gsplat-"$VERSION"+"$TAG"-*.whl "$DEST"/gsplat-"$VERSION"+"$TAG"-*.whl.info
   cp "$WHEEL" "$WHEEL.info" "$DEST/"
-  echo "handed to Splat Worker: $DEST"
-  echo "Now open Splat Worker → Set Up… (it picks the gsplat 1.6 runtime when your driver supports CUDA 12.8)."
+  echo "handed to SplatWork Node: $DEST"
+  echo "Now open SplatWork Node → Set Up… (it picks the gsplat 1.6 runtime when your driver supports CUDA 12.8)."
 fi

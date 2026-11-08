@@ -5,7 +5,7 @@ import os
 import SplatTrainKit   // iPhone app; on the Mac TrainKit.swift is part of the app itself
 #endif
 
-/// `JobStatus` as Splat Studio's WorkerClient decodes it (docs/PROTOCOL.md §4).
+/// `JobStatus` as SplatWork's WorkerClient decodes it (docs/PROTOCOL.md §4).
 struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
     var jobId: String
     var kind = "train"
@@ -38,12 +38,12 @@ final class WorkerEngine: @unchecked Sendable {
     #if os(iOS)
     static let workerVersion = "ios-1.0"
     static let kind = "iphone"
-    static let backend = "Metal (Splat Capture, iPhone)"
+    static let backend = "Metal (SplatWork Capture, iPhone)"
     static let deviceLabel = "the iPhone"
     #else
     static let workerVersion = "mac-1.0"
     static let kind = "mac"
-    static let backend = "Metal (Splat Studio, Mac)"
+    static let backend = "Metal (SplatWork, Mac)"
     static let deviceLabel = "the Mac"
     #endif
     static let logSubsystem = Bundle.main.bundleIdentifier ?? "SplatWorker"
@@ -228,7 +228,7 @@ final class WorkerEngine: @unchecked Sendable {
         }
     }
 
-    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (Splat Studio uploads
+    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (SplatWork uploads
     /// once per device and reuses the id for every block it sends, so older ones are done with.)
     private func purgeUnusedDatasets() {
         lock.lock()

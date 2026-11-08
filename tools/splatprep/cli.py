@@ -171,7 +171,7 @@ def cmd_maskserver(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="splatprep", description="Splat Studio processing toolkit")
+    p = argparse.ArgumentParser(prog="splatprep", description="SplatWork processing toolkit")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="execute a ProcessingRequest (PROTOCOL §6)")

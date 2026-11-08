@@ -330,7 +330,7 @@ final class MetalTrainer: @unchecked Sendable {
         rawImg = ctx.buffer(hw * 12, label: "rawImg"); apGrad = ctx.buffer(64, label: "apGrad")
         skyDT = ctx.buffer(hw * 4, label: "skyDT")
         if config.appearanceCorrection, Self.exposureLocked(views.map(\.camera)) {
-            // Locked exposure (Splat Capture): nothing to correct, and the extra freedom costs held-out quality
+            // Locked exposure (SplatWork Capture): nothing to correct, and the extra freedom costs held-out quality
             // (bedroom, 8k: 21.20 dB with correction, 22.21 dB without) and drifts colours too bright.
             config.appearanceCorrection = false
             appearanceAutoOff = true

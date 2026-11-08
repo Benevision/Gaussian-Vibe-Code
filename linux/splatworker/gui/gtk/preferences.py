@@ -96,7 +96,7 @@ class Preferences:
                                  description="How the Mac finds and talks to this computer. Changes apply when "
                                              "the server restarts.")
         self._spin(g, "port", "Port",
-                   "The TCP port the server listens on. Splat Studio uses 7878 by default; change it only if "
+                   "The TCP port the server listens on. SplatWork uses 7878 by default; change it only if "
                    "another program already uses that port. Allow it in your firewall.", 1024, 65535, 1)
         name = Adw.EntryRow(title="Name shown on the Mac (empty = this computer's name)",
                             show_apply_button=True)
@@ -104,7 +104,7 @@ class Preferences:
         name.connect("apply", lambda r: self._set("name", r.get_text().strip()))
         g.add(name)
         self._switch(g, "mdns", "Announce on the local network (Bonjour)",
-                     "Lets Splat Studio find this computer automatically. Needs multicast (UDP port 5353) "
+                     "Lets SplatWork find this computer automatically. Needs multicast (UDP port 5353) "
                      "between the two machines. Turn off to add the worker on the Mac by address instead.")
         self._switch(g, "require_token", "Require an access token",
                      "Strongly recommended. Without a token anyone on your network could upload data and use "
@@ -192,10 +192,10 @@ class Preferences:
         self._switch(g, "start_server_on_launch", "Start the server when the app opens",
                      "So you never forget to turn it on before training from the Mac.")
         self._switch(g, "run_in_background", "Keep running when the window is closed",
-                     "The server keeps serving the Mac in the background. Open Splat Worker again from the app "
+                     "The server keeps serving the Mac in the background. Open SplatWork Node again from the app "
                      "grid to see it, or choose Quit in the menu to stop it.")
         self._switch(g, "autostart", "Start automatically when you log in",
-                     "Starts Splat Worker in the background at login (the system may ask for permission). "
+                     "Starts SplatWork Node in the background at login (the system may ask for permission). "
                      "Useful for a dedicated GPU box.", after=self.on_autostart)
         return g
 

@@ -65,7 +65,7 @@ struct WorkerHealth: Hashable, Sendable {
     var checkedAt: Date? = nil
 }
 
-/// Discovers Splat Workers (`_splatworker._tcp`), keeps manually added workers (UserDefaults; tokens in
+/// Discovers SplatWork Nodes (`_splatworker._tcp`), keeps manually added workers (UserDefaults; tokens in
 /// the Keychain) and health-checks them via `GET /v1/info`.
 @MainActor
 @Observable

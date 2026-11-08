@@ -28,13 +28,19 @@ final class MetalContext: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if let p = pipelines[name] { return p }
         guard let f = library.makeFunction(name: name) else { fatalError("missing kernel \(name)") }
-        let p = try! device.makeComputePipelineState(function: f)
+        let p: MTLComputePipelineState
+        do { p = try device.makeComputePipelineState(function: f) } catch {
+            fatalError("Metal pipeline \(name) failed on \(device.name): \(error)")
+        }
         pipelines[name] = p
         return p
     }
 
     func buffer(_ length: Int, label: String? = nil) -> MTLBuffer {
-        let b = device.makeBuffer(length: max(length, 16), options: .storageModeShared)!
+        guard let b = device.makeBuffer(length: max(length, 16), options: .storageModeShared) else {
+            fatalError("GPU buffer \(label ?? "?") of \(length) bytes could not be allocated on \(device.name) "
+                       + "(max buffer \(device.maxBufferLength), in use \(device.currentAllocatedSize))")
+        }
         b.label = label
         return b
     }

@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-/// What the user dropped into Splat Studio.
+/// What the user dropped into SplatWork.
 enum SourceDescription: Codable, Hashable, Sendable {
     /// A folder of photos (JPEG / HEIC / PNG / TIFF / RAW).
     case photos(folder: URL)
@@ -15,7 +15,7 @@ enum SourceDescription: Codable, Hashable, Sendable {
     case photos360(folder: URL)
     /// Stereo footage: one file (SBS / TB / MV-HEVC / dual-stream) or two files (left, right).
     case stereoVideo(left: URL, right: URL?)
-    /// A `.splatcapture` bundle (directory or zip) from Splat Capture / Steam Frame.
+    /// A `.splatcapture` bundle (directory or zip) from SplatWork Capture / Steam Frame.
     case captureBundle(URL)
     /// A COLMAP project (`sparse/0` + `images/`), text or binary model.
     case colmap(project: URL, images: URL?)

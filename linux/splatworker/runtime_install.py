@@ -1,6 +1,6 @@
 """Remote install of optional processing components (``POST /v1/runtime/install``).
 
-Lets Splat Studio on the Mac add the camera-solving / masking models to this worker's GPU runtime
+Lets SplatWork on the Mac add the camera-solving / masking models to this worker's GPU runtime
 without anyone touching the PC: the same pip steps as the setup assistant's "Processing models" option,
 run with the server's own interpreter (the runtime venv), with live progress for the Mac to show.
 Only a fixed component list is installable — the request cannot name arbitrary packages.

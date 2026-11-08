@@ -1,4 +1,4 @@
-# Builds the Splat Worker Flatpak on every push that touches the worker (linux/, tools/) and
+# Builds the SplatWork Node Flatpak on every push that touches the worker (linux/, tools/) and
 # publishes it as a Flatpak repository on GitHub Pages, so PCs that added the remote get updates
 # through GNOME Software / Discover / `flatpak update` (see linux/README.md "Updates").
 #
@@ -8,7 +8,7 @@
 #   FLATPAK_GPG_PRIVATE_KEY = output of `gpg --armor --export-secret-keys <KEYID>` (a key without a
 #   passphrase, used only for this repo). Without it the repo is published unsigned and the remote
 #   must be added with --no-gpg-verify (fine on a home network; HTTPS still protects the download).
-name: Splat Worker Flatpak
+name: SplatWork Node Flatpak
 
 on:
   push:
@@ -146,7 +146,7 @@ jobs:
             --state-dir=.flatpak-builder --repo=../../site/flatpak/repo --default-branch="$BRANCH" \
             "${SIGN[@]}" build-dir "$APP_ID.yml"
           flatpak build-update-repo --generate-static-deltas --prune --prune-depth=5 \
-            --title="Splat Worker" "${SIGN[@]}" ../../site/flatpak/repo
+            --title="SplatWork Node" "${SIGN[@]}" ../../site/flatpak/repo
 
       - name: Write .flatpakrepo, .flatpakref and version.json
         run: |
@@ -156,17 +156,17 @@ jobs:
           GPGLINE=""; [ -f pubkey.b64 ] && GPGLINE="GPGKey=$(cat pubkey.b64)"
           cat > site/flatpak/splatworker.flatpakrepo <<REPO
           [Flatpak Repo]
-          Title=Splat Worker
+          Title=SplatWork Node
           Url=$BASE/repo/
           Homepage=https://github.com/$GITHUB_REPOSITORY
-          Comment=Splat Studio's Linux GPU worker
+          Comment=SplatWork's Linux GPU worker
           $GPGLINE
           REPO
           cat > site/flatpak/splatworker.flatpakref <<REF
           [Flatpak Ref]
           Name=$APP_ID
           Branch=$BRANCH
-          Title=Splat Worker
+          Title=SplatWork Node
           Url=$BASE/repo/
           RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
           IsRuntime=false
@@ -175,8 +175,8 @@ jobs:
           sed -i 's/^ *//' site/flatpak/splatworker.flatpakrepo site/flatpak/splatworker.flatpakref
           printf '{"version": "%s", "commit": "%s", "date": "%s"}\n' "$VERSION" "$GITHUB_SHA" "$(date -u +%FT%TZ)" > site/flatpak/version.json
           cat > site/index.html <<HTML
-          <!doctype html><meta charset="utf-8"><title>Splat Worker</title>
-          <h1>Splat Worker $VERSION</h1>
+          <!doctype html><meta charset="utf-8"><title>SplatWork Node</title>
+          <h1>SplatWork Node $VERSION</h1>
           <p>Install on Linux: <code>flatpak install --user $BASE/splatworker.flatpakref</code></p>
           <p>Updates then arrive through GNOME Software / Discover or <code>flatpak update</code>.</p>
           HTML
@@ -189,7 +189,7 @@ jobs:
       - name: Wheel index (pip --find-links)
         run: |
           cd site/wheels
-          { echo "<!doctype html><title>Splat Worker wheels</title>"; for f in *.whl; do echo "<a href=\"$f\">$f</a><br>"; done; } > index.html
+          { echo "<!doctype html><title>SplatWork Node wheels</title>"; for f in *.whl; do echo "<a href=\"$f\">$f</a><br>"; done; } > index.html
           cat index.html
 
       - uses: actions/upload-pages-artifact@v3

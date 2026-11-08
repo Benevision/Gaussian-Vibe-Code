@@ -166,7 +166,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _build_jobs(self) -> Gtk.Widget:
         self.jobs_stack = Gtk.Stack()
         empty = Adw.StatusPage(icon_name="view-list-symbolic", title="No jobs yet",
-                               description="Jobs sent from Splat Studio appear here with their progress.")
+                               description="Jobs sent from SplatWork appear here with their progress.")
         self.jobs_stack.add_named(empty, "empty")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.jobs_group = Adw.PreferencesGroup(title="Jobs",
@@ -246,7 +246,7 @@ class MainWindow(Adw.ApplicationWindow):
         tok = self.state.token()
         if tok:
             copy_text(self, tok)
-            toast(self.toasts, "Token copied. Paste it in Splat Studio on the Mac.")
+            toast(self.toasts, "Token copied. Paste it in SplatWork on the Mac.")
 
     def _toggle_token(self, *_):
         self._token_visible = not self._token_visible
@@ -375,7 +375,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _set_update_info(self, info) -> bool:
         self._update_info = info
         if info:
-            self.update_banner.set_title(f"Splat Worker {info.get('version')} is available.")
+            self.update_banner.set_title(f"SplatWork Node {info.get('version')} is available.")
         self.update_banner.set_revealed(bool(info))
         return False
 
@@ -384,7 +384,7 @@ class MainWindow(Adw.ApplicationWindow):
         v = (self._update_info or {}).get("version", "")
         alert(self, f"Update to {v}",
               "Updates arrive like any other Flatpak: GNOME Software or Discover offer them automatically, "
-              "or run this in a terminal (then restart Splat Worker):\n\n" + updates.UPDATE_COMMAND,
+              "or run this in a terminal (then restart SplatWork Node):\n\n" + updates.UPDATE_COMMAND,
               responses=(("close", "Close", "default"), ("copy", "Copy Command", "suggested")),
               callback=lambda r: copy_text(self, updates.UPDATE_COMMAND) if r == "copy" else None,
               default="copy", close="close")

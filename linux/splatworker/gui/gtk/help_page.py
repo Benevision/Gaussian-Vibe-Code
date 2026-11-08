@@ -46,7 +46,7 @@ class HelpPage(Gtk.ScrolledWindow):
         g1 = Adw.PreferencesGroup(title="1. Start the server here",
                                   description="Flip the big switch on the Status page. The status dot turns "
                                               "green when the Mac can connect.")
-        g2 = Adw.PreferencesGroup(title="2. Open Splat Studio on the Mac",
+        g2 = Adw.PreferencesGroup(title="2. Open SplatWork on the Mac",
                                   description="Both computers must be on the same network (same Wi-Fi or "
                                               "wired LAN).")
         g2.add(action_row("Open Settings → Remote Workers.", icon="preferences-system-symbolic"))

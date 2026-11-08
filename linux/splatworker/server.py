@@ -597,7 +597,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                 value.strip().encode(), settings.token.encode()):
             raise ApiError(401, "missing or invalid bearer token")
 
-    app = FastAPI(title="Splat Worker", version=__version__, lifespan=lifespan,
+    app = FastAPI(title="SplatWork Node", version=__version__, lifespan=lifespan,
                   dependencies=[Depends(require_auth)], docs_url=None, redoc_url=None,
                   openapi_url=None)
     app.state.manager = manager

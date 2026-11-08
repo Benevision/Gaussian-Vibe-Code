@@ -44,7 +44,7 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var invertMask: Bool? = nil
     /// auto | cuda | mps | cpu (splatprep extension)
     var device: String? = nil
-    /// Rig description for multi-camera captures (Splat Studio extension; ignored by toolkits that don't support it).
+    /// Rig description for multi-camera captures (SplatWork extension; ignored by toolkits that don't support it).
     var rig: RigHint? = nil
     /// task = frames: the video (relative to the work dir), its extraction options and, for 360° footage, the views.
     var video: String? = nil
