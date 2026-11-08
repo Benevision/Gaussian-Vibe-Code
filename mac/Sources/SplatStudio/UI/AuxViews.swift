@@ -13,7 +13,7 @@ struct InboxView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("iPhone Inbox").font(.largeTitle.bold())
-                    Text("Captures sent from Splat Capture on your iPhone over Wi-Fi land here.").foregroundStyle(.secondary)
+                    Text("Captures sent from SplatWork Capture on your iPhone over Wi-Fi land here.").foregroundStyle(.secondary)
                 }
                 Spacer()
                 HelpButton(id: "net.receive")
@@ -48,7 +48,7 @@ struct InboxView: View {
             }
             if receiver.received.isEmpty {
                 ContentUnavailableView("No captures yet", systemImage: "iphone.radiowaves.left.and.right",
-                                       description: Text("On your iPhone open Splat Capture → Library → Send to Mac."))
+                                       description: Text("On your iPhone open SplatWork Capture → Library → Send to Mac."))
             } else {
                 List(receiver.received) { c in
                     InboxRow(capture: c, model: model, receiver: receiver, onOpen: onOpen)
@@ -89,7 +89,7 @@ struct WorkersView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Compute").font(.largeTitle.bold())
-                    Text("Offload camera solving and training to a Linux PC with an NVIDIA GPU running Splat Worker.").foregroundStyle(.secondary)
+                    Text("Offload camera solving and training to a Linux PC with an NVIDIA GPU running SplatWork Node.").foregroundStyle(.secondary)
                 }
                 Spacer()
                 HelpButton(id: "net.workers")
@@ -108,7 +108,7 @@ struct WorkersView: View {
             }
             GroupBox("Linux workers") {
                 if browser.workers.isEmpty {
-                    Text(browser.isBrowsing ? "Searching the local network… Start Splat Worker on your PC and it will appear here." : "Discovery is off.")
+                    Text(browser.isBrowsing ? "Searching the local network… Start SplatWork Node on your PC and it will appear here." : "Discovery is off.")
                         .foregroundStyle(.secondary).padding(6).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 ForEach(browser.workers) { w in
@@ -511,7 +511,7 @@ struct SettingsReferenceView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Settings Reference").font(.largeTitle.bold())
-                Text("Every option in Splat Studio, explained — \(SettingsCatalog.all.count) settings. Click one for details, or search on the left. Easy settings are always visible; Advanced ones appear in Advanced mode.")
+                Text("Every option in SplatWork, explained — \(SettingsCatalog.all.count) settings. Click one for details, or search on the left. Easy settings are always visible; Advanced ones appear in Advanced mode.")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             ForEach(SettingDoc.Group.allCases, id: \.self) { g in

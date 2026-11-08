@@ -1,6 +1,6 @@
-# Splat Capture (iOS)
+# SplatWork Capture (iOS)
 
-Splat Capture is an iPhone app that records ARKit-posed image sequences, with LiDAR depth when the phone has it, for training Gaussian splats in **Splat Studio** on the Mac. It writes the `.splatcapture` bundle described in `docs/PROTOCOL.md` §1 and sends it to the Mac over the local network as described in §5.
+SplatWork Capture is an iPhone app that records ARKit-posed image sequences, with LiDAR depth when the phone has it, for training Gaussian splats in **SplatWork** on the Mac. It writes the `.splatcapture` bundle described in `docs/PROTOCOL.md` §1 and sends it to the Mac over the local network as described in §5.
 
 - **Requirements:** iPhone with an A12 chip or newer, running iOS 18 or later. LiDAR models (Pro iPhones from the 12 Pro on) also record depth and a fused point cloud.
 - **Build tools:** Xcode 26 or later, plus [XcodeGen](https://github.com/yonaskolb/XcodeGen).
@@ -42,7 +42,7 @@ The app compiles for the Simulator, but ARKit world tracking does not run there.
 
 ## 3. Shipping to TestFlight
 
-1. Create the app record. In [App Store Connect](https://appstoreconnect.apple.com), go to **Apps › + › New App**, choose platform iOS, and enter a name such as "Splat Capture". Pick the bundle ID you set above; if it isn't listed, register it under Certificates, Identifiers & Profiles › Identifiers. Enter any SKU.
+1. Create the app record. In [App Store Connect](https://appstoreconnect.apple.com), go to **Apps › + › New App**, choose platform iOS, and enter a name such as "SplatWork Capture". Pick the bundle ID you set above; if it isn't listed, register it under Certificates, Identifiers & Profiles › Identifiers. Enter any SKU.
 2. Bump the version. Each upload needs a unique build number: raise `CURRENT_PROJECT_VERSION` in `project.yml`, or set **Build** under target › General. Change `MARKETING_VERSION` for user-visible versions.
 3. Archive. Set the run destination to **Any iOS Device (arm64)**, then choose **Product › Archive**.
 4. Upload. When the Organizer opens, select the archive and choose **Distribute App › App Store Connect › Upload**. Keep the defaults (automatic signing, upload symbols).
@@ -67,9 +67,9 @@ xcrun altool --upload-app -f build/export/SplatCapture.ipa -t ios --apiKey <KEY>
 2. Press the red **record** button.
 3. Walk slowly around the subject. A haptic tick and a white flash mark each saved keyframe, and the coverage overlay fills in with the LiDAR points captured so far.
 4. Press **stop**. The app writes the point cloud and manifest, then shows a summary.
-5. Choose **Send to Mac**. Open Splat Studio on the Mac and enable **Receive from iPhone**. The Mac appears automatically. Enter the 6-digit pairing code if Splat Studio requires one, then press **Send**.
-   - If the Mac doesn't appear, use **Enter address manually** and type the IP address and port shown in Splat Studio.
-   - You can also **Share as .zip** with AirDrop or Files. Captures also appear in the Files app under *On My iPhone › Splat Capture › Captures*.
+5. Choose **Send to Mac**. Open SplatWork on the Mac and enable **Receive from iPhone**. The Mac appears automatically. Enter the 6-digit pairing code if SplatWork requires one, then press **Send**.
+   - If the Mac doesn't appear, use **Enter address manually** and type the IP address and port shown in SplatWork.
+   - You can also **Share as .zip** with AirDrop or Files. Captures also appear in the Files app under *On My iPhone › SplatWork Capture › Captures*.
 
 ### Tips for great captures
 

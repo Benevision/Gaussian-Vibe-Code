@@ -137,7 +137,7 @@ final class PointFusion {
         let header = """
         ply
         format binary_little_endian 1.0
-        comment Splat Capture fused LiDAR point cloud (ARKit world, metres)
+        comment SplatWork Capture fused LiDAR point cloud (ARKit world, metres)
         element vertex \(n)
         property float x
         property float y

@@ -1,4 +1,4 @@
-# Splat Worker desktop app (GTK 4 + libadwaita) with the CUDA training server.
+# SplatWork Node desktop app (GTK 4 + libadwaita) with the CUDA training server.
 #
 #   ./build.sh          build and install for the current user
 #   ./make-bundle.sh    single-file SplatWorker-<version>-x86_64.flatpak for sharing

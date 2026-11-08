@@ -3,7 +3,7 @@ import Metal
 import os
 import SplatTrainKit
 
-/// `JobStatus` as Splat Studio's WorkerClient decodes it (docs/PROTOCOL.md §4).
+/// `JobStatus` as SplatWork's WorkerClient decodes it (docs/PROTOCOL.md §4).
 struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
     var jobId: String
     var kind = "train"
@@ -41,7 +41,7 @@ final class WorkerEngine: @unchecked Sendable {
         var version = 1
         var workerVersion = WorkerEngine.workerVersion
         var gpus: [GPU]
-        var backend = "Metal (Splat Capture, iPhone)"
+        var backend = "Metal (SplatWork Capture, iPhone)"
         var busy: Bool
         var queueLength: Int
         var capabilities = ["train"]
@@ -214,7 +214,7 @@ final class WorkerEngine: @unchecked Sendable {
         }
     }
 
-    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (Splat Studio uploads
+    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (SplatWork uploads
     /// once per device and reuses the id for every block it sends, so older ones are done with.)
     private func purgeUnusedDatasets() {
         lock.lock()

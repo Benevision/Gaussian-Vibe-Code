@@ -151,7 +151,7 @@ public final class TrainKitJob: @unchecked Sendable {
     private var cancelled = false
 
     /// - Parameters:
-    ///   - configJSON: the job's `TrainingConfig` as sent by Splat Studio (tolerant decoding, missing keys = defaults).
+    ///   - configJSON: the job's `TrainingConfig` as sent by SplatWork (tolerant decoding, missing keys = defaults).
     ///   - availableBytes: memory the app may still allocate (`os_proc_available_memory()`).
     public init(datasetRoot: URL, configJSON: Data?, availableBytes: UInt64) throws {
         self.datasetRoot = datasetRoot

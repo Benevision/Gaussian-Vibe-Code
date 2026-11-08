@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import UIKit
 
-/// Zips a capture and POSTs it to Splat Studio (PROTOCOL §5), with progress and retry.
+/// Zips a capture and POSTs it to SplatWork (PROTOCOL §5), with progress and retry.
 @MainActor
 @Observable
 final class CaptureUploader {
@@ -30,8 +30,8 @@ final class CaptureUploader {
         var errorDescription: String? {
             switch self {
             case let .http(code, msg): msg.map { "The Mac refused the upload (\(code)): \($0)" } ?? "The Mac refused the upload (HTTP \(code))."
-            case .pairing: "The Mac requires the 6-digit pairing code shown in Splat Studio › Receive from iPhone."
-            case .notSplatStudio: "That device doesn't look like Splat Studio."
+            case .pairing: "The Mac requires the 6-digit pairing code shown in SplatWork › Receive from iPhone."
+            case .notSplatStudio: "That device doesn't look like SplatWork."
             }
         }
     }

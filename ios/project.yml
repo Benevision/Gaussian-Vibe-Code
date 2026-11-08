@@ -50,7 +50,7 @@ targets:
     info:
       path: SplatCapture/Resources/Info.plist
       properties:
-        CFBundleDisplayName: Splat Capture
+        CFBundleDisplayName: SplatWork Capture
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
@@ -62,8 +62,8 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
-        NSCameraUsageDescription: "Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
-        NSLocalNetworkUsageDescription: "Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac, and (Compute screen) lets Splat Studio send training work to this iPhone."
+        NSCameraUsageDescription: "SplatWork Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
+        NSLocalNetworkUsageDescription: "SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac, and (Compute screen) lets SplatWork send training work to this iPhone."
         NSBonjourServices: [_splatcapture._tcp, _splatworker._tcp]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

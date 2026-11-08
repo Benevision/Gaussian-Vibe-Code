@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build a single-file Flatpak bundle for sharing:
 #
-#   ./make-bundle.sh                    -> dist/SplatWorker-<version>-x86_64.flatpak
+#   ./make-bundle.sh                    -> dist/SplatWorkNode-<version>-x86_64.flatpak
 #
 # Install it on another machine with:
-#   flatpak install --user SplatWorker-<version>-x86_64.flatpak
+#   flatpak install --user SplatWorkNode-<version>-x86_64.flatpak
 # The GNOME runtime is fetched from Flathub automatically (--runtime-repo below).
 set -euo pipefail
 
@@ -13,7 +13,7 @@ APP_ID=com.example.SplatWorker
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$HERE/../splatworker/__init__.py")"
 ARCH="$(flatpak --default-arch)"
 OUT_DIR="$HERE/dist"
-OUT="$OUT_DIR/SplatWorker-$VERSION-$ARCH.flatpak"
+OUT="$OUT_DIR/SplatWorkNode-$VERSION-$ARCH.flatpak"
 
 if command -v flatpak-builder >/dev/null 2>&1; then
   BUILDER=(flatpak-builder)

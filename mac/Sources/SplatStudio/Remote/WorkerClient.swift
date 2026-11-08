@@ -83,7 +83,7 @@ struct WorkerError: LocalizedError, Sendable {
 
 // MARK: - Client
 
-/// HTTP client for a Splat Worker (PROTOCOL.md §4 training API and §6 processing API).
+/// HTTP client for a SplatWork Node (PROTOCOL.md §4 training API and §6 processing API).
 final class WorkerClient: @unchecked Sendable {
     let baseURL: URL
     let token: String?

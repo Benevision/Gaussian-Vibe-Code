@@ -105,7 +105,7 @@ struct CaptureView: View {
         .sheet(item: $sendTarget) { item in
             SendToMacView(item: item)
         }
-        .alert("Splat Capture", isPresented: Binding(
+        .alert("SplatWork Capture", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })) {
             if model.errorMessage?.contains("Settings") == true {

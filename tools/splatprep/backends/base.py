@@ -409,7 +409,7 @@ def write_database(
         prior = ctx.priors.get(name)
         if rig is not None:
             # one camera per rig sensor (COLMAP rigs identify sensors by camera); the views' exact pinhole
-            # intrinsics when Splat Studio sent them
+            # intrinsics when SplatWork sent them
             s = rig.sensor[i]
             if s not in cam_for_sensor:
                 if rig.intrinsics:

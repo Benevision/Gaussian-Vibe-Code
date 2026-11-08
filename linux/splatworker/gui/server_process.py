@@ -135,7 +135,7 @@ def port_problem(port: int, host: str = "0.0.0.0") -> Optional[str]:
         s.bind((host, port))
     except OSError as e:
         if e.errno == errno.EADDRINUSE:
-            return (f"Port {port} is already in use. Another Splat Worker may be running (for example "
+            return (f"Port {port} is already in use. Another SplatWork Node may be running (for example "
                     "the systemd service or Docker container), or another program uses this port. Stop "
                     "it or choose a different port in Settings.")
         if e.errno == errno.EACCES:
