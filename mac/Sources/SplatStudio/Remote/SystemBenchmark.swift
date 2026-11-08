@@ -366,17 +366,15 @@ enum MemoryForecast {
         // iPhones / Mac workers size jobs to their own memory (fewer splats, smaller images down to 480 px); only
         // a job that can't fit even then needs splitting. They report what they may still allocate.
         if let v = info.workerVersion, v.hasPrefix("ios") || v.hasPrefix("mac") {
+            // Ask the very sizing the worker runs (TrainKit.budget), so the Mac and the device can't disagree.
             guard let avail = info.memory?.availableMB, avail > 0 else { return nil }
-            var px480: Double = 0, largest: Double = 0
-            for c in dataset.manifest.cameras {
-                let longest = Double(max(c.width, c.height)), s = longest > 480 ? 480 / longest : 1
-                let px = Double(c.width) * s * Double(c.height) * s
-                px480 += px; largest = max(largest, px)
+            var c = config
+            do {
+                _ = try TrainKit.budget(dataset: dataset, config: &c, availableBytes: UInt64(avail) * 1_048_576)
+                return nil
+            } catch {
+                return "\(info.name) can't hold all \(dataset.manifest.cameras.count) photos: \(error.localizedDescription)"
             }
-            let need = 250 * 1_048_576 + px480 * 4 * 1.6 + largest * 280 + 50_000 * 2_000
-            let usable = Double(avail) * 1_048_576 * 0.65
-            return need > usable ? "\(info.name) can't hold all \(dataset.manifest.cameras.count) photos even at 480 px "
-                + "(about \(formatBytes(Int(need))) of \(formatBytes(Int(usable))) it can use)." : nil
         }
         var images: Int64 = 0, maxPx: Int64 = 0
         for c in dataset.manifest.cameras {

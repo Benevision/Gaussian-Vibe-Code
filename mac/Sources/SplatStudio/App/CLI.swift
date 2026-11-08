@@ -80,6 +80,16 @@ enum CLI {
             print(canonicalJSON(r.videoOptions)); print(canonicalJSON(r.equirect))
             exit(0)
         }
+        if let ds = value("--budget"), let mb = value("--available-mb").flatMap(UInt64.init) {
+            // What an iPhone / Mac worker with that much free memory would train (TrainKit.budget).
+            do {
+                let d = try PreparedDataset.load(URL(fileURLWithPath: ds))
+                var c = TrainingConfig()
+                let b = try TrainKit.budget(dataset: d, config: &c, availableBytes: mb * 1_048_576)
+                print(b)
+            } catch { print("error: \(error.localizedDescription)") }
+            exit(0)
+        }
         if let ds = value("--train") {
             do {
                 let dataset = try PreparedDataset.load(URL(fileURLWithPath: ds))

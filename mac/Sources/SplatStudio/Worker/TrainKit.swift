@@ -114,10 +114,11 @@ public enum TrainKit {
     /// `availableBytes` (`os_proc_available_memory()` at job start).
     static func budget(dataset: PreparedDataset, config: inout TrainingConfig, availableBytes: UInt64) throws -> TrainKitBudget {
         let cams = dataset.manifest.cameras.filter { c in config.cameraIds.map { Set($0).contains(c.id) } ?? true }
-        let requestedG = config.maxGaussians, requestedS = config.maxImageSize
+        let requestedG = config.maxGaussians, requestedS = config.maxImageSize, requestedGrid = config.bilateralGrid
         // 65 %: the rest of the app (camera session, UI, decode buffers, Metal driver) and iOS's jetsam margin
         // need the remainder — at 80 % a 965-photo job was killed at the 3.4 GB high-watermark limit.
         let usable = Double(availableBytes) * 0.65
+        var grid = config.bilateralGrid
         func imageBytes(_ maxSize: Int) -> (all: Double, largest: Double) {
             var all = 0.0, largest = 0.0
             for c in cams {
@@ -129,15 +130,25 @@ public enum TrainKit {
                 largest = max(largest, px)
             }
             // per-photo bilateral grid (GPU + 2 CPU Adam moments)
-            if config.bilateralGrid { all += Double(cams.count) * Double(12 * 8 * 16 * 16 * 4 * 3) }
+            if grid { all += Double(cams.count) * Double(12 * 8 * 16 * 16 * 4 * 3) }
             return (all, largest)
         }
         var size = config.maxImageSize
         var img = imageBytes(size)
         let minGaussians = 150_000
         func gaussianRoom() -> Double { usable - fixedBytes - img.all - img.largest * bytesPerTrainPixel }
+        // Make room, least visible loss first: smaller photos down to 480 px, then no per-photo colour
+        // correction (≈ 0.3 MB a photo), then photos down to 320 px.
         while gaussianRoom() < Double(minGaussians) * bytesPerGaussian && size > 480 {
             size = max(480, Int(Double(size) * 0.85))
+            img = imageBytes(size)
+        }
+        if gaussianRoom() < Double(minGaussians) * bytesPerGaussian && grid {
+            grid = false
+            img = imageBytes(size)
+        }
+        while gaussianRoom() < 50_000 * bytesPerGaussian && size > 320 {
+            size = max(320, Int(Double(size) * 0.85))
             img = imageBytes(size)
         }
         // Still no room for a minimal splat set: refuse with a reason instead of being killed by iOS.
@@ -148,6 +159,7 @@ public enum TrainKit {
                 cams.count, need / 1_048_576, size, usable / 1_048_576))
         }
         config.maxImageSize = size
+        config.bilateralGrid = grid
         let fit = max(50_000, Int(gaussianRoom() / bytesPerGaussian))
         config.maxGaussians = min(requestedG, fit)
         // keep random init / densification counts consistent with the new cap
@@ -157,6 +169,7 @@ public enum TrainKit {
         var s = "memory: \(mb(Double(availableBytes))) available to the app, \(cams.count) cameras; "
         s += "maxGaussians \(requestedG)" + (config.maxGaussians != requestedG ? " → \(config.maxGaussians)" : " (fits)")
         if size != requestedS { s += ", maxImageSize \(requestedS) → \(size)" }
+        if grid != requestedGrid { s += ", bilateral grid off" }
         s += ", estimated peak \(mb(est))"
         return TrainKitBudget(requestedGaussians: requestedG, maxGaussians: config.maxGaussians, requestedImageSize: requestedS,
                               maxImageSize: size, cameras: cams.count, availableBytes: availableBytes,
