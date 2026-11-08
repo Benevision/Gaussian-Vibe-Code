@@ -382,6 +382,11 @@ enum DatasetBuilder {
             let oc = ObjectCapturePoseSolver(sensitivity: o.objectCaptureHighSensitivity ? .high : .normal, sequentialOrdering: sequential)
             sol = try await oc.solve(frames, progress: progress)
         }
+        let dropped = PoseSanity.apply(&sol, frames: frames, ordered: sequential && !frames.isMultiViewRig)
+        if dropped > 0 {
+            progress?(PipelineProgress(stage: "Camera solving", fraction: -1,
+                                       message: "left out \(dropped) camera(s) placed far off the camera path (likely mis-registered)"))
+        }
         if o.enforceRigConstraints && frames.isMultiViewRig {
             RigConstraints.enforceMultiViewRig(&sol, frames: frames)
         }

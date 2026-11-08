@@ -86,6 +86,24 @@ enum CLI {
             catch { print("error: \(error.localizedDescription)") }
             exit(0)
         }
+        if let dsPath = value("--pose-sanity") {
+            // --pose-sanity <dataset dir> [--ordered]: cameras PoseSanity would drop (ordered = video, by image name)
+            do {
+                let ds = try PreparedDataset.load(URL(fileURLWithPath: dsPath))
+                var groups: [String: [DatasetCamera]] = [:]
+                for c in ds.manifest.cameras {
+                    let stem = ((c.image as NSString).lastPathComponent as NSString).deletingPathExtension
+                    groups[stem.hasSuffix("_L") ? "L" : stem.hasSuffix("_R") ? "R" : "", default: []].append(c)
+                }
+                for (eye, cams) in groups {
+                    let sorted = cams.sorted { $0.image < $1.image }
+                    let pos = sorted.map { SIMD3($0.c2w.columns.3.x, $0.c2w.columns.3.y, $0.c2w.columns.3.z) }
+                    let d = PoseSanity.outliers(pos, ordered: a.contains("--ordered"))
+                    print("track '\(eye)': \(cams.count) cameras, would drop \(d.count)")
+                }
+            } catch { print("error: \(error.localizedDescription)") }
+            exit(0)
+        }
         if let ds = value("--budget"), let mb = value("--available-mb").flatMap(UInt64.init) {
             // What an iPhone / Mac worker with that much free memory would train (TrainKit.budget).
             do {

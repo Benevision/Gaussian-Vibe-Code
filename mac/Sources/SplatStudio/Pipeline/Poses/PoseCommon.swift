@@ -31,6 +31,51 @@ struct PoseSolution: Sendable {
     var stats: [String: JSONValue] = [:]
 }
 
+/// Sanity check of a solved camera set: drops cameras the solver placed impossibly. A solve can "register" frames by
+/// linking look-alike places (repeating fences, foliage) and put them hundreds of scene sizes away — training then
+/// can't fit anything (Arcturus garden video, 2026-11-09: cameras over 6,371 units for a 15-unit walk, 12 dB).
+enum PoseSanity {
+    /// Indices (into `positions`) to drop. `ordered`: positions are consecutive video frames (spikes away from both
+    /// neighbours are dropped too).
+    static func outliers(_ positions: [SIMD3<Float>], ordered: Bool) -> Set<Int> {
+        let n = positions.count
+        guard n >= 8 else { return [] }
+        func median(_ v: [Float]) -> Float { let s = v.sorted(); return s[s.count / 2] }
+        let centre = SIMD3(median(positions.map(\.x)), median(positions.map(\.y)), median(positions.map(\.z)))
+        let dist = positions.map { simd_length($0 - centre) }
+        let typical = max(median(dist), 1e-9)
+        var drop = Set<Int>()
+        // far away from where (almost) everything else is: more than 20× the median distance from the median camera
+        for i in 0..<n where dist[i] > 20 * typical { drop.insert(i) }
+        if ordered {
+            var steps: [Float] = []
+            for i in 1..<n { steps.append(simd_length(positions[i] - positions[i - 1])) }
+            let step = max(median(steps), 1e-9)
+            // a frame that jumps far away from BOTH of its neighbours (a lone mis-registration, not a fast pan)
+            for i in 1..<(n - 1) where steps[i - 1] > 10 * step && steps[i] > 10 * step
+                && simd_length(positions[i + 1] - positions[i - 1]) < 4 * step { drop.insert(i) }
+        }
+        return drop
+    }
+
+    /// Removes those cameras from `sol` (in the frames' order) and returns how many.
+    @discardableResult
+    static func apply(_ sol: inout PoseSolution, frames: FrameSet, ordered: Bool) -> Int {
+        // one track per eye / view direction (stereo frames alternate eyes; 360° views share a frame)
+        var tracks: [String: [String]] = [:]
+        for f in frames.frames where sol.poses[f.image] != nil { tracks[f.eye ?? "", default: []].append(f.image) }
+        var removed = 0
+        for (_, names) in tracks {
+            let pos = names.map { sol.poses[$0]!.c2w.columns.3 }.map { SIMD3($0.x, $0.y, $0.z) }
+            for i in outliers(pos, ordered: ordered) { sol.poses[names[i]] = nil; removed += 1 }
+        }
+        if removed > 0 {
+            sol.notes.append("dropped \(removed) camera(s) the solver placed far off the camera path (likely mis-registered)")
+        }
+        return removed
+    }
+}
+
 /// Common interface of all camera-pose solvers.
 protocol PoseSolver: Sendable {
     /// Solves camera poses for the frames of `frames` (images live under `frames.root`).
