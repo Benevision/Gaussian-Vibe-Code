@@ -32,7 +32,8 @@ targets:
     #                   properties: { com.apple.developer.kernel.increased-memory-limit: true } }
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.splatcapture
+        PRODUCT_BUNDLE_IDENTIFIER: com.gunntower.splatcapture
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         PRODUCT_NAME: SplatCapture
         TARGETED_DEVICE_FAMILY: "1"          # iPhone only
         ARCHS: arm64
