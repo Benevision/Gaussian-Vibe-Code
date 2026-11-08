@@ -61,12 +61,18 @@ def render_frames(renderer, start, settings, options: TurntableOptions, position
     restore the viewer's own draw order afterwards (the renderer is left sorted for the last frame)."""
     from .renderer import render_offscreen
 
-    for i in range(options.frames):
-        cam = orbit_camera(start, i, options)
-        order, n = depth_order(positions, cam.position(), cam.forward(), cam.near, hidden)
-        renderer.set_order(order, n)
-        img = render_offscreen(renderer, cam, options.width, options.height, settings)
-        yield np.ascontiguousarray(img[..., :3])
+    lines = renderer._line_count               # no camera frustums / crop box in the video
+    try:
+        for i in range(options.frames):
+            cam = orbit_camera(start, i, options)
+            order, n = depth_order(positions, cam.position(), cam.forward(), cam.near, hidden)
+            renderer.set_order(order, n)
+            renderer._line_count = 0
+            img = render_offscreen(renderer, cam, options.width, options.height, settings)
+            renderer._line_count = lines
+            yield np.ascontiguousarray(img[..., :3])
+    finally:
+        renderer._line_count = lines
 
 
 # ---------------------------------------------------------------------------------------------------- sinks
