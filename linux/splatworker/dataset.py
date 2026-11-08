@@ -258,19 +258,20 @@ def target_size(width: int, height: int, max_size: int) -> Tuple[int, int]:
 @dataclass
 class LoadedView:
     camera: CameraInfo
-    image: np.ndarray            # uint8 [H, W, 3]
+    image: Optional[np.ndarray]  # uint8 [H, W, 3]; None for a view whose pixels are loaded on demand (ViewStore)
     alpha: Optional[np.ndarray]  # uint8 [H, W] or None
     K: np.ndarray                # float32 [3, 3] for the *loaded* resolution
     world_to_camera: np.ndarray  # float32 [4, 4]
     depth: Optional[np.ndarray]  # float32 [H, W] (resized to image), 0 = invalid
+    size: Optional[tuple] = None  # (width, height) when image is None
 
     @property
     def width(self) -> int:
-        return self.image.shape[1]
+        return self.image.shape[1] if self.image is not None else self.size[0]
 
     @property
     def height(self) -> int:
-        return self.image.shape[0]
+        return self.image.shape[0] if self.image is not None else self.size[1]
 
 
 def scaled_intrinsics(cam: CameraInfo, new_w: int, new_h: int) -> np.ndarray:
@@ -299,6 +300,14 @@ def resize_nearest(arr: np.ndarray, new_w: int, new_h: int) -> np.ndarray:
     ys = np.minimum(((np.arange(new_h) + 0.5) * h / new_h).astype(np.int64), h - 1)
     xs = np.minimum(((np.arange(new_w) + 0.5) * w / new_w).astype(np.int64), w - 1)
     return arr[ys[:, None], xs[None, :]]
+
+
+def view_header(ds: DatasetInfo, cam: CameraInfo, max_size: int) -> LoadedView:
+    """A view without pixels (sizes, intrinsics, pose) — for sets too large to hold in memory."""
+    new_w, new_h = target_size(cam.width, cam.height, max_size)
+    return LoadedView(camera=cam, image=None, alpha=None, K=scaled_intrinsics(cam, new_w, new_h),
+                      world_to_camera=np.linalg.inv(cam.camera_to_world).astype(np.float32), depth=None,
+                      size=(new_w, new_h))
 
 
 def load_view(ds: DatasetInfo, cam: CameraInfo, max_size: int, load_depth_maps: bool = True) -> LoadedView:

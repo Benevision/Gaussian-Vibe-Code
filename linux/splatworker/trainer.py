@@ -677,39 +677,60 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
     has_depth = any(c.depth for c in train_cams)
     depth_weight = cfg.effective_depth_weight(has_depth)
 
-    views: List[LoadedView] = []
-    for i, c in enumerate(train_cams + eval_cams):
-        if progress.should_stop():
-            raise TrainingCancelled()
-        views.append(load_view(ds, c, cfg.maxImageSize, load_depth_maps=depth_weight > 0))
-        if i % 20 == 0:
-            progress.status(message=f"loading images {i + 1}/{len(train_cams) + len(eval_cams)}")
+    from .dataset import view_header
+    from .viewstore import ViewStore, available_ram, choose_mode, view_bytes
+
+    all_cams = train_cams + eval_cams
+    headers = [view_header(ds, c, cfg.maxImageSize) for c in all_cams]
+    est = sum(view_bytes(v) for v in headers)
+    ram = available_ram()
+    mode = choose_mode(est, ram)
+    load = lambda h: load_view(ds, h.camera, cfg.maxImageSize, load_depth_maps=depth_weight > 0)  # noqa: E731
+    if mode == "disk":
+        views: List[LoadedView] = headers
+    else:
+        views = []
+        for i, c in enumerate(all_cams):
+            if progress.should_stop():
+                raise TrainingCancelled()
+            views.append(load_view(ds, c, cfg.maxImageSize, load_depth_maps=depth_weight > 0))
+            if i % 20 == 0:
+                progress.status(message=f"loading images {i + 1}/{len(all_cams)}")
     train_views = views[:len(train_cams)]
     eval_views = views[len(train_cams):]
-    log(f"loaded {len(train_views)} train / {len(eval_views)} holdout images "
-        f"(max side {cfg.maxImageSize}), depth supervision weight {depth_weight}")
+    budget = int(0.35 * ram)
+    store = ViewStore(load, views, mode, budget)
+    import atexit
 
-    # Keep uint8 images resident on the GPU when they fit in a modest budget,
-    # otherwise in pinned host memory; converted to float per step.
-    total_bytes = sum(v.image.nbytes + (v.depth.nbytes if v.depth is not None else 0) for v in views)
-    resident = total_bytes < 3 * 1024 ** 3
-    cache: Dict[int, tuple] = {}
+    atexit.register(store.close)
+    gib = 1024 ** 3
+    log(f"{len(train_views)} train / {len(eval_views)} holdout images (max side {cfg.maxImageSize}), "
+        f"depth supervision weight {depth_weight}; pixels ≈ {est / gib:.1f} GB, {ram / gib:.0f} GB RAM available → "
+        + {"gpu": "kept on the GPU", "ram": "kept in RAM",
+           "disk": f"read from disk as needed (cache {budget / gib:.0f} GB, background decoding)"}[mode])
 
-    def _put(arr):
-        t_ = torch.from_numpy(arr)
-        return t_.to(dev) if resident else t_.pin_memory()
+    # uint8 pixels: resident on the GPU (gpu mode) or copied up per step from RAM; converted to float per step.
+    gpu_cache: Dict[int, tuple] = {}
+    pose_cache: Dict[int, tuple] = {}
 
     def to_dev(v: LoadedView):
         key = id(v)
-        if key not in cache:
-            cache[key] = (_put(v.image), _put(v.alpha) if v.alpha is not None else None,
-                          _put(v.depth) if v.depth is not None else None,
-                          torch.from_numpy(v.K).to(dev), torch.from_numpy(v.world_to_camera).to(dev))
-        img8, a8, d, K, w2c = cache[key]
-        img = img8.to(dev, non_blocking=True).float() / 255.0
-        alpha = a8.to(dev, non_blocking=True).float()[..., None] / 255.0 if a8 is not None else None
-        depth = d.to(dev, non_blocking=True) if d is not None else None
-        return img, alpha, depth, K, w2c
+        if key not in pose_cache:
+            pose_cache[key] = (torch.from_numpy(v.K).to(dev), torch.from_numpy(v.world_to_camera).to(dev))
+        K, w2c = pose_cache[key]
+        if mode == "gpu":
+            if key not in gpu_cache:
+                gpu_cache[key] = tuple(torch.from_numpy(a).to(dev) if a is not None else None
+                                       for a in (v.image, v.alpha, v.depth))
+            img8, a8, d = gpu_cache[key]
+        else:
+            im, al, dp = store.get(v)
+            img8 = torch.from_numpy(im).to(dev)
+            a8 = torch.from_numpy(al).to(dev) if al is not None else None
+            d = torch.from_numpy(dp).to(dev) if dp is not None else None
+        img = img8.float() / 255.0
+        alpha = a8.float()[..., None] / 255.0 if a8 is not None else None
+        return img, alpha, d, K, w2c
 
     # ---------------------------------------------------------------- init
     xyz, rgb = init_points(ds, cfg, region_box, log)
@@ -855,6 +876,8 @@ def train(dataset_dir, cfg: TrainingConfig, out_path, device: str = "cuda:0",
             rng.shuffle(order)
         view_idx = order.pop()
         v = train_views[view_idx]
+        if mode == "disk":   # decode the next few views of the shuffled order while this step runs
+            store.prefetch([train_views[i] for i in order[-6:]])
         img, alpha, depth_gt, K, w2c = to_dev(v)
         sh_degree = min(step // cfg.shDegreeInterval, cfg.shDegree)
         use_depth = depth_weight > 0 and depth_gt is not None
