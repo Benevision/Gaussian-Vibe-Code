@@ -235,7 +235,7 @@ final class CaptureEngine: NSObject, ARSessionDelegate, @unchecked Sendable {
     func session(_ session: ARSession, didFailWithError error: any Error) {
         let message: String
         if let ar = error as? ARError, ar.code == .cameraUnauthorized {
-            message = "Camera access is off. Enable it in Settings › Privacy & Security › Camera › SplatWork."
+            message = "Camera access is off. Enable it in Settings › Privacy & Security › Camera › Splat Capture."
         } else {
             message = error.localizedDescription
         }

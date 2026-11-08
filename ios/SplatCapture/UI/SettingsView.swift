@@ -82,7 +82,7 @@ struct SettingsView: View {
                     Explained("Takes a full-resolution photo for every keyframe instead of using the video frame (e.g. 12 MP vs 2.7 MP). Much sharper, but slower (≈1–2 keyframes/s), much larger captures, and depth may be sampled a few ms apart from the photo. Overrides the video format. Default: Off.") {
                         Toggle("High-resolution stills", isOn: s.highResolutionStills)
                     }
-                    Explained("JPEG is universally compatible. HEIC is ~40% smaller at the same quality; SplatWork reads both. Default: JPEG.") {
+                    Explained("JPEG is universally compatible. HEIC is ~40% smaller at the same quality; Splat Studio reads both. Default: JPEG.") {
                         Picker("Image format", selection: s.imageFormat) {
                             ForEach(ImageFileFormat.allCases) { Text($0.label).tag($0) }
                         }
@@ -109,7 +109,7 @@ struct SettingsView: View {
 
                 // MARK: Depth
                 Section {
-                    Explained("Save the LiDAR depth map (256×192, float16) and use it for the point cloud. SplatWork can use depth to supervise training and to initialise geometry. Default: On.") {
+                    Explained("Save the LiDAR depth map (256×192, float16) and use it for the point cloud. Splat Studio can use depth to supervise training and to initialise geometry. Default: On.") {
                         Toggle("Record LiDAR depth", isOn: s.recordDepth)
                     }
                     .disabled(!hasLiDAR)
@@ -125,7 +125,7 @@ struct SettingsView: View {
                     Text("LiDAR depth")
                 } footer: {
                     if !hasLiDAR {
-                        Text("This iPhone has no LiDAR scanner. Captures contain posed images only (hasLiDAR = false); SplatWork will rely on images alone.")
+                        Text("This iPhone has no LiDAR scanner. Captures contain posed images only (hasLiDAR = false); Splat Studio will rely on images alone.")
                     }
                 }
 
@@ -176,7 +176,7 @@ struct SettingsView: View {
                 Section {
                     Button("Reset all settings to defaults", role: .destructive) { confirmReset = true }
                 } footer: {
-                    Text("SplatWork Capture \(DeviceInfo.appVersion) · \(DeviceInfo.modelName)")
+                    Text("Splat Capture \(DeviceInfo.appVersion) · \(DeviceInfo.modelName)")
                 }
             }
             .navigationTitle("Settings")

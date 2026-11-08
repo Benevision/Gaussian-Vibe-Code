@@ -23,7 +23,7 @@ targets:
     platform: iOS
     sources:
       - path: SplatCapture
-      # The training-worker server (Compute screen), shared with SplatWork's "act as a worker" mode
+      # The training-worker server (Compute screen), shared with Splat Studio's "act as a worker" mode
       - path: ../mac/Sources/SplatStudio/Worker/WorkerEngine.swift
       - path: ../mac/Sources/SplatStudio/Worker/HTTPServer.swift
       - path: ../mac/Sources/SplatStudio/Worker/WorkerRouter.swift
@@ -56,7 +56,7 @@ targets:
     info:
       path: SplatCapture/Resources/Info.plist
       properties:
-        CFBundleDisplayName: SplatWork          # home-screen label; the app is "SplatWork Capture"
+        CFBundleDisplayName: Splat Capture
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
@@ -68,8 +68,8 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
-        NSCameraUsageDescription: "SplatWork Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
-        NSLocalNetworkUsageDescription: "SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac, and (Compute screen) lets SplatWork send training work to this iPhone."
+        NSCameraUsageDescription: "Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
+        NSLocalNetworkUsageDescription: "Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac, and (Compute screen) lets Splat Studio send training work to this iPhone."
         NSBonjourServices: [_splatcapture._tcp, _splatworker._tcp]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -113,14 +113,14 @@ targets:
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoDepth.swift
       - path: ../mac/Sources/SplatStudio/Formats/SplatFormats.swift
       - path: ../mac/Sources/SplatStudio/Formats/CompressedPLY.swift
-      # Offloading: discover SplatWork Workers / Macs (_splatworker._tcp) and train on them, whole or in blocks.
+      # Offloading: discover Splat Workers / Macs (_splatworker._tcp) and train on them, whole or in blocks.
       - path: ../mac/Sources/SplatStudio/Remote/WorkerClient.swift
       - path: ../mac/Sources/SplatStudio/Remote/WorkerBrowser.swift
       - path: ../mac/Sources/SplatStudio/Remote/ComputeScheduler.swift
       - path: ../mac/Sources/SplatStudio/Remote/BlockTraining.swift
       - path: ../mac/Sources/SplatStudio/Remote/RemoteStore.swift
       - path: ../mac/Sources/SplatStudio/Remote/SystemBenchmark.swift
-      # the public facade (TrainKit / TrainKitJob, also used by SplatWork's "act as a worker") and the
+      # the public facade (TrainKit / TrainKitJob, also used by Splat Studio's "act as a worker") and the
       # pure-Swift zip (ZipUtil on iOS has no /usr/bin/ditto; also compiled into the app target)
       - path: ../mac/Sources/SplatStudio/Worker/TrainKit.swift
       - path: ../mac/Sources/SplatStudio/Worker/ZipWriter.swift

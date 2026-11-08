@@ -1,6 +1,6 @@
 import Foundation
 
-/// The subset of the SplatWork Worker API (docs/PROTOCOL.md §4, §7) this iPhone implements — what SplatWork's
+/// The subset of the Splat Worker API (docs/PROTOCOL.md §4, §7) this iPhone implements — what Splat Studio's
 /// `WorkerClient` uses for training. Pure: `match` only looks at the method and path.
 enum WorkerRoute: Equatable, Sendable {
     case info                       // GET    /v1/info

@@ -24,7 +24,7 @@ struct CaptureTransfer: Identifiable, Hashable, Sendable {
     var fraction: Double? { expected.map { $0 > 0 ? Double(received) / Double($0) : 0 } }
 }
 
-/// Receives `.splatcapture` uploads from SplatWork Capture (iOS): an HTTP/1.1 server on `NWListener`
+/// Receives `.splatcapture` uploads from Splat Capture (iOS): an HTTP/1.1 server on `NWListener`
 /// advertising `_splatcapture._tcp` (TXT `name`, `version=1`). Bodies are streamed to a temp file,
 /// unzipped with `ditto` into `inbox`, and published in `received`.
 @MainActor
@@ -35,7 +35,7 @@ final class CaptureReceiver {
     enum State: Equatable { case stopped, starting, listening(port: UInt16), failed(String) }
 
     private(set) var state: State = .stopped
-    /// Default port (SplatWork Capture's manual-entry default). Falls back to a free port if taken.
+    /// Default port (Splat Capture's manual-entry default). Falls back to a free port if taken.
     nonisolated static let defaultPort: UInt16 = 7879
     /// The bound port while listening (for "host:port" manual entry on the iPhone).
     private(set) var listeningPort: UInt16?

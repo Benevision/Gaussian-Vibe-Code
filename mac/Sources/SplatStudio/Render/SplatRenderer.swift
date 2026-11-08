@@ -76,7 +76,7 @@ struct RenderStats: Equatable {
     var total: Int = 0
 }
 
-// Also compiled into the iPhone app (ios/project.yml): SplatWork Capture's viewer (SplatTrainKit/SplatViewer.swift).
+// Also compiled into the iPhone app (ios/project.yml): Splat Capture's viewer (SplatTrainKit/SplatViewer.swift).
 /// Draws a `SplatScene` into an MTKView: project → sort → instanced quads (+ line overlays).
 final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     let ctx: MetalContext

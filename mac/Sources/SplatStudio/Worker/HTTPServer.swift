@@ -275,7 +275,7 @@ private final class HTTPConnection: @unchecked Sendable {
         headers["Content-Type"] = r.contentType
         headers["Content-Length"] = String(length)
         headers["Connection"] = "close"
-        headers["Server"] = "SplatWork-worker/\(WorkerEngine.kind)"
+        headers["Server"] = "SplatWorker/\(WorkerEngine.kind)"
         for (k, v) in headers.sorted(by: { $0.key < $1.key }) { head += "\(k): \(v)\r\n" }
         head += "\r\n"
         switch r.body {

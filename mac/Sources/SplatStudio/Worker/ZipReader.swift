@@ -1,7 +1,7 @@
 import Compression
 import Foundation
 
-/// Minimal ZIP extractor for dataset uploads from SplatWork (`ditto -c -k --sequesterRsrc --keepParent`):
+/// Minimal ZIP extractor for dataset uploads from Splat Studio (`ditto -c -k --sequesterRsrc --keepParent`):
 /// stored (0) and deflate (8) entries, data descriptors (sizes come from the central directory), ZIP64.
 /// Rejects encrypted entries, absolute paths and `..`; skips symlinks, `__MACOSX/` and AppleDouble `._*` files.
 enum ZipReader {

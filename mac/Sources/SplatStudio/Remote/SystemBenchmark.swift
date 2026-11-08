@@ -244,7 +244,7 @@ enum SystemBenchmark {
         let up0 = Date()
         let did = try await client.uploadDataset(zip: zip) { f in progress("Uploading to \(endpoint.name)", 0.02 + 0.08 * f) }
         let upSecs = Date().timeIntervalSince(up0)
-        let jid = try await client.createJob(datasetId: did, name: "SplatWork benchmark", config: config)
+        let jid = try await client.createJob(datasetId: did, name: "Splat Studio benchmark", config: config)
         var t0: Date? = nil, s0 = 0, t1 = Date(), s1 = 0
         let final = try await client.waitForJob(jid) { s in
             let step = s.step ?? 0
@@ -271,7 +271,7 @@ enum SystemBenchmark {
     }
 
     private static var appVersion: String {
-        "SplatWork " + ((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev")
+        "Splat Studio " + ((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev")
     }
 }
 
@@ -377,7 +377,7 @@ enum MemoryForecast {
             let ram = Int64(info.memory?.availableMB ?? 0) * 1_048_576
             if images > 3 << 30, ram == 0 || images * 2 > ram {
                 return "\(name) would hold all \(dataset.manifest.cameras.count) photos in memory (about \(formatBytes(Int(images * 2)))), "
-                    + "which can freeze it. Update SplatWork Worker on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
+                    + "which can freeze it. Update Splat Worker on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
             }
         }
         // GPU: splat state (params, gradients, Adam, rasteriser buffers) + per-pixel scratch + CUDA context.

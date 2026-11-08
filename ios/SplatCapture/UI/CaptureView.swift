@@ -121,7 +121,7 @@ struct CaptureView: View {
         .fullScreenCover(item: $makeTarget, onDismiss: { model.startSession(settings: settings.capture) }) { item in
             MakeSplatView(item: item)
         }
-        .alert("SplatWork Capture", isPresented: Binding(
+        .alert("Splat Capture", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } })) {
             if model.errorMessage?.contains("Settings") == true {

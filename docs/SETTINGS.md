@@ -1,4 +1,4 @@
-# SplatWork — settings reference
+# Splat Studio — settings reference
 
 Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
@@ -317,7 +317,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 
 **How it works.** Splat files don't store which way is up, and tools disagree (COLMAP/3DGS use −Y, OpenGL/ARKit +Y, Blender and drones +Z).
 
-- SplatWork levels every dataset it builds to −Y, but files from elsewhere may need help: pick an axis, Flip upside down, or rotate until it looks level and choose Level to view.
+- Splat Studio levels every dataset it builds to −Y, but files from elsewhere may need help: pick an axis, Flip upside down, or rotate until it looks level and choose Level to view.
 - Your choice is remembered for that file, and Export can bake it in so other viewers show it upright too.
 
 ### Field of view
@@ -1085,10 +1085,10 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 | **Mode** | Easy |
 | **ID** | `train.device` |
 
-**How it works.** One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork Worker with CUDA, typically 2–4× faster than an M4 Pro, with live previews).
+**How it works.** One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: Splat Worker with CUDA, typically 2–4× faster than an M4 Pro, with live previews).
 
 - Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically.
-- An iPhone with SplatWork Capture's Compute screen open takes small blocks.
+- An iPhone with Splat Capture's Compute screen open takes small blocks.
 
 ## Training — densification
 
@@ -1570,7 +1570,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 
 - Without correction the scene has to average those differences, which shows up as washed-out haze, blotchy colour and floaters.
 - With this on, every training photo gets a small learned colour transform (3×3 colour matrix + offset) that is applied only while comparing to that photo; the saved splat stays at a neutral, median exposure. iPhone captures seed it with each frame's recorded shutter time and ISO.
-- It switches itself off when every photo has the same recorded exposure (SplatWork Capture locks exposure): there is nothing to correct, and the extra freedom cost about 1 dB on held-out views of a 649-frame bedroom scan and let colours drift too bright.
+- It switches itself off when every photo has the same recorded exposure (Splat Capture locks exposure): there is nothing to correct, and the extra freedom cost about 1 dB on held-out views of a 649-frame bedroom scan and let colours drift too bright.
 - Exports bake in the average correction, so the saved splat matches a typical photo.
 
 **When to change it**
@@ -1695,7 +1695,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 
 ### Linux GPU workers
 
-> SplatWork Worker servers found on your network (Bonjour) or added manually.
+> Splat Worker servers found on your network (Bonjour) or added manually.
 
 | | |
 |---|---|
@@ -1703,7 +1703,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 | **Mode** | Easy |
 | **ID** | `net.workers` |
 
-**How it works.** Install SplatWork Worker on a Linux PC with an NVIDIA GPU (see linux/README.md).
+**How it works.** Install Splat Worker on a Linux PC with an NVIDIA GPU (see linux/README.md).
 
 - It appears here automatically.
 - Add it manually with host:port if your network blocks Bonjour.
@@ -1769,7 +1769,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 112 sett
 
 ### Receive from iPhone
 
-> Lets SplatWork Capture on your iPhone send captures straight to this Mac over Wi-Fi.
+> Lets Splat Capture on your iPhone send captures straight to this Mac over Wi-Fi.
 
 | | |
 |---|---|

@@ -5,7 +5,7 @@ import os
 import SplatTrainKit   // iPhone app; on the Mac TrainKit.swift is part of the app itself
 #endif
 
-/// `JobStatus` as SplatWork's WorkerClient decodes it (docs/PROTOCOL.md §4).
+/// `JobStatus` as Splat Studio's WorkerClient decodes it (docs/PROTOCOL.md §4).
 struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
     var jobId: String
     var kind = "train"
@@ -33,17 +33,17 @@ struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
 
 /// The worker's state and request handling. Thread-safe (one lock); training runs one job at a time on a
 /// private serial queue. Knows nothing about UIKit / AppKit — the app layer drives it: `ComputeWorker` on the
-/// iPhone (Compute screen), `MacWorker` in SplatWork ("act as a worker"). Shared by both apps.
+/// iPhone (Compute screen), `MacWorker` in Splat Studio ("act as a worker"). Shared by both apps.
 final class WorkerEngine: @unchecked Sendable {
     #if os(iOS)
     static let workerVersion = "ios-1.0"
     static let kind = "iphone"
-    static let backend = "Metal (SplatWork Capture, iPhone)"
+    static let backend = "Metal (Splat Capture, iPhone)"
     static let deviceLabel = "the iPhone"
     #else
     static let workerVersion = "mac-1.0"
     static let kind = "mac"
-    static let backend = "Metal (SplatWork, Mac)"
+    static let backend = "Metal (Splat Studio, Mac)"
     static let deviceLabel = "the Mac"
     #endif
     static let logSubsystem = Bundle.main.bundleIdentifier ?? "SplatWorker"
@@ -228,7 +228,7 @@ final class WorkerEngine: @unchecked Sendable {
         }
     }
 
-    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (SplatWork uploads
+    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (Splat Studio uploads
     /// once per device and reuses the id for every block it sends, so older ones are done with.)
     private func purgeUnusedDatasets() {
         lock.lock()

@@ -205,7 +205,7 @@ struct WelcomeView: View {
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
                     Image(systemName: "circle.hexagongrid.fill").font(.system(size: 52)).foregroundStyle(.tint)
-                    Text("SplatWork").font(.largeTitle.bold())
+                    Text("Splat Studio").font(.largeTitle.bold())
                     Text("View, create and edit 3D Gaussian splats — accelerated by Metal on Apple silicon.").foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 10) {
@@ -216,7 +216,7 @@ struct WelcomeView: View {
                         ActionCard(title: "360° video", subtitle: "Equirectangular footage from Insta360, GoPro Max, Theta…", systemImage: "globe") { pick(.video360) }
                     }
                     HStack(spacing: 12) {
-                        ActionCard(title: "iPhone LiDAR", subtitle: "A SplatWork Capture recording: posed frames + depth. Fastest, metric scale.", systemImage: "iphone.gen3", tint: .green) { pick(.capture) }
+                        ActionCard(title: "iPhone LiDAR", subtitle: "A Splat Capture recording: posed frames + depth. Fastest, metric scale.", systemImage: "iphone.gen3", tint: .green) { pick(.capture) }
                         ActionCard(title: "Stereo footage", subtitle: "Side-by-side, top-bottom, spatial video or Arcturus Vision recordings.", systemImage: "eyeglasses", tint: .purple) { pick(.stereo) }
                         ActionCard(title: "COLMAP / Nerfstudio", subtitle: "Existing posed datasets from other tools.", systemImage: "camera.metering.matrix", tint: .orange) { pick(.posed) }
                     }
@@ -226,7 +226,7 @@ struct WelcomeView: View {
                     Text("View").font(.headline).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         ActionCard(title: "Open splat", subtitle: ".ply, .spz or .splat from any 3DGS tool.", systemImage: "cube.transparent", tint: .teal) { pick(.splat) }
-                        ActionCard(title: "Open dataset", subtitle: "A prepared SplatWork dataset to (re)train.", systemImage: "tray.full", tint: .teal) { pick(.dataset) }
+                        ActionCard(title: "Open dataset", subtitle: "A prepared Splat Studio dataset to (re)train.", systemImage: "tray.full", tint: .teal) { pick(.dataset) }
                     }
                 }
                 .frame(width: 624, alignment: .leading)

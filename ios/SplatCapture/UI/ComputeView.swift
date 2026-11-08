@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "Compute": lets SplatWork on a Mac send training blocks to this iPhone.
+/// "Compute": lets Splat Studio on a Mac send training blocks to this iPhone.
 struct ComputeView: View {
     @Environment(ComputeWorker.self) private var worker
     @Environment(\.dismiss) private var dismiss
@@ -9,10 +9,10 @@ struct ComputeView: View {
         NavigationStack {
             Form {
                 Section {
-                    Toggle("Train for SplatWork on this iPhone", isOn: Binding(
+                    Toggle("Train for Splat Studio on this iPhone", isOn: Binding(
                         get: { worker.isEnabled }, set: { worker.setEnabled($0) }))
                 } footer: {
-                    Text("SplatWork on your Mac finds this iPhone under Compute › Workers and can send it a block of a large scene to train with the iPhone's GPU. Keep the app open and the phone plugged in: iOS stops GPU work as soon as the app leaves the screen, and the job then fails.")
+                    Text("Splat Studio on your Mac finds this iPhone under Compute › Workers and can send it a block of a large scene to train with the iPhone's GPU. Keep the app open and the phone plugged in: iOS stops GPU work as soon as the app leaves the screen, and the job then fails.")
                 }
 
                 if worker.isEnabled {

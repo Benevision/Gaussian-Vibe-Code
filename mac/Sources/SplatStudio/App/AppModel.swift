@@ -69,7 +69,7 @@ final class AppModel {
     var navigation = NavigationSettings.load() {
         didSet { navigation.save(); renderer.smoothing = navigation.smoothing ? 0.08 : 0 }
     }
-    /// World "up" used by the viewer. 3DGS / COLMAP convention is −Y; SplatWork datasets are
+    /// World "up" used by the viewer. 3DGS / COLMAP convention is −Y; Splat Studio datasets are
     /// normalised to it. Changed with the Orientation controls and remembered per file.
     var worldUp = SIMD3<Float>(0, -1, 0)
     var recents: [URL] = NSDocumentController.shared.recentDocumentURLs
@@ -87,7 +87,7 @@ final class AppModel {
     /// Project name when a dataset is open (output files carry long timestamped names), else the file name.
     var documentName: String {
         if let ds = dataset { return ds.root.deletingLastPathComponent().lastPathComponent }
-        return documentURL?.deletingPathExtension().lastPathComponent ?? (training.isActive ? "Training…" : "SplatWork")
+        return documentURL?.deletingPathExtension().lastPathComponent ?? (training.isActive ? "Training…" : "Splat Studio")
     }
     var isLoading = false
     var dataset: PreparedDataset? = nil

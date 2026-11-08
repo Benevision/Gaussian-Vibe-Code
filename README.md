@@ -1,14 +1,12 @@
-# SplatWork
+# Splat Studio
 
-*Formerly Splat Studio / Splat Capture / Splat Worker. Only the names changed: bundle ids, the `_splatworker._tcp` / `_splatcapture._tcp` services, file formats, folders and the `splatworker` package stay as they were, so existing installs, pairings and projects keep working.*
-
-A networked Gaussian-splatting suite for Apple silicon: view, create, edit and export 3D Gaussian splats, with a native Metal renderer and trainer, an iPhone LiDAR capture companion, and an optional Linux CUDA worker.
+A Gaussian-splatting suite for Apple silicon: view, create, edit and export 3D Gaussian splats, with a native Metal renderer and trainer, an iPhone LiDAR capture companion, and an optional Linux CUDA worker.
 
 | Folder | What | Status |
 |---|---|---|
-| [`mac/`](mac/) | **SplatWork** — macOS app (SwiftUI + Metal). Viewer, editor, dataset preparation, Metal training, remote/“Both” compute, iPhone receiver | Builds (`swift build`), trainer gradient-checked, end-to-end training verified on synthetic data |
-| [`ios/`](ios/) | **SplatWork Capture** — iPhone app (ARKit + LiDAR), TestFlight-ready. Makes splats on its own (prep, Apple Vision masks, Metal training, viewer) and hands heavy steps to Macs / PCs on the network when they're there | Builds clean for device and simulator (iOS 27.2 SDK); not yet run on a phone |
-| [`linux/`](linux/) | **SplatWork Worker** — CUDA training/processing server (FastAPI + gsplat) with a GTK 4 / libadwaita GUI, packaged as a Flatpak | 134 tests pass; the CUDA path, GUI rendering and Flatpak build have not been run on Linux yet |
+| [`mac/`](mac/) | **Splat Studio** — macOS app (SwiftUI + Metal). Viewer, editor, dataset preparation, Metal training, remote/“Both” compute, iPhone receiver | Builds (`swift build`), trainer gradient-checked, end-to-end training verified on synthetic data |
+| [`ios/`](ios/) | **Splat Capture** — iPhone app (ARKit + LiDAR), TestFlight-ready. Makes splats on its own (prep, Apple Vision masks, Metal training, viewer) and hands heavy steps to Macs / PCs on the network when they're there | Builds clean for device and simulator (iOS 27.2 SDK); not yet run on a phone |
+| [`linux/`](linux/) | **Splat Worker** — CUDA training/processing server (FastAPI + gsplat) with a GTK 4 / libadwaita GUI, packaged as a Flatpak | 134 tests pass; the CUDA path, GUI rendering and Flatpak build have not been run on Linux yet |
 | [`tools/`](tools/) | **splatprep** — learned feature matching/SfM, moving-object masking (OWLv2 + SAM 2 tracking, click-to-mask server) and benchmark harness (Mac MPS or Linux CUDA) | 77 tests pass; models installed and running on this Mac; benchmark in progress |
 | [`docs/`](docs/) | [User guide](docs/USER_GUIDE.md) · [Settings reference](docs/SETTINGS.md) · [Architecture](docs/ARCHITECTURE.md) · [Protocols & formats](docs/PROTOCOL.md) | |
 
@@ -16,9 +14,9 @@ A networked Gaussian-splatting suite for Apple silicon: view, create, edit and e
 
 Ready-built releases are on the [Releases page](https://github.com/Benevision/Gaussian-Vibe-Code/releases):
 
-* **SplatWork for Mac** (Apple silicon, macOS 15+) — `.dmg`, drag to Applications. Not notarized yet: the first
+* **Splat Studio for Mac** (Apple silicon, macOS 15+) — `.dmg`, drag to Applications. Not notarized yet: the first
   time, right-click the app → **Open**.
-* **SplatWork Worker for Linux** (NVIDIA GPU) — single-file `.flatpak`: `flatpak install --user SplatWorker-*.flatpak`.
+* **Splat Worker for Linux** (NVIDIA GPU) — single-file `.flatpak`: `flatpak install --user SplatWorker-*.flatpak`.
 
 Releases are cut by pushing a tag (`git tag -a v1.4.0 -m "…" && git push origin v1.4.0`); see
 `.github/workflows/release.yml`.

@@ -67,10 +67,10 @@ struct MakeSplatView: View {
             Toggle("Refine camera poses", isOn: $jobs.options.refinePoses)
             Toggle("Learned moving-object masks", isOn: $jobs.options.learnedMovingMasks)
             Toggle("Sky masks + skybox", isOn: $jobs.options.sky)
-        } header: { Text("With a SplatWork Worker PC") } footer: {
+        } header: { Text("With a Splat Worker PC") } footer: {
             Text(devices.anyProcessor
-                 ? "A SplatWork Worker PC is online: these steps run there (the photos are uploaded once)."
-                 : "No SplatWork Worker PC is online, so these are skipped and everything runs on the devices below — this iPhone alone is enough.")
+                 ? "A Splat Worker PC is online: these steps run there (the photos are uploaded once)."
+                 : "No Splat Worker PC is online, so these are skipped and everything runs on the devices below — this iPhone alone is enough.")
         }
         .disabled(!devices.anyProcessor)
 
@@ -89,7 +89,7 @@ struct MakeSplatView: View {
         } header: {
             HStack { Text("Train on"); Spacer(); if devices.isBrowsing { ProgressView().controlSize(.mini) } }
         } footer: {
-            Text("Tick several devices to split a large scene into blocks trained in parallel (from 400 photos; smaller scenes train whole on the fastest device). Macs appear when SplatWork has Compute › “Act as a worker” on; PCs run SplatWork Worker.")
+            Text("Tick several devices to split a large scene into blocks trained in parallel (from 400 photos; smaller scenes train whole on the fastest device). Macs appear when Splat Studio has Compute › “Act as a worker” on; PCs run Splat Worker.")
         }
 
         Section {
@@ -153,7 +153,7 @@ struct MakeSplatView: View {
         } header: {
             Text("\(splats.formatted()) splats in \(ComputeView.duration(seconds))")
         } footer: {
-            Text("Saved in Files › On My iPhone › SplatWork › Splats.")
+            Text("Saved in Files › On My iPhone › Splat Capture › Splats.")
         }
         if !jobs.notes.isEmpty {
             Section("What happened") { ForEach(jobs.notes, id: \.self) { Text($0).font(.caption) } }

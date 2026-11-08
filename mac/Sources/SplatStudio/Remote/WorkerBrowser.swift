@@ -65,7 +65,7 @@ struct WorkerHealth: Hashable, Sendable {
     var checkedAt: Date? = nil
 }
 
-/// Discovers SplatWork Workers (`_splatworker._tcp`), keeps manually added workers (UserDefaults; tokens in
+/// Discovers Splat Workers (`_splatworker._tcp`), keeps manually added workers (UserDefaults; tokens in
 /// the Keychain) and health-checks them via `GET /v1/info`.
 @MainActor
 @Observable
@@ -237,7 +237,7 @@ final class WorkerBrowser {
         if let d = try? JSONEncoder().encode(manual) { UserDefaults.standard.set(d, forKey: defaultsKey) }
     }
 
-    /// Bonjour names this app advertises itself (SplatWork's "act as a worker", the iPhone's Compute screen):
+    /// Bonjour names this app advertises itself (Splat Studio's "act as a worker", the iPhone's Compute screen):
     /// never listed as remote devices.
     var ownNames: Set<String> = [] { didSet { rebuild() } }
 

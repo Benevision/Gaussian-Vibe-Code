@@ -101,7 +101,7 @@ struct LibraryView: View {
                         }
                 }
             } footer: {
-                Text("\(library.items.count) captures · \(library.totalBytes.formattedBytes) · Free: \(CaptureStore.freeSpace.formattedBytes). Captures are also visible in the Files app under On My iPhone › SplatWork › Captures.")
+                Text("\(library.items.count) captures · \(library.totalBytes.formattedBytes) · Free: \(CaptureStore.freeSpace.formattedBytes). Captures are also visible in the Files app under On My iPhone › Splat Capture › Captures.")
             }
         }
     }

@@ -51,7 +51,7 @@ struct RootView: View {
             ContentUnavailableView {
                 Label("ARKit not available", systemImage: "arkit")
             } description: {
-                Text("SplatWork Capture needs an iPhone with ARKit world tracking. It can't record in the Simulator.")
+                Text("Splat Capture needs an iPhone with ARKit world tracking. It can't record in the Simulator.")
             } actions: {
                 Button("Compute…") { showCompute = true }
             }

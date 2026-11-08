@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>SplatWork</string>
+	<string>Splat Capture</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -37,9 +37,9 @@
 		<string>_splatworker._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>SplatWork Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats.</string>
+	<string>Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac, and (Compute screen) lets SplatWork send training work to this iPhone.</string>
+	<string>Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac, and (Compute screen) lets Splat Studio send training work to this iPhone.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>

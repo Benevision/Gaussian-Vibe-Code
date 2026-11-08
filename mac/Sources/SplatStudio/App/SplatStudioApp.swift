@@ -11,7 +11,7 @@ struct SplatStudioApp: App {
     }
 
     var body: some Scene {
-        Window("SplatWork", id: "main") {
+        Window("Splat Studio", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 1080, minHeight: 680)
                 .onAppear {

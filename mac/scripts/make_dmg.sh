@@ -13,6 +13,6 @@ mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$OUT"
-hdiutil create -volname "SplatWork $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$OUT" >/dev/null
+hdiutil create -volname "Splat Studio $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$OUT" >/dev/null
 rm -rf "$(dirname "$STAGE")"
 echo "$OUT ($(du -h "$OUT" | cut -f1))"
