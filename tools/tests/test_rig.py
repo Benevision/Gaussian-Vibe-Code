@@ -67,6 +67,31 @@ def test_rig_config_rotation_is_relative_to_reference(tmp_path):
     assert cfg[1]["cam_from_rig_translation"] == [0.0, 0.0, 0.0]
 
 
+def stereo(frames=5, b=0.065):
+    names, groups = [], []
+    for f in range(frames):
+        l, r = f"{f:06d}_L.jpg", f"{f:06d}_R.jpg"
+        names += [l, r]
+        groups.append({l: np.eye(3).tolist(), r: {"R": np.eye(3).tolist(), "t": [b, 0, 0]}})
+    return names, {"rig": {"kind": "multiview", "groups": groups}}
+
+
+def test_stereo_rig_with_baseline(tmp_path):
+    names, req = stereo()
+    lay = parse_rig(req, names)
+    assert lay.num_sensors == 2 and lay.num_frames == 5 and lay.has_baseline     # same rotation, other centre
+    assert lay.sensor[names.index("000002_R.jpg")] == 1
+    pairs, info = rig_pairs(lay, None, window=2)
+    fr = np.asarray(lay.frame)
+    within = [(i, j) for i, j in pairs if fr[i] == fr[j]]
+    assert len(within) == 5                                    # L–R of every frame (parallax)
+    cfg = json.loads(write_rig_config(lay, tmp_path / "rig.json").read_text())[0]["cameras"]
+    # the right eye sits +6.5 cm along the left eye's x: cam_from_ref translation = −b x
+    assert np.allclose(cfg[1]["cam_from_rig_translation"], [-0.065, 0, 0])
+    assert np.allclose(cfg[1]["cam_from_rig_rotation"], [1, 0, 0, 0])
+    # 360° rigs are unchanged: no centres → no within-frame pairs (covered by test_pairs_are_rig_aware)
+
+
 def test_quaternion_roundtrip():
     for R in (np.eye(3), yaw(30), yaw(170), yaw(-120) @ np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])):
         w, x, y, z = _quat_wxyz(R)

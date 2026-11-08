@@ -247,11 +247,21 @@ def run_frames_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:
     if not video.is_file():
         raise RequestError(f"video not found: {req['video']}")
     out_dir = _resolve(workdir, req["outputDir"])
-    stage = "splitting 360° video" if req.get("equirect") else "extracting frames"
+    stereo = req.get("stereo")
+    right = None
+    if stereo is not None:
+        if not isinstance(stereo, dict):
+            raise RequestError("stereo must be an object")
+        if stereo.get("rightVideo"):
+            right = _resolve(workdir, stereo["rightVideo"])
+            if not right.is_file():
+                raise RequestError(f"right-eye video not found: {stereo['rightVideo']}")
+    stage = ("splitting 360° video" if req.get("equirect") else
+             "extracting stereo frames" if stereo is not None else "extracting frames")
     sp = StagedProgress(progress, [(stage, 1.0)])
     device = select_device(req.get("device"))
     info = extract_frames(video, out_dir, req.get("videoOptions") or {}, req.get("equirect"), device,
-                          sp.sub(stage), lambda m: sp.message(stage, m))
+                          sp.sub(stage), lambda m: sp.message(stage, m), stereo=stereo, right_video=right)
     return {"task": "frames", "device": device, "status": "ok", **info}
 
 
