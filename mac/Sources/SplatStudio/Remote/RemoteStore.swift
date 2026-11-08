@@ -103,3 +103,55 @@ actor RemoteImageFetch {
         WorkerBrowser.shared.client(forBaseURL: store.worker)
     }
 }
+
+/// Processing jobs this project sent to workers (`.remote-jobs.json` next to `frames.json`), so a step whose
+/// job already ran — or is still running — is picked up again instead of being uploaded and computed twice:
+/// after the Mac slept or lost the network during the download, or the app was quit while the worker worked.
+/// Keyed by step (`task/outputDir`); an entry is only reused when its fingerprint (solve settings + the exact
+/// image list) matches and the job is still on the same worker.
+struct RemoteJobLedger: Codable, Sendable {
+    struct Entry: Codable, Sendable { var worker: String; var jobId: String; var fingerprint: String; var createdAt: Date }
+    var entries: [String: Entry] = [:]
+
+    static let fileName = ".remote-jobs.json"
+
+    static func load(_ root: URL) -> RemoteJobLedger {
+        guard let d = try? Data(contentsOf: root.appendingPathComponent(fileName)),
+              let l = try? JSONDecoder.iso.decode(RemoteJobLedger.self, from: d) else { return RemoteJobLedger() }
+        return l
+    }
+
+    func save(_ root: URL) {
+        if let d = try? JSONEncoder.iso.encode(self) { try? d.write(to: root.appendingPathComponent(Self.fileName), options: .atomic) }
+    }
+
+    static func key(_ r: ProcessingRequest) -> String { "\(r.task.rawValue)/\(r.outputDir)" }
+
+    /// Settings that change the result, plus the sorted image basenames. Reproducible outside the app:
+    /// SHA-256 of these lines joined by "\n".
+    static func fingerprint(_ r: ProcessingRequest, images: [String]) -> String {
+        var lines = [r.task.rawValue, r.outputDir, r.features ?? "", r.matching ?? "", r.mapper ?? "", r.cameraModel ?? "",
+                     r.resizeMax.map(String.init) ?? "", r.maxKeypoints.map(String.init) ?? "",
+                     r.masksDir == nil ? "nomasks" : "masks", r.rig?.kind ?? "norig"]
+        lines += images.map { ($0 as NSString).lastPathComponent }.sorted()
+        return sha256Hex(Data(lines.joined(separator: "\n").utf8))
+    }
+
+    static func record(_ root: URL, request: ProcessingRequest, fingerprint: String, worker: String, jobId: String) {
+        var l = load(root)
+        l.entries[key(request)] = Entry(worker: worker, jobId: jobId, fingerprint: fingerprint, createdAt: Date())
+        l.save(root)
+    }
+
+    static func lookup(_ root: URL, request: ProcessingRequest, fingerprint: String, worker: String) -> String? {
+        guard let e = load(root).entries[key(request)], e.fingerprint == fingerprint, e.worker == worker else { return nil }
+        return e.jobId
+    }
+}
+
+import CryptoKit
+
+func sha256Hex(_ d: Data) -> String { SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined() }
+
+extension JSONEncoder { static var iso: JSONEncoder { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e } }
+extension JSONDecoder { static var iso: JSONDecoder { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d } }

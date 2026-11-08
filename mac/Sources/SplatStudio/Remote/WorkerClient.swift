@@ -444,15 +444,24 @@ final class WorkerClient: @unchecked Sendable {
     /// in the returned status's `outputDatasetId`).
     @discardableResult
     func runProcessing(upload: (@escaping @Sendable (Double) -> Void) async throws -> String, request: ProcessingRequest,
-                       outputDirectory: URL, skip: [String] = [], progress: PipelineProgressHandler? = nil) async throws -> JobStatus {
+                       outputDirectory: URL, skip: [String] = [], progress: PipelineProgressHandler? = nil,
+                       existingJob: String? = nil, onJobCreated: ((String) -> Void)? = nil) async throws -> JobStatus {
         // Phases on the overall bar: upload 0–15 %, remote work 15–95 %, download 95–100 %.
         let host = baseURL.host ?? "worker"
         let task = request.task.rawValue
-        progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0, message: "preparing \(task) job"))
-        let did = try await upload { f in
-            progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0.15 * f, message: String(format: "%.0f %%", f * 100)))
+        let jid: String
+        if let existingJob {
+            // The same step already ran (or is running) on this worker: wait for / fetch that job.
+            progress?(PipelineProgress(stage: "On \(host): \(task)", fraction: 0.15, message: "picking up the earlier \(task) job"))
+            jid = existingJob
+        } else {
+            progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0, message: "preparing \(task) job"))
+            let did = try await upload { f in
+                progress?(PipelineProgress(stage: "Uploading to \(host)", fraction: 0.15 * f, message: String(format: "%.0f %%", f * 100)))
+            }
+            jid = try await process(datasetId: did, request: request)
+            onJobCreated?(jid)
         }
-        let jid = try await process(datasetId: did, request: request)
         let final = try await waitForJob(jid) { s in
             // Worker ≥ 1.1.2 reports "stage: detail" (e.g. "masks: SAM 2 forward: frame 120/649").
             let msg = s.message ?? ""
@@ -463,9 +472,22 @@ final class WorkerClient: @unchecked Sendable {
         }
         guard final.state == .completed else { throw PipelineError.processFailed("remote processing \(final.state): \(final.message ?? "")") }
         progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95, message: "results of \(task)"))
-        try await downloadProcessOutput(jid, into: outputDirectory, skip: skip) { f in
-            progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95 + 0.05 * f,
-                                       message: String(format: "results of %@ — %.0f %%", task, f * 100)))
+        // Retry through network drops and sleep (the result stays on the worker): up to an hour offline.
+        let start = Date()
+        var backoff: TimeInterval = 2
+        while true {
+            do {
+                try await downloadProcessOutput(jid, into: outputDirectory, skip: skip) { f in
+                    progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95 + 0.05 * f,
+                                               message: String(format: "results of %@ — %.0f %%", task, f * 100)))
+                }
+                break
+            } catch {
+                guard Self.isTransient(error), !Task.isCancelled, Date().timeIntervalSince(start) < 3600 else { throw error }
+                progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 0.95,
+                                           message: "connection lost — retrying (the result is safe on the worker)"))
+                try await Task.sleep(nanoseconds: UInt64(backoff * 1e9)); backoff = min(backoff * 2, 30)
+            }
         }
         progress?(PipelineProgress(stage: "Downloading from \(host)", fraction: 1, message: "done"))
         return final
@@ -498,9 +520,18 @@ struct RemoteSplatPrepPoseSolver: PoseSolver {
         try? fm.removeItem(at: unpack)
         // Undistorted output images (non-pinhole models) replace the originals, so they're needed here.
         let keepImagesRemote = store != nil && local.cameraModel == "pinhole"
+        let worker = client.baseURL.absoluteString
+        let fp = RemoteJobLedger.fingerprint(req, images: frames.frames.map(\.image))
+        var reuse: String? = nil
+        if let id = RemoteJobLedger.lookup(frames.root, request: req, fingerprint: fp, worker: worker),
+           let st = try? await client.job(id), !(st.state == .failed || st.state == .cancelled) {
+            reuse = id
+        }
+        let root = frames.root
         try await client.runProcessing(upload: { cb in try await client.uploadReusing(store, directory: staging, progress: cb) },
                                        request: req, outputDirectory: unpack, skip: keepImagesRemote ? ["images"] : [],
-                                       progress: progress)
+                                       progress: progress, existingJob: reuse,
+                                       onJobCreated: { RemoteJobLedger.record(root, request: req, fingerprint: fp, worker: worker, jobId: $0) })
         // The zip may contain outputDir itself or its contents.
         let inner = [unpack.appendingPathComponent(req.outputDir), unpack].first { fm.fileExists(atPath: $0.appendingPathComponent("dataset.json").path) }
         guard let inner else { throw PipelineError.processFailed("remote output has no dataset.json") }

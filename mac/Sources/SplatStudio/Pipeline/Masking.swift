@@ -157,8 +157,14 @@ enum FrameMasker {
             let unpack = frames.root.appendingPathComponent(".remote-output")
             try? fm.removeItem(at: unpack)
             defer { try? fm.removeItem(at: unpack) }
+            let w = worker.baseURL.absoluteString, root = frames.root
+            let fp = RemoteJobLedger.fingerprint(r, images: frames.frames.map(\.image))
+            var reuse: String? = nil
+            if let id = RemoteJobLedger.lookup(root, request: r, fingerprint: fp, worker: w),
+               let st = try? await worker.job(id), !(st.state == .failed || st.state == .cancelled) { reuse = id }
             try await worker.runProcessing(upload: { _ in store.datasetId }, request: r, outputDirectory: unpack,
-                                           skip: ["images"], progress: progress)
+                                           skip: ["images"], progress: progress, existingJob: reuse,
+                                           onJobCreated: { RemoteJobLedger.record(root, request: r, fingerprint: fp, worker: w, jobId: $0) })
             let inner = [unpack.appendingPathComponent(r.outputDir), unpack].first { fm.fileExists(atPath: $0.appendingPathComponent("masks").path) }
             guard let inner else { throw PipelineError.processFailed("remote masking returned no masks/") }
             let outDir = frames.root.appendingPathComponent(r.outputDir)
