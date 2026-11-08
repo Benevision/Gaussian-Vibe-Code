@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional
 from gi.repository import GLib
 
 from ....studio.client import ApiError, Client
+from ....studio.devices import DeviceRegistry
 from ....studio.inbox import CaptureReceiver
 from ....studio.pipeline import LocalPipeline
 from ....studio.prefs import StudioPrefs
@@ -76,6 +77,9 @@ class StudioController:
         self.listeners: List[Callable[[], None]] = []      # "something changed" (runs, inbox)
         self.receiver: Optional[CaptureReceiver] = None
         self.receiver_listeners: List[Callable[[str, object], None]] = []
+        # other compute devices (devices.json next to studio.json); browsing starts with start_devices()
+        self.devices = DeviceRegistry(cfg / "devices.json", own=self._own_worker,
+                                      own_names=lambda: [app_state.settings.effective_name() or ""])
 
     # ------------------------------------------------------------- prefs / paths
     def save_prefs(self) -> None:
@@ -153,6 +157,7 @@ class StudioController:
             def emit(kind, data):
                 GLib.idle_add(self._emit, key, kind, data)
             p = LocalPipeline(client, project, options, emit, train=train, priority=self.priority)
+            p.devices = self.devices
             run = Run(p)
             GLib.idle_add(self._register_run, key, run)
             if train_only:
@@ -199,6 +204,17 @@ class StudioController:
     def run_for(self, project_root: Path) -> Optional[Run]:
         return self.runs.get(str(project_root))
 
+    # ------------------------------------------------------------- compute devices
+    def _own_worker(self):
+        """(address, port) of this PC's own worker, so mDNS doesn't list it as another device."""
+        from ....discovery import local_ipv4_addresses
+
+        port = self.state.running_port or self.state.settings.port
+        return [(a, port) for a in ["127.0.0.1"] + local_ipv4_addresses()]
+
+    def start_devices(self) -> None:
+        self.devices.start()
+
     # ------------------------------------------------------------- iPhone inbox
     def start_receiver(self) -> bool:
         if self.receiver and self.receiver.running:
@@ -243,6 +259,10 @@ class StudioController:
                     run.pipeline.cancel()
                 except Exception:  # noqa: BLE001
                     pass
+        try:
+            self.devices.stop()
+        except Exception:  # noqa: BLE001
+            pass
         if self.receiver:
             try:
                 self.receiver.stop()

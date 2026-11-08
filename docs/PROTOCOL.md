@@ -317,6 +317,11 @@ The Mac app is always the coordinator. Per project the user picks **This Mac**, 
 * Stage placement: each stage (frame extraction, masking, SfM, training) is assigned to the device with the best benchmark score that supports the chosen model (e.g. LightGlue on CUDA, Object Capture on the Mac).
 * Block-parallel training for large scenes: the scene is partitioned into K spatial blocks (CityGaussian/VastGaussian style). Each block is a training job with `TrainingConfig.region = {"min":[x,y,z],"max":[x,y,z],"margin":0.15}`: only gaussians inside the expanded box are kept/densified, and only cameras that see the block are used. Blocks are distributed across devices proportional to measured throughput; the Mac merges results keeping, for each block, gaussians whose centre lies inside the *un-expanded* box.
 * Workers accept `TrainingConfig.region` (optional) and `TrainingConfig.cameraIds` (optional list restricting which cameras are used).
+* SplatWork Node's Studio (worker ≥ 1.4.0) coordinates the same way with only the existing endpoints: it prepares
+  on its own GPU, then trains on one chosen worker or block-parallel on itself + every online worker (SplatWork
+  Nodes, Macs with "Act as a worker", iPhones), using the Mac's split, placement and merge rules. Uploads carry a
+  `Content-Length`; on `chain` workers the photos stay as a dataset of their own and later runs compose
+  `dataset.json` / masks / points over them; Macs and iPhones get one full upload per run, shared by their blocks.
 
 ---
 
