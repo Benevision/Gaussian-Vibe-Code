@@ -135,13 +135,17 @@ struct ComputeScheduler: Sendable {
     }
 
     /// Assigns blocks to devices proportional to throughput (greedy longest-processing-time first).
-    func distribute(_ blocks: [SceneBlock]) -> [String: [SceneBlock]] {
+    /// `fits(deviceId, block)`: whether that block fits the device's memory (blocks go only to devices they fit;
+    /// if none fits, to the device with the most throughput).
+    func distribute(_ blocks: [SceneBlock], fits: ((String, SceneBlock) -> Bool)? = nil) -> [String: [SceneBlock]] {
         let trainers = devices.filter { $0.capabilities.contains("train") && (placement != .thisMac || $0.isLocal) }
         guard !trainers.isEmpty else { return [:] }
         var load: [String: Double] = [:]
         var out: [String: [SceneBlock]] = [:]
         for b in blocks.sorted(by: { cost($0) > cost($1) }) {
-            let d = trainers.min { a, c in
+            let able = trainers.filter { fits?($0.id, b) ?? true }
+            let pool = able.isEmpty ? [trainers.max { $0.throughput < $1.throughput }!] : able
+            let d = pool.min { a, c in
                 (load[a.id, default: 0] + cost(b)) / max(a.throughput, 0.01) < (load[c.id, default: 0] + cost(b)) / max(c.throughput, 0.01)
             }!
             load[d.id, default: 0] += cost(b)
@@ -167,11 +171,24 @@ struct ComputeScheduler: Sendable {
     /// - Parameters:
     ///   - clients: `WorkerClient` per remote device id (uploads the dataset once per worker).
     ///   - local: the Metal trainer (used for blocks placed on "local").
+    /// Per-block training settings: the block's region and cameras, and its share of the splat budget (by block
+    /// weight, +25 % for the overlap margins, at least 1/(2K) of the total) so the merged scene stays near the cap.
+    static func blockConfig(_ config: TrainingConfig, block b: SceneBlock, blocks: [SceneBlock]) -> TrainingConfig {
+        var cfg = config
+        cfg.region = b.region
+        cfg.cameraIds = b.cameraIds
+        let total = blocks.reduce(0.0) { $0 + max($1.weight, 1) }
+        let share = max(max(b.weight, 1) / max(total, 1), 0.5 / Double(blocks.count))
+        cfg.maxGaussians = max(100_000, Int(Double(config.maxGaussians) * share * 1.25))
+        return cfg
+    }
+
     func trainBlockParallel(dataset: PreparedDataset, config: TrainingConfig, blocks: [SceneBlock], name: String,
                             local: LocalTrainingRunner?, clients: [String: WorkerClient],
+                            fits: ((String, SceneBlock) -> Bool)? = nil,
                             progress: (@Sendable (BlockProgress) -> Void)? = nil) async throws -> GaussianCloud {
         guard !blocks.isEmpty else { throw PipelineError.noInput("no blocks") }
-        var assignment = distribute(blocks)
+        var assignment = distribute(blocks, fits: fits)
         // Devices we can't actually drive fall back to the local trainer (or the first client).
         for (dev, bs) in assignment where (dev == "local" && local == nil) || (dev != "local" && clients[dev] == nil) {
             assignment.removeValue(forKey: dev)
@@ -187,9 +204,7 @@ struct ComputeScheduler: Sendable {
                     var datasetId: String? = nil
                     for b in bs {
                         try Task.checkCancellation()
-                        var cfg = config
-                        cfg.region = b.region
-                        cfg.cameraIds = b.cameraIds
+                        let cfg = Self.blockConfig(config, block: b, blocks: blocks)
                         let report: @Sendable (TrainingProgressSnapshot) -> Void = { s in
                             let overall = tracker.update(b.index, s.fraction)
                             progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: s, overall: overall))
@@ -198,7 +213,10 @@ struct ComputeScheduler: Sendable {
                         if dev == "local", let local {
                             cloud = try await local.train(dataset: dataset.restricted(to: Set(b.cameraIds)), config: cfg, progress: report)
                         } else if let client = clients[dev] {
-                            if datasetId == nil { datasetId = try await client.uploadDataset(directory: dataset.root) }
+                            // the worker may already hold the photos (split / masked / solved there): send only the rest
+                            if datasetId == nil {
+                                datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root)
+                            }
                             cloud = try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
                                                            datasetId: datasetId, progress: { report(TrainingProgressSnapshot($0)) })
                         } else { throw PipelineError.unsupported("device \(dev) unavailable") }

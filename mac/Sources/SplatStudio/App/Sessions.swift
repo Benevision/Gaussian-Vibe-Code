@@ -74,7 +74,9 @@ final class TrainingSession {
 
     private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL) {
         // Fail fast with what to change, instead of running out of GPU memory partway through loading.
-        if let problem = MemoryForecast.macProblem(dataset: dataset, config: cfg) { state = .failed(problem); return }
+        if let problem = MemoryForecast.macProblem(dataset: dataset, config: cfg) {
+            state = .failed(problem + " Or choose Both: the scene is split into blocks that each fit."); return
+        }
         state = .preparing("Loading images")
         let t = MetalTrainer(dataset: dataset, config: cfg)
         trainer = t
@@ -274,19 +276,37 @@ final class TrainingSession {
             }
             return
         }
-        let blockCount = max(2, devices.count * 2)
-        state = .preparing("Partitioning scene into \(blockCount) blocks")
+        // Blocks: two per device for balance, at least one per 2,000 photos, and more until every block fits on
+        // at least one device's memory (a block's photos and its share of the splats).
+        let infos = Dictionary(uniqueKeysWithValues: clients.keys.compactMap { id in browser.health[id]?.info.map { (id, $0) } })
+        let fits: (String, SceneBlock, [SceneBlock]) -> Bool = { dev, b, all in
+            let sub = dataset.restricted(to: Set(b.cameraIds))
+            let c = ComputeScheduler.blockConfig(cfg, block: b, blocks: all)
+            if dev == "local" { return MemoryForecast.macProblem(dataset: sub, config: c) == nil }
+            guard let info = infos[dev] else { return true }
+            return MemoryForecast.workerProblem(info: info, dataset: sub, config: c) == nil
+        }
+        let initialCount = max(2, devices.count * 2, Int((Double(dataset.manifest.cameras.count) / 2000).rounded(.up)))
+        state = .preparing("Partitioning scene into blocks")
         task = Task { [weak self] in
             do {
                 let pc = dataset.pointCloudURL.flatMap { try? PLYCodec.readPointCloud(url: $0) }
-                let blocks = BlockPartitioner(blockCount: blockCount).partition(dataset: dataset, points: pc)
+                var blockCount = initialCount
+                var blocks = BlockPartitioner(blockCount: blockCount).partition(dataset: dataset, points: pc)
+                while blockCount < 32, !blocks.allSatisfy({ b in devices.contains { fits($0.id, b, blocks) } }) {
+                    blockCount += max(1, blockCount / 2)
+                    blocks = BlockPartitioner(blockCount: blockCount).partition(dataset: dataset, points: pc)
+                }
+                self?.remoteMessage = "Training \(blocks.count) blocks on \(devices.count) devices."
                 let scheduler = ComputeScheduler(devices: devices, placement: .both)
                 let start = Date()
                 let total = cfg.iterations * blocks.count
                 var latest: [Int: ComputeScheduler.BlockProgress] = [:]
                 var rateSamples: [(Date, Int)] = []
+                let finalBlocks = blocks
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
-                                                                   local: MetalTrainingRunner(), clients: clients) { bp in
+                                                                   local: MetalTrainingRunner(), clients: clients,
+                                                                   fits: { fits($0, $1, finalBlocks) }) { bp in
                     Task { @MainActor in
                         guard let self else { return }
                         self.state = .training

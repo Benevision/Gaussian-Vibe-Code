@@ -38,6 +38,12 @@ enum CLI {
                 if let it = value("--iterations").flatMap(Int.init) { cfg.iterations = it; cfg.densifyStop = min(cfg.densifyStop, Int(Double(it) * 0.8)) }
                 if !dataset.hasDepth { cfg.depthWeight = 0 }
                 let out = URL(fileURLWithPath: value("--out") ?? "trained.ply")
+                if let k = value("--blocks").flatMap(Int.init) {
+                    // Block-parallel run (the app's Both mode): this Mac (unless --no-local) and --worker URL.
+                    try runBlocks(dataset: dataset, config: cfg, blocks: k, out: out,
+                                  worker: value("--worker").flatMap(URL.init(string:)), token: value("--token"), local: !a.contains("--no-local"))
+                    exit(0)
+                }
                 print("Training \(dataset.manifest.cameras.count) cameras, \(cfg.iterations) steps, budget \(cfg.maxGaussians), strategy \(cfg.strategy.rawValue)")
                 let t = MetalTrainer(dataset: dataset, config: cfg)
                 try t.prepare { print("  \($0)") }
@@ -346,5 +352,56 @@ enum CLI {
                 exit(0)
             } catch { fputs("error: \(error.localizedDescription)\n", stderr); exit(1) }
         }
+    }
+
+    /// `--train <dataset> --blocks K [--worker URL] [--no-local]`: partition, distribute by throughput and memory,
+    /// train, merge — the same path as the app's Both mode, headless.
+    static func runBlocks(dataset: PreparedDataset, config: TrainingConfig, blocks k: Int, out: URL,
+                          worker: URL?, token: String?, local: Bool) throws {
+        let sem = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var failure: Error? = nil
+        Task {
+            do {
+                var devices: [ComputeDevice] = local ? [ComputeScheduler.localDevice()] : []
+                var clients: [String: WorkerClient] = [:]
+                var infos: [String: WorkerInfo] = [:]
+                if let u = worker {
+                    let c = WorkerClient(baseURL: u, token: token)
+                    let info = try await c.info(timeout: 10)
+                    let ep = WorkerEndpoint(id: "worker", name: info.name, host: u.host ?? "worker", port: u.port ?? 7878, isManual: true)
+                    var d = ComputeScheduler.remoteDevice(ep, info: info)
+                    d.id = "worker"
+                    if let m = BenchmarkStore.shared.throughput(for: "bonjour:\(info.name)") { d.throughput = m }
+                    devices.append(d); clients["worker"] = c; infos["worker"] = info
+                }
+                let pc = dataset.pointCloudURL.flatMap { try? PLYCodec.readPointCloud(url: $0) }
+                let blocks = BlockPartitioner(blockCount: k).partition(dataset: dataset, points: pc)
+                for b in blocks {
+                    let c = ComputeScheduler.blockConfig(config, block: b, blocks: blocks)
+                    print("block \(b.index + 1): \(b.cameraIds.count) cameras, budget \(c.maxGaussians)")
+                }
+                let fits: (String, SceneBlock) -> Bool = { dev, b in
+                    let sub = dataset.restricted(to: Set(b.cameraIds))
+                    let c = ComputeScheduler.blockConfig(config, block: b, blocks: blocks)
+                    if dev == "local" { return MemoryForecast.macProblem(dataset: sub, config: c) == nil }
+                    return infos[dev].map { MemoryForecast.workerProblem(info: $0, dataset: sub, config: c) == nil } ?? true
+                }
+                let sched = ComputeScheduler(devices: devices, placement: .both)
+                for (dev, bs) in sched.distribute(blocks, fits: fits) { print("\(dev): blocks \(bs.map { $0.index + 1 })") }
+                let t0 = Date()
+                nonisolated(unsafe) var last: [Int: Int] = [:]
+                let cloud = try await sched.trainBlockParallel(dataset: dataset, config: config, blocks: blocks, name: out.deletingPathExtension().lastPathComponent,
+                                                               local: local ? MetalTrainingRunner() : nil, clients: clients, fits: fits) { bp in
+                    let pct = Int(bp.snapshot.fraction * 10)
+                    if last[bp.blockIndex] != pct { last[bp.blockIndex] = pct
+                        print(String(format: "  block %d on %@: %d %%  (overall %.0f %%, %.0f s)", bp.blockIndex + 1, bp.deviceId, pct * 10, bp.overall * 100, Date().timeIntervalSince(t0))) }
+                }
+                try PLYCodec.writeGaussians(cloud, to: out, up: dataset.upVectorSIMD)
+                print("merged \(cloud.count) splats in \(Int(Date().timeIntervalSince(t0))) s → \(out.path)")
+            } catch { failure = error }
+            sem.signal()
+        }
+        sem.wait()
+        if let failure { throw failure }
     }
 }
