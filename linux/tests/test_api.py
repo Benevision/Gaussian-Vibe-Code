@@ -500,6 +500,10 @@ def test_chain_outputs_compose_and_archives(client, fake_splatprep, dataset_zip)
         ["images/000.jpg", "images/001.jpg", "images/002.jpg"]
     assert names(client.get(f"/v1/jobs/{j}/output.zip?skip=images", headers=AUTH)) == ["dataset.json"]
     assert len(names(client.get(f"/v1/jobs/{j}/output.zip", headers=AUTH))) == 4   # old clients: full zip
+    # nested paths (worker ≥ 1.3.12): leave out one file / folder below the top level
+    assert names(client.get(f"/v1/jobs/{j}/output.zip?skip=images/001.jpg", headers=AUTH)) == \
+        ["dataset.json", "images/000.jpg", "images/002.jpg"]
+    assert names(client.get(f"/v1/jobs/{j}/output.zip?skip=out/images,images", headers=AUTH)) == ["dataset.json"]
 
     # a later step chains on it without re-sending images
     j2 = client.post("/v1/process", headers=AUTH, json={

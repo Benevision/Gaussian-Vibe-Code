@@ -318,8 +318,9 @@ final class WorkerClient: @unchecked Sendable {
             let staging = FileManager.default.temporaryDirectory.appendingPathComponent("splat-delta-\(UUID().uuidString.prefix(8))/dataset")
             defer { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()) }
             try FileManager.default.ensureDirectory(staging)
+            let needed = Self.referencedTopLevel(directory)
             for c in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-            where !store.dirs.contains(c.lastPathComponent) {
+            where !store.dirs.contains(c.lastPathComponent) && (needed == nil || needed!.contains(c.lastPathComponent)) {
                 try FileManager.default.linkOrCopyTree(c, to: staging.appendingPathComponent(c.lastPathComponent))
             }
             do {
@@ -331,6 +332,25 @@ final class WorkerClient: @unchecked Sendable {
             }
         }
         return try await uploadDataset(directory: directory, progress: progress)
+    }
+
+    /// For a dataset folder with `dataset.json`: the top-level files and folders it refers to (images, masks,
+    /// depth, points…) plus `dataset.json`. Intermediates next to it — the camera solve's work folder with its own
+    /// copy of the images, raw mask outputs, frames.json — are left out of uploads. nil = no dataset.json.
+    static func referencedTopLevel(_ directory: URL) -> Set<String>? {
+        guard let d = try? Data(contentsOf: directory.appendingPathComponent("dataset.json")),
+              let j = try? JSONSerialization.jsonObject(with: d) else { return nil }
+        var out: Set<String> = ["dataset.json"]
+        let fm = FileManager.default
+        func walk(_ v: Any) {
+            if let s = v as? String, !s.isEmpty, !s.hasPrefix("/"), s.count < 512,
+               let first = s.split(separator: "/").first.map(String.init), first != "..",
+               fm.fileExists(atPath: directory.appendingPathComponent(s).path) { out.insert(first) }
+            else if let a = v as? [Any] { a.forEach(walk) }
+            else if let o = v as? [String: Any] { o.values.forEach(walk) }
+        }
+        walk(j)
+        return out
     }
 
     // MARK: High level
@@ -515,7 +535,7 @@ struct RemoteSplatPrepPoseSolver: PoseSolver {
             try fm.linkOrCopyTree(src, to: staging.appendingPathComponent(sub))
         }
         let outDir = frames.root.appendingPathComponent(req.outputDir)
-        try? fm.removeItem(at: outDir)
+        let marker = outDir.appendingPathComponent(".remote-job")
         let unpack = frames.root.appendingPathComponent(".remote-output")
         try? fm.removeItem(at: unpack)
         // Undistorted output images (non-pinhole models) replace the originals, so they're needed here.
@@ -528,15 +548,27 @@ struct RemoteSplatPrepPoseSolver: PoseSolver {
             reuse = id
         }
         let root = frames.root
+        // The reused job's result is already here (a rerun after training failed, say): nothing to download.
+        if let reuse, (try? String(contentsOf: marker, encoding: .utf8)) == reuse,
+           fm.fileExists(atPath: outDir.appendingPathComponent("dataset.json").path) {
+            progress?(PipelineProgress(stage: "Camera positions", fraction: 1, message: "already downloaded from the earlier job"))
+            return try SplatPrepPoseSolver.readSolution(sfmDir: outDir, frames: frames, prefix: req.outputDir,
+                                                        preferOutputImages: local.cameraModel != "pinhole")
+        }
+        try? fm.removeItem(at: outDir)
+        var jobId = reuse
         try await client.runProcessing(upload: { cb in try await client.uploadReusing(store, directory: staging, progress: cb) },
-                                       request: req, outputDirectory: unpack, skip: keepImagesRemote ? ["images"] : [],
+                                       request: req, outputDirectory: unpack,
+                                       // the solve's own copy of the images too (nested: workers ≥ 1.3.12)
+                                       skip: keepImagesRemote ? ["images", "\(req.outputDir)/images"] : [],
                                        progress: progress, existingJob: reuse,
-                                       onJobCreated: { RemoteJobLedger.record(root, request: req, fingerprint: fp, worker: worker, jobId: $0) })
+                                       onJobCreated: { jobId = $0; RemoteJobLedger.record(root, request: req, fingerprint: fp, worker: worker, jobId: $0) })
         // The zip may contain outputDir itself or its contents.
         let inner = [unpack.appendingPathComponent(req.outputDir), unpack].first { fm.fileExists(atPath: $0.appendingPathComponent("dataset.json").path) }
         guard let inner else { throw PipelineError.processFailed("remote output has no dataset.json") }
         try fm.moveItem(at: inner, to: outDir)
         try? fm.removeItem(at: unpack)
+        if let jobId { try? jobId.write(to: marker, atomically: true, encoding: .utf8) }
         return try SplatPrepPoseSolver.readSolution(sfmDir: outDir, frames: frames, prefix: req.outputDir,
                                                     preferOutputImages: local.cameraModel != "pinhole")
     }

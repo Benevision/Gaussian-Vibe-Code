@@ -914,13 +914,17 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return FileResponse(path, media_type="application/octet-stream", filename=f"{job_id}.ply")
 
     def _zip_filter(only: Optional[str], skip: Optional[str]):
-        """``only=images,masks`` / ``skip=images``: top-level folders (or files) to include / leave out."""
+        """``only=images,masks`` / ``skip=images,sfm/images``: folders (or files) to include / leave out — a
+        top-level name or a nested path (worker ≥ 1.3.12)."""
         def names(v):
             return {x.strip().strip("/") for x in (v or "").split(",") if x.strip().strip("/")}
         o, k = names(only), names(skip)
         if not o and not k:
             return None
-        return lambda rel: (not o or rel.split("/", 1)[0] in o) and rel.split("/", 1)[0] not in k
+
+        def under(rel, prefixes):
+            return any(rel == p or rel.startswith(p + "/") for p in prefixes)
+        return lambda rel: (not o or under(rel, o)) and not under(rel, k)
 
     async def _serve_zip(root: Path, name: str, keep, cache: Optional[Path] = None):
         from .processing import zip_output
