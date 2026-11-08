@@ -204,5 +204,24 @@ vertex LineVSOut line_vertex(uint vid [[vertex_id]], device const LineVertex* v 
     return o;
 }
 fragment half4 line_fragment(LineVSOut in [[stage_in]]) { return half4(half3(in.color.rgb) * half(in.color.a), half(in.color.a)); }
+
+// Learned skybox: a full-screen triangle that looks up each pixel's world direction in the equirectangular
+// panorama (longitude atan2(right, forward), latitude asin(up); top row = straight up), drawn before the splats.
+struct SkyVSOut { float4 pos [[position]]; };
+vertex SkyVSOut sky_vertex(uint vid [[vertex_id]]) {
+    float2 p = float2((vid << 1) & 2, vid & 2);
+    SkyVSOut o; o.pos = float4(p * 2.0 - 1.0, 0.0, 1.0); return o;
+}
+fragment half4 sky_fragment(SkyVSOut in [[stage_in]], constant CameraUniforms& u [[buffer(0)]],
+                            constant float3x3& basis [[buffer(1)]], texture2d<half> tex [[texture(0)]]) {
+    constexpr sampler s(filter::linear, s_address::repeat, t_address::clamp_to_edge);
+    float3 dc = float3((in.pos.x - u.intr.z) / u.intr.x, (in.pos.y - u.intr.w) / u.intr.y, 1.0);
+    float3x3 R = float3x3(u.worldToCam[0].xyz, u.worldToCam[1].xyz, u.worldToCam[2].xyz);
+    float3 d = normalize(transpose(R) * dc);
+    float3 k = basis * d;                                   // (right, up, forward) components
+    float lon = atan2(k.x, k.z), lat = asin(clamp(k.y, -1.0, 1.0));
+    float2 uv = float2(lon / (2.0 * M_PI_F) + 0.5, 0.5 - lat / M_PI_F);
+    return half4(tex.sample(s, uv).rgb, 1.0h);
+}
 """#
 }

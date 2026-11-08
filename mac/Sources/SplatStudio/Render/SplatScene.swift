@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import MetalKit
 import simd
 
 /// GPU-resident, render-ready gaussians. Immutable once built except for per-splat flags
@@ -18,6 +19,9 @@ final class SplatScene: @unchecked Sendable {
     let radius: Float
     /// Per-splat coverage score (Coverage display mode), computed on demand from the dataset's cameras.
     var coverage: MTLBuffer?
+    /// Learned skybox (equirectangular) and the matrix taking world directions to (right, up, forward).
+    var sky: MTLTexture?
+    var skyBasis = matrix_identity_float3x3
 
     /// Builds the render buffers from trainer-layout parameter buffers (no CPU copy).
     init(ctx: MetalContext = .shared, count: Int, shDegree: Int, antialiased: Bool,
@@ -60,6 +64,17 @@ final class SplatScene: @unchecked Sendable {
         self.init(ctx: ctx, count: cloud.count, shDegree: cloud.shDegree, antialiased: cloud.antialiased,
                   pos: buf(cloud.positions, 3), logScale: buf(cloud.scales, 3), quat: buf(cloud.rotations, 4),
                   opacity: buf(cloud.opacities, 1), sh: buf(cloud.sh, 48), bounds: b)
+        if let s = cloud.skybox { loadSky(s, ctx: ctx) }
+    }
+
+    func loadSky(_ s: GaussianCloud.Skybox, ctx: MetalContext = .shared) {
+        guard let meta = try? JSONSerialization.jsonObject(with: s.meta) as? [String: Any],
+              let r = meta["right"] as? [Double], let u = meta["up"] as? [Double], let f = meta["forward"] as? [Double],
+              r.count == 3, u.count == 3, f.count == 3,
+              let tex = try? MTKTextureLoader(device: ctx.device).newTexture(data: s.png, options: [.SRGB: false]) else { return }
+        func v(_ a: [Double]) -> SIMD3<Float> { SIMD3(Float(a[0]), Float(a[1]), Float(a[2])) }
+        sky = tex
+        skyBasis = simd_float3x3(rows: [v(r), v(u), v(f)])
     }
 
     private static func robustBounds(_ b: MTLBuffer, _ n: Int) -> (SIMD3<Float>, SIMD3<Float>) {

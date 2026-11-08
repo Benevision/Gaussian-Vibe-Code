@@ -84,6 +84,7 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     private let sorter: GPURadixSort
     private let splatPSO: MTLRenderPipelineState
     private let linePSO: MTLRenderPipelineState
+    private let skyPSO: MTLRenderPipelineState
     private var verts: MTLBuffer?
     private var keys: MTLBuffer?
     private var vals: MTLBuffer?
@@ -136,6 +137,11 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         la.sourceRGBBlendFactor = .one; la.destinationRGBBlendFactor = .oneMinusSourceAlpha
         la.sourceAlphaBlendFactor = .one; la.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         linePSO = try d.makeRenderPipelineState(descriptor: ld)
+        let sd = MTLRenderPipelineDescriptor()
+        sd.vertexFunction = ctx.library.makeFunction(name: "sky_vertex")
+        sd.fragmentFunction = ctx.library.makeFunction(name: "sky_fragment")
+        sd.colorAttachments[0].pixelFormat = .bgra8Unorm
+        skyPSO = try d.makeRenderPipelineState(descriptor: sd)
         super.init()
     }
 
@@ -244,6 +250,14 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         }
 
         let renc = cb.makeRenderCommandEncoder(descriptor: rpd)!
+        if let scene, let sky = scene.sky, scene.count > 0, st.displayMode == .color {
+            var basis = scene.skyBasis
+            renc.setRenderPipelineState(skyPSO)
+            renc.setFragmentBytes(&uniforms, length: MemoryLayout<CameraUniforms>.stride, index: 0)
+            renc.setFragmentBytes(&basis, length: MemoryLayout<simd_float3x3>.stride, index: 1)
+            renc.setFragmentTexture(sky, index: 0)
+            renc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
         if visibleDraw {
             renc.setRenderPipelineState(splatPSO)
             renc.setVertexBuffer(verts!, offset: 0, index: 0)
@@ -336,6 +350,14 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         rpd.colorAttachments[0].storeAction = .store
         rpd.colorAttachments[0].clearColor = MTLClearColor(red: Double(st.background.x), green: Double(st.background.y), blue: Double(st.background.z), alpha: 1)
         let renc = cb.makeRenderCommandEncoder(descriptor: rpd)!
+        if let sky = scene.sky, st.displayMode == .color {
+            var basis = scene.skyBasis
+            renc.setRenderPipelineState(skyPSO)
+            renc.setFragmentBytes(&u, length: MemoryLayout<CameraUniforms>.stride, index: 0)
+            renc.setFragmentBytes(&basis, length: MemoryLayout<simd_float3x3>.stride, index: 1)
+            renc.setFragmentTexture(sky, index: 0)
+            renc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
         renc.setRenderPipelineState(splatPSO)
         renc.setVertexBuffer(localVerts, offset: 0, index: 0)
         renc.setVertexBuffer(localVals, offset: 0, index: 1)
