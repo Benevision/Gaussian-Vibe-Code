@@ -89,6 +89,22 @@ struct ContentView: View {
             Button { model.newProjectSource = nil; model.showNewProject = true } label: { Label("New", systemImage: "plus.square.on.square") }
                 .help("Create a splat from photos, video, 360° or iPhone captures (⌘N)")
             Button { openPanel() } label: { Label("Open", systemImage: "folder") }.help("Open a splat or dataset (⌘O)")
+            // A project being prepared in the background (its window hidden): progress, click to show it again.
+            if !model.showNewProject && (model.prep.running || model.prep.error != nil) {
+                Button { model.showNewProject = true } label: {
+                    HStack(spacing: 6) {
+                        if model.prep.running {
+                            ProgressView(value: min(max(model.prep.overall, 0), 1)).progressViewStyle(.circular).controlSize(.small)
+                            Text((model.prep.progress.stage.isEmpty ? "Preparing" : model.prep.progress.stage) + " · \(Int(model.prep.overall * 100)) %").lineLimit(1)
+                        } else {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            Text("Preparation failed")
+                        }
+                    }
+                    .font(.caption)
+                }
+                .help("Show the project being prepared")
+            }
         }
         ToolbarItemGroup(placement: .principal) {
             Button { model.resetCamera() } label: { Label("Reset view", systemImage: "arrow.counterclockwise.circle") }

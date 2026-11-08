@@ -64,6 +64,8 @@ struct NewProjectSheet: View {
         .frame(width: 680, height: 620)
         .sheet(item: $reuseOffer) { offer in reuseSheet(offer) }
         .onAppear {
+            // Reopened while preparing (or after a run that failed while hidden): show that run, don't reset it.
+            if prep.running || prep.error != nil { return }
             prep.reset()   // a new project starts on its settings, not on the last run's result
             source = model.newProjectSource
             step = model.newProjectStartStep; model.newProjectStartStep = 0
@@ -98,6 +100,10 @@ struct NewProjectSheet: View {
     private var footer: some View {
         HStack {
             Button("Cancel") { if prep.running { prep.cancel() } else { dismiss() } }.keyboardShortcut(.cancelAction)
+            if prep.running {
+                Button("Hide") { dismiss() }
+                    .help("Keep preparing in the background and use the rest of the app; the progress button in the toolbar brings this back")
+            }
             if !prep.running && prep.error == nil && mode == .easy {
                 Toggle("Show all options", isOn: $showAll)
                     .toggleStyle(.switch).controlSize(.small)
