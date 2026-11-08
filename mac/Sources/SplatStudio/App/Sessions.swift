@@ -44,6 +44,24 @@ final class TrainingSession {
     var history: [Sample] = []
     var evalHistory: [Sample] = []
 
+    /// One row per block of a block-parallel run (empty otherwise): which device has it, what it's doing, its numbers.
+    struct BlockRow: Identifiable, Equatable {
+        let id: Int                 // block index
+        var deviceId: String
+        var device: String
+        var stage: ComputeScheduler.BlockStage
+        var snapshot: TrainingProgressSnapshot
+        var stepsPerSecond: Double = 0
+        /// Seconds left for this block (worker's estimate, else from its rate).
+        var eta: TimeInterval? {
+            if stage == .done { return 0 }
+            if let e = snapshot.eta, e > 0 { return e }
+            guard stepsPerSecond > 0.1 else { return nil }
+            return Double(max(0, snapshot.totalSteps - snapshot.step)) / stepsPerSecond
+        }
+    }
+    var blockRows: [BlockRow] = []
+
     private var trainer: MetalTrainer?
     private var task: Task<Void, Never>?
 
@@ -57,7 +75,7 @@ final class TrainingSession {
     func start(dataset: PreparedDataset) {
         guard !isActive else { return }
         app?.remoteWatch.stop()   // training this project replaces whatever was being watched
-        history.removeAll(); evalHistory.removeAll()
+        history.removeAll(); evalHistory.removeAll(); blockRows.removeAll()
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config
         if !dataset.hasDepth { cfg.depthWeight = 0 }
@@ -318,34 +336,63 @@ final class TrainingSession {
                 let total = cfg.iterations * blocks.count
                 var latest: [Int: ComputeScheduler.BlockProgress] = [:]
                 var rateSamples: [(Date, Int)] = []
+                var blockSamples: [Int: [(Date, Int)]] = [:]
                 let finalBlocks = blocks
+                let nDevices = devices.count
+                self?.blockRows = []
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
                                                                    local: useLocal ? MetalTrainingRunner() : nil, clients: clients,
                                                                    fits: { fits($0, $1, finalBlocks) }) { bp in
                     Task { @MainActor in
                         guard let self else { return }
-                        self.state = .training
+                        if self.state != .training, bp.stage != .waiting { self.state = .training }
                         latest[bp.blockIndex] = bp
-                        // Combined view over all blocks: steps summed, quality averaged, splats summed.
-                        let steps = latest.values.reduce(0) { $0 + $1.snapshot.step }
                         let now = Date()
+                        // Per block: its own rate over the last 20 s.
+                        var bs = blockSamples[bp.blockIndex, default: []]
+                        if bp.stage == .training { bs.append((now, bp.snapshot.step)) }
+                        bs.removeAll { now.timeIntervalSince($0.0) > 20 }
+                        blockSamples[bp.blockIndex] = bs
+                        let rate: Double = {
+                            guard let f = bs.first, let l = bs.last, l.0.timeIntervalSince(f.0) > 1 else { return 0 }
+                            return Double(l.1 - f.1) / l.0.timeIntervalSince(f.0)
+                        }()
+                        let dev = bp.deviceId == "local" ? "This Mac" : (browser.workers.first { $0.id == bp.deviceId }?.name ?? bp.deviceId)
+                        var row = BlockRow(id: bp.blockIndex, deviceId: bp.deviceId, device: dev, stage: bp.stage, snapshot: bp.snapshot,
+                                           stepsPerSecond: rate)
+                        if let i = self.blockRows.firstIndex(where: { $0.id == bp.blockIndex }) {
+                            if rate == 0, bp.stage == .training { row.stepsPerSecond = self.blockRows[i].stepsPerSecond }
+                            self.blockRows[i] = row
+                        } else {
+                            self.blockRows.append(row); self.blockRows.sort { $0.id < $1.id }
+                        }
+
+                        // Combined: steps summed over blocks, quality averaged over blocks that have trained, splats summed.
+                        let steps = latest.values.reduce(0) { $0 + $1.snapshot.step }
                         rateSamples.append((now, steps)); rateSamples.removeAll { now.timeIntervalSince($0.0) > 20 }
                         var s = self.status
-                        s.totalSteps = total; s.step = min(total, Int(bp.overall * Double(total)))
+                        s.totalSteps = total; s.step = min(total, steps)
                         if let first = rateSamples.first, now.timeIntervalSince(first.0) > 1 {
                             s.itersPerSecond = Double(steps - first.1) / now.timeIntervalSince(first.0)
                         }
-                        let psnrs = latest.values.compactMap(\.snapshot.psnr), losses = latest.values.compactMap(\.snapshot.loss)
+                        let psnrs = latest.values.compactMap(\.snapshot.psnr).filter { $0 > 0 }, losses = latest.values.compactMap(\.snapshot.loss)
                         s.psnr = psnrs.isEmpty ? 0 : Float(psnrs.reduce(0, +) / Double(psnrs.count))
                         s.loss = losses.isEmpty ? 0 : Float(losses.reduce(0, +) / Double(losses.count))
                         s.numGaussians = latest.values.reduce(0) { $0 + $1.snapshot.numGaussians }
                         s.elapsed = now.timeIntervalSince(start)
-                        s.eta = bp.overall > 0.01 ? s.elapsed * (1 - bp.overall) / bp.overall : 0
-                        s.phase = latest.keys.sorted().map { i in
-                            let b = latest[i]!
-                            let dev = b.deviceId == "local" ? "this Mac" : (browser.workers.first { $0.id == b.deviceId }?.name ?? b.deviceId)
-                            return "Block \(i + 1)/\(blocks.count) on \(dev): \(Int(b.snapshot.fraction * 100)) %"
-                        }.joined(separator: " · ")
+                        // ETA: each device works through its blocks one after another, so the run ends when the slowest
+                        // device finishes all of its remaining steps. Unknown until every device has a rate.
+                        var deviceETA: [String: TimeInterval] = [:], unknown = false
+                        for (devId, rows) in Dictionary(grouping: self.blockRows, by: \.deviceId) {
+                            let remaining = rows.reduce(0) { $0 + max(0, $1.snapshot.totalSteps - $1.snapshot.step) }
+                            let r = rows.map(\.stepsPerSecond).max() ?? 0
+                            if remaining == 0 { deviceETA[devId] = 0 } else if r > 0.1 { deviceETA[devId] = Double(remaining) / r } else { unknown = true }
+                        }
+                        s.eta = unknown ? 0 : (deviceETA.values.max() ?? 0)
+                        let counts = Dictionary(grouping: self.blockRows, by: { $0.stage.summaryKey }).mapValues(\.count)
+                        let order = ["training", "uploading", "queued", "loading", "downloading", "waiting", "offline", "failed", "done"]
+                        let parts = order.compactMap { k in counts[k].map { "\($0) \(k)" } }
+                        s.phase = "\(finalBlocks.count) blocks on \(nDevices) device\(nDevices == 1 ? "" : "s"): " + parts.joined(separator: ", ")
                         self.update(s)
                     }
                 }

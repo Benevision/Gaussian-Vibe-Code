@@ -336,6 +336,66 @@ struct RemoteWatchDashboard: View {
     }
 }
 
+/// Block-parallel runs: one card per block — device, stage, its own progress, speed, splats, PSNR and ETA.
+struct BlockRowsView: View {
+    let rows: [TrainingSession.BlockRow]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Devices").font(.callout.bold()).padding(.top, 4)
+            ForEach(rows) { r in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: icon(r)).foregroundStyle(color(r)).frame(width: 16)
+                        Text(r.device).bold().lineLimit(1)
+                        Text("block \(r.id + 1)/\(rows.count)").foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Text(r.stage.label).foregroundStyle(color(r)).lineLimit(1)
+                    }
+                    ProgressView(value: progress(r)).tint(color(r))
+                    HStack(spacing: 10) {
+                        Text("\(formatCount(r.snapshot.step))/\(formatCount(r.snapshot.totalSteps))")
+                        if r.stage == .training, r.stepsPerSecond > 0 { Text(String(format: "%.1f steps/s", r.stepsPerSecond)) }
+                        if r.snapshot.numGaussians > 0 { Text("\(formatCount(r.snapshot.numGaussians)) splats") }
+                        if let p = r.snapshot.psnr, p > 0 { Text(String(format: "%.1f dB", p)) }
+                        Spacer(minLength: 0)
+                        if let e = r.eta, r.stage != .done { Text(e > 0 ? "\(formatDuration(e)) left" : "") }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .help(r.stage.label)
+            }
+        }
+        .font(.callout).monospacedDigit()
+    }
+
+    private func progress(_ r: TrainingSession.BlockRow) -> Double {
+        if case .uploading(let f) = r.stage { return f }
+        return r.stage == .done ? 1 : r.snapshot.fraction
+    }
+    private func icon(_ r: TrainingSession.BlockRow) -> String {
+        switch r.stage {
+        case .done: return "checkmark.circle.fill"
+        case .failed: return "xmark.octagon.fill"
+        case .offline: return "wifi.exclamationmark"
+        case .uploading: return "arrow.up.circle"
+        case .downloading: return "arrow.down.circle"
+        case .waiting, .queued: return "hourglass"
+        default: return r.deviceId == "local" ? "laptopcomputer" : "server.rack"
+        }
+    }
+    private func color(_ r: TrainingSession.BlockRow) -> Color {
+        switch r.stage {
+        case .done: return .green
+        case .failed: return .red
+        case .offline: return .orange
+        case .training, .loading: return .accentColor
+        default: return .secondary
+        }
+    }
+}
+
 struct TrainingDashboard: View {
     let session: TrainingSession
     var body: some View {
@@ -345,7 +405,8 @@ struct TrainingDashboard: View {
                 GridRow { Text("Status").foregroundStyle(.secondary); Text(stateText) }
                 GridRow { Text("Step").foregroundStyle(.secondary); Text("\(session.status.step) / \(session.status.totalSteps)") }
                 GridRow { Text("Speed").foregroundStyle(.secondary); Text(String(format: "%.0f steps/s", session.status.itersPerSecond)) }
-                GridRow { Text("Elapsed / ETA").foregroundStyle(.secondary); Text("\(formatDuration(session.status.elapsed)) / \(formatDuration(session.status.eta))") }
+                GridRow { Text("Elapsed / ETA").foregroundStyle(.secondary)
+                    Text("\(formatDuration(session.status.elapsed)) / " + (session.status.eta > 0 || session.state != .training ? formatDuration(session.status.eta) : "estimating…")) }
                 GridRow { Text("Splats").foregroundStyle(.secondary); Text(formatCount(session.status.numGaussians)) }
                 GridRow { Text("Train PSNR").foregroundStyle(.secondary); Text(String(format: "%.2f dB", session.status.psnr)) }
                 if let e = session.status.evalPSNR { GridRow { Text("Holdout PSNR").foregroundStyle(.secondary); Text(String(format: "%.2f dB", e)).bold() } }
@@ -355,6 +416,7 @@ struct TrainingDashboard: View {
                 }
             }
             .font(.callout).monospacedDigit()
+            if !session.blockRows.isEmpty { BlockRowsView(rows: session.blockRows) }
             TrainingCharts(history: session.history, evalHistory: session.evalHistory)
             if session.isActive {
                 HStack {

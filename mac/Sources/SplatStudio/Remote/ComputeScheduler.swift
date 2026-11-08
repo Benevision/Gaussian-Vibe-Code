@@ -172,6 +172,44 @@ struct ComputeScheduler: Sendable {
         var snapshot: TrainingProgressSnapshot
         /// Mean fraction over all blocks.
         var overall: Double
+        var stage: BlockStage = .training
+    }
+
+    /// Where one block is in its life: waiting for its device, uploading, queued / loading on the worker,
+    /// training, downloading the result, done.
+    enum BlockStage: Sendable, Equatable {
+        case waiting, uploading(Double), queued, loading, training, downloading, done
+        case offline(TimeInterval)
+        case failed(String)
+
+        /// Word for the combined status line ("2 training, 1 uploading").
+        var summaryKey: String {
+            switch self {
+            case .waiting: return "waiting"
+            case .uploading: return "uploading"
+            case .queued: return "queued"
+            case .loading: return "loading"
+            case .training: return "training"
+            case .downloading: return "downloading"
+            case .done: return "done"
+            case .offline: return "offline"
+            case .failed: return "failed"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .waiting: return "Waiting"
+            case .uploading(let f): return String(format: "Uploading %.0f %%", f * 100)
+            case .queued: return "Queued"
+            case .loading: return "Loading photos"
+            case .training: return "Training"
+            case .downloading: return "Downloading result"
+            case .done: return "Done"
+            case .offline(let t): return String(format: "Offline %.0f s", t)
+            case .failed(let m): return "Failed: \(m)"
+            }
+        }
     }
 
     /// Trains a scene as K blocks distributed over the devices and merges the results.
@@ -204,6 +242,13 @@ struct ComputeScheduler: Sendable {
             assignment[f, default: []] += bs
         }
         let tracker = BlockProgressTracker(count: blocks.count)
+        // Every block shows up straight away, on its device, before any work starts.
+        for (dev, bs) in assignment {
+            for b in bs {
+                progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: TrainingProgressSnapshot(step: 0, totalSteps: config.iterations),
+                                        overall: 0, stage: .waiting))
+            }
+        }
         return try await withThrowingTaskGroup(of: [(SceneBlock, GaussianCloud)].self) { group in
             for (dev, bs) in assignment {
                 group.addTask {
@@ -212,22 +257,41 @@ struct ComputeScheduler: Sendable {
                     for b in bs {
                         try Task.checkCancellation()
                         let cfg = Self.blockConfig(config, block: b, blocks: blocks)
-                        let report: @Sendable (TrainingProgressSnapshot) -> Void = { s in
+                        let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: cfg.iterations))
+                        let report: @Sendable (TrainingProgressSnapshot, BlockStage) -> Void = { s, stage in
+                            last.set(s)
                             let overall = tracker.update(b.index, s.fraction)
-                            progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: s, overall: overall))
+                            progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: s, overall: overall, stage: stage))
                         }
+                        let stageOnly: @Sendable (BlockStage) -> Void = { stage in report(last.get(), stage) }
                         let cloud: GaussianCloud
-                        if dev == "local", let local {
-                            cloud = try await local.train(dataset: dataset.restricted(to: Set(b.cameraIds)), config: cfg, progress: report)
-                        } else if let client = clients[dev] {
-                            // the worker may already hold the photos (split / masked / solved there): send only the rest
-                            if datasetId == nil {
-                                datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root)
-                            }
-                            cloud = try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
-                                                           datasetId: datasetId, progress: { report(TrainingProgressSnapshot($0)) })
-                        } else { throw PipelineError.unsupported("device \(dev) unavailable") }
+                        do {
+                            if dev == "local", let local {
+                                stageOnly(.loading)
+                                cloud = try await local.train(dataset: dataset.restricted(to: Set(b.cameraIds)), config: cfg,
+                                                              progress: { report($0, .training) })
+                            } else if let client = clients[dev] {
+                                // the worker may already hold the photos (split / masked / solved there): send only the rest
+                                if datasetId == nil {
+                                    stageOnly(.uploading(0))
+                                    datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root,
+                                                                               progress: { stageOnly(.uploading($0)) })
+                                }
+                                stageOnly(.queued)
+                                cloud = try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
+                                                               datasetId: datasetId, progress: { js in
+                                    let stage: BlockStage = js.state == .queued ? .queued : js.state == .loading ? .loading
+                                        : js.state == .completed ? .downloading : .training
+                                    report(TrainingProgressSnapshot(js), stage)
+                                }, onOffline: { stageOnly(.offline($0)) })
+                            } else { throw PipelineError.unsupported("device \(dev) unavailable") }
+                        } catch {
+                            if !(error is CancellationError) { stageOnly(.failed(error.localizedDescription)) }
+                            throw error
+                        }
                         _ = tracker.update(b.index, 1)
+                        var done = last.get(); done.step = max(done.step, done.totalSteps)
+                        report(done, .done)
                         results.append((b, cloud))
                     }
                     return results
@@ -239,6 +303,15 @@ struct ComputeScheduler: Sendable {
             return BlockMerger.merge(all)
         }
     }
+}
+
+/// Latest snapshot of one block, so stage-only updates (upload, queued, done) keep its numbers.
+final class LastSnapshot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TrainingProgressSnapshot
+    init(_ v: TrainingProgressSnapshot) { value = v }
+    func set(_ v: TrainingProgressSnapshot) { lock.lock(); value = v; lock.unlock() }
+    func get() -> TrainingProgressSnapshot { lock.lock(); defer { lock.unlock() }; return value }
 }
 
 final class BlockProgressTracker: @unchecked Sendable {
