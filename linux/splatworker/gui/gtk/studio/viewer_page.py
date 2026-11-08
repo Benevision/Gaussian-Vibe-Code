@@ -169,6 +169,10 @@ class ViewerPage(Gtk.Box):
             ("folder-pictures-symbolic", "Photos", "A folder of photos", lambda: np_("photos", None)),
             ("camera-video-symbolic", "Video", "Walk around the scene", lambda: np_("video", None)),
             ("preferences-system-network-symbolic", "360° video", "Equirectangular footage", lambda: np_("video360", None)),
+            ("image-x-generic-symbolic", "360° photos", "A folder of equirectangular photos",
+             lambda: np_("photos360", None)),
+            ("view-dual-symbolic", "Stereo", "Side-by-side, over-under or two-stream footage",
+             lambda: np_("stereo", None)),
             ("phone-symbolic", "iPhone capture", ".splatcapture with poses", lambda: np_("capture", None)),
             ("view-grid-symbolic", "COLMAP / Nerfstudio", "Posed images", lambda: np_("colmap", None)),
         ])

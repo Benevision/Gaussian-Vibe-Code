@@ -75,7 +75,7 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
 | Mac feature | Linux | Status |
 |---|---|---|
 | Sidebar: Viewer, iPhone Inbox, Compute, Models & Benchmarks, Settings Reference, Recent | `Adw.NavigationSplitView`: Viewer, Projects, Queue & Worker (the old Status / Jobs / Log / Connect pages, with a running / waiting badge), iPhone Inbox, Compute Devices, Models & Benchmarks, Settings Reference, Recent (12) | ✅ |
-| Home screen tiles (Photos, Video, 360°, iPhone LiDAR, Stereo, COLMAP/Nerfstudio, Open splat, Open dataset) | Viewer home page (no Stereo tile) | ✅ |
+| Home screen tiles (Photos, Video, 360°, iPhone LiDAR, Stereo, COLMAP/Nerfstudio, Open splat, Open dataset) | Viewer home page, incl. 360° photos and Stereo tiles | ✅ |
 | Drag & drop anything onto the window | splats open; videos / folders / captures / transforms.json / COLMAP start New Project | ✅ |
 | Toolbar: Home, New, Open, Reset view, Orientation menu, Navigate/Select, Inspector toggle | viewer header bar | ✅ |
 | Easy / Advanced mode | everything is shown; advanced training values sit in an "All training settings" expander | 🟡 |
@@ -111,21 +111,21 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
 | Crop box (sliders, Fit, Apply) | ✅ | ✅ |
 | Delete below opacity / larger than / isolated splats | numpy; isolated = grid-hashed neighbour count | ✅ |
 | Auto clean (invisible + seen by too few photos) | `census` job on the local worker (gsplat), plan = `studio/autoclean.py` (Mac rules) | ✅ code + tests with a fake backend; **gsplat census untested on a GPU** |
-| Mask editor (SAM 2 clicks, paint, track) | | ⏳ |
+| Mask editor (SAM 2 clicks, paint, track) | Projects → *Edit masks…* (`gui/gtk/studio/mask_editor.py`, model `studio/mask_edit.py`): clicks run `maskpreview` jobs on the worker (new optional task), *Track through all frames* runs `sam2_track`, paint out / back, undo; edits are the `splatprep-masks/manual` layer, stacked last, so they survive *Prepare again* | ✅ (SAM 2 untested on CUDA) |
 
 ### New Project (`source.*`, `sfm.*`, `mask.*`)
 
 | Mac feature | Linux | Status |
 |---|---|---|
 | Photos folder (resize, blur rejection), video (fps / target frames / sharpest / HDR), 360° video (views, FOV, drop floor), holdout | `studio/importers.py`, splatprep `frames` with `equirect` + rig hint for solving | ✅ |
-| 360° photos folder | | ⏳ |
+| 360° photos folder | `studio/equirect.py` cuts each 2:1 photo into the same views as 360° video (tables checked against splatprep), one photo and view at a time; nadir keep-masks; one rig group per photo for the camera solve | ✅ |
 | iPhone / headset `.splatcapture` | images + the manifest as `priors.json` (`priorMode` auto/solve = Refine capture poses) | 🟡 LiDAR depth supervision and points from depth ⏳ |
-| Stereo footage | | ⏳ (needs the Mac's stereo ingest in splatprep) |
+| Stereo footage | side-by-side, over-under, two streams in one file and two files are split on the worker (splatprep `frames` `stereo`, capability `stereo`, lazy decode of the other eye); stereo photos folders split here; container calibration (baseline, which stream is left, fisheye image circle → keep-mask); rig hint with the baseline, metric scale from the baseline, right-eye poses from the left, optional census block-matching depth (`studio/stereo.py`) | 🟡 Apple MV-HEVC spatial video ➖ (needs VideoToolbox); toed-out fisheye rigs (e.g. Arcturus) get scale and masks only, no rig hint / depth |
 | COLMAP project, Nerfstudio `transforms.json`, prepared dataset | COLMAP via splatprep's reader / exporter (distorted lenses are re-solved), Nerfstudio converted here | ✅ |
 | Camera solver: features × pair selection × mapper × lens model | splatprep `sfm` | ✅ (Apple Object Capture ➖) |
 | Masks: people & pets, moving things (SAM 2), sky → learned skybox, invert | splatprep `person`, `sam2_auto`, `sky` | ✅ ("keep main subject", "isolate one object", editable class list ⏳) |
 | Stacked masks + separate sky layer | every layer ANDed into `masks/` with 4 px growth; sky in `splatprep-sky/masks/` (photos with < 0.2 % sky dropped) | ✅ |
-| Mask fixed parts of the frame (static regions) | | ⏳ |
+| Mask fixed parts of the frame (static regions) | `studio/static_regions.py` (the Mac's rules): New Project switch (own layer `splatprep-masks/static`) and a mask-editor button | ✅ |
 | Presets + all `train.*` settings | `studio/presets.py`; "All training settings" expander (every worker TrainingConfig key) | ✅ (`train.bigSplatReg` is Mac-only: the gsplat trainer has no big-splat penalty) |
 | Start training when ready, stages with durations, live log | ✅ | ✅ |
 | Reuse earlier results (frames / masks / cameras) | "Prepare again" redoes everything; "Train again" reuses the dataset | 🟡 |
@@ -228,6 +228,14 @@ Install the build from the branch (after the CI build or a local `linux/flatpak/
     splat scene with ~300 cameras. A loose `.ply` leaves Coverage greyed out.
 14. **Turntable.** Export → Render video, 1080p 8 s: the row names the encoder (openh264enc from the Flatpak's
     openh264 extension, or vp9enc); the file plays; Cancel works; memory stays flat at 4K.
+16. **360° photos.** New Project → 360° photos folder with 2–3 equirect photos: 8+4+4 views each, the solve log
+    says it used the rig.
+17. **Stereo.** New Project → Stereo footage → `Arcturus Vision.mp4` with ~150 target frames: "left eye = stream
+    1", baseline 63.8 mm, fisheye lens, a "metric scale … ×" line; the circle edges masked in Edit masks. A
+    side-by-side clip with a baseline and Stereo depth on: the rig in the solve log (COLMAP / pycolmap ≥ 3.12),
+    `depth/*.bin` written and used in training.
+18. **Mask editor.** On a video project: click an object (a SAM 2 job on Queue & Worker, the mask in seconds),
+    Track through all frames, Save, Prepare again (edits kept); "Mask fixed parts of the frame" on drone footage.
 15. **Preferences → Studio.** Receiver on/off and port follow on the Inbox page; a navigation speed follows in the
     viewer inspector.
 
