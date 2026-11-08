@@ -76,8 +76,12 @@ final class TrainingSession {
 
     private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL) {
         // Fail fast with what to change, instead of running out of GPU memory partway through loading.
-        if let problem = MemoryForecast.macProblem(dataset: dataset, config: cfg) {
-            state = .failed(problem + " Or choose Both: the scene is split into blocks that each fit."); return
+        if MemoryForecast.macProblem(dataset: dataset, config: cfg) != nil {
+            // Too big for this Mac in one piece: train it here as blocks that each fit, then merge.
+            remoteMessage = "Too large for this Mac's memory in one piece — training it in blocks that fit, one after another."
+            deviceIds = ["local"]
+            startBoth(dataset: dataset, config: cfg, output: output, name: output.deletingPathExtension().lastPathComponent, forceBlocks: true)
+            return
         }
         state = .preparing("Loading images")
         let t = MetalTrainer(dataset: dataset, config: cfg)
@@ -181,8 +185,11 @@ final class TrainingSession {
             state = .failed("No Linux worker selected. Add one under Compute in the sidebar."); return
         }
         if let info = WorkerBrowser.shared.health[id]?.info,
-           let problem = MemoryForecast.workerProblem(info: info, dataset: dataset, config: cfg) {
-            state = .failed(problem); return
+           MemoryForecast.workerProblem(info: info, dataset: dataset, config: cfg) != nil {
+            remoteMessage = "Too large for \(info.name)'s memory in one piece — training it there in blocks that fit, one after another."
+            deviceIds = [id]
+            startBoth(dataset: dataset, config: cfg, output: output, name: name, forceBlocks: true)
+            return
         }
         state = .preparing("Uploading dataset")
         let host = client.baseURL.host ?? "the worker"
@@ -246,7 +253,8 @@ final class TrainingSession {
         }
     }
 
-    private func startBoth(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String) {
+    /// - Parameter forceBlocks: split even small scenes and even on one device (the job doesn't fit in one piece).
+    private func startBoth(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String, forceBlocks: Bool = false) {
         let browser = WorkerBrowser.shared
         let useLocal = deviceIds?.contains("local") ?? true
         var devices = useLocal ? [ComputeScheduler.localDevice()] : []
@@ -256,13 +264,13 @@ final class TrainingSession {
                 devices.append(ComputeScheduler.remoteDevice(w, info: info)); clients[w.id] = c
             }
         }
-        if clients.isEmpty {
+        if clients.isEmpty && !forceBlocks {
             remoteMessage = "None of the chosen workers is online — training on this Mac only."
             startLocal(dataset: dataset, config: cfg, output: output); return
         }
         // Splitting only pays off for big scenes: below 400 images a block still sees most of the scene,
         // so two half-blocks cost nearly as much as one whole run each. Train it whole on the fastest device.
-        if dataset.manifest.cameras.count < 400 {
+        if dataset.manifest.cameras.count < 400 && !forceBlocks {
             // Benchmarked machines: compare estimated wall time including the upload; otherwise raw throughput.
             let est = Dictionary(uniqueKeysWithValues: TrainingTimeEstimate.entries(dataset: dataset, config: cfg,
                                     workers: browser.workers.filter { clients[$0.id] != nil }).map { ($0.deviceId, $0.seconds) })
