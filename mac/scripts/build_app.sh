@@ -26,8 +26,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Splat Studio</string>
-  <key>CFBundleDisplayName</key><string>Splat Studio</string>
+  <key>CFBundleName</key><string>SplatWork</string>
+  <key>CFBundleDisplayName</key><string>SplatWork</string>
   <key>CFBundleIdentifier</key><string>com.example.splatstudio</string>
   <key>CFBundleExecutable</key><string>SplatStudio</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -37,12 +37,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
-  <key>NSLocalNetworkUsageDescription</key><string>Splat Studio receives captures from your iPhone and talks to Splat Worker GPU servers on your local network.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>SplatWork receives captures from your iPhone and talks to SplatWork Worker GPU servers on your local network.</string>
   <key>NSBonjourServices</key><array><string>_splatcapture._tcp</string><string>_splatworker._tcp</string></array>
   <key>CFBundleDocumentTypes</key><array>
     <dict><key>CFBundleTypeName</key><string>Gaussian Splat</string><key>CFBundleTypeRole</key><string>Editor</string>
       <key>CFBundleTypeExtensions</key><array><string>ply</string><string>spz</string><string>splat</string></array></dict>
-    <dict><key>CFBundleTypeName</key><string>Splat Capture</string><key>CFBundleTypeRole</key><string>Viewer</string>
+    <dict><key>CFBundleTypeName</key><string>SplatWork Capture</string><key>CFBundleTypeRole</key><string>Viewer</string>
       <key>CFBundleTypeExtensions</key><array><string>splatcapture</string></array><key>LSTypeIsPackage</key><true/></dict>
   </array>
 </dict></plist>

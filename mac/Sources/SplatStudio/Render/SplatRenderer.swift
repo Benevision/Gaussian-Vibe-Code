@@ -76,8 +76,7 @@ struct RenderStats: Equatable {
     var total: Int = 0
 }
 
-// The viewer is macOS-only; the types above are also compiled into the iPhone app's trainer (ios/project.yml).
-#if os(macOS)
+// Also compiled into the iPhone app (ios/project.yml): SplatWork Capture's viewer (SplatTrainKit/SplatViewer.swift).
 /// Draws a `SplatScene` into an MTKView: project → sort → instanced quads (+ line overlays).
 final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     let ctx: MetalContext
@@ -197,7 +196,11 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         lock.unlock()
 
         // Render resolution scaling.
+        #if os(macOS)
         let scale = CGFloat(st.renderScale) * (view.window?.backingScaleFactor ?? 2)
+        #else
+        let scale = CGFloat(st.renderScale) * view.contentScaleFactor
+        #endif
         let target = CGSize(width: max(1, view.bounds.width * scale), height: max(1, view.bounds.height * scale))
         if view.drawableSize != target { view.drawableSize = target }
 
@@ -370,4 +373,3 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         return tex
     }
 }
-#endif

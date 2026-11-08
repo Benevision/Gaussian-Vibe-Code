@@ -68,7 +68,7 @@ struct SendToMacView: View {
                     }
                 }
             } message: {
-                Text("Use this if your Mac doesn't appear automatically. The address and port are shown in Splat Studio › Receive from iPhone.")
+                Text("Use this if your Mac doesn't appear automatically. The address and port are shown in SplatWork › Receive from iPhone.")
             }
         }
     }
@@ -101,7 +101,7 @@ struct SendToMacView: View {
             if browser.macs.isEmpty {
                 HStack(spacing: 10) {
                     ProgressView()
-                    Text("Looking for Splat Studio…").foregroundStyle(.secondary)
+                    Text("Looking for SplatWork…").foregroundStyle(.secondary)
                 }
             }
             Button("Enter address manually…") { showManual = true }
@@ -112,7 +112,7 @@ struct SendToMacView: View {
             case .waiting(let m), .failed(let m):
                 Text(m).foregroundStyle(.orange)
             default:
-                Text("Open Splat Studio on your Mac and turn on “Receive from iPhone”. Both devices must be on the same Wi-Fi network.")
+                Text("Open SplatWork on your Mac and turn on “Receive from iPhone”. Both devices must be on the same Wi-Fi network.")
             }
         }
     }
@@ -130,7 +130,7 @@ struct SendToMacView: View {
         } header: {
             Text("Pairing code")
         } footer: {
-            Text("Only needed if “Require pairing code” is on in Splat Studio. The code is shown in its Receive from iPhone panel and is remembered for this Mac.")
+            Text("Only needed if “Require pairing code” is on in SplatWork. The code is shown in its Receive from iPhone panel and is remembered for this Mac.")
         }
     }
 
@@ -154,7 +154,7 @@ struct SendToMacView: View {
                     Text("\(sent.formattedBytes) of \(uploader.bytesTotal.formattedBytes)\(uploader.attempt > 1 ? " · attempt \(uploader.attempt)" : "")")
                 }
             } footer: {
-                Text("Keep Splat Capture open until the transfer finishes.")
+                Text("Keep SplatWork Capture open until the transfer finishes.")
             }
         case .done(let savedAs):
             Section {

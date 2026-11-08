@@ -3,7 +3,7 @@ import Network
 import Observation
 import os
 
-/// A Splat Studio instance advertising `_splatcapture._tcp` (PROTOCOL §5).
+/// A SplatWork instance advertising `_splatcapture._tcp` (PROTOCOL §5).
 struct DiscoveredMac: Identifiable, Hashable, Sendable {
     enum Target: Hashable, Sendable {
         case bonjour(NWEndpoint)
@@ -16,7 +16,7 @@ struct DiscoveredMac: Identifiable, Hashable, Sendable {
     let version: String?
 }
 
-/// Browses the local network for Macs running Splat Studio.
+/// Browses the local network for Macs running SplatWork.
 @MainActor
 @Observable
 final class MacBrowser {
@@ -65,7 +65,7 @@ final class MacBrowser {
         switch s {
         case .ready, .setup: state = .browsing
         case .waiting(let error):
-            state = .waiting("Can't search the local network (\(error.localizedDescription)). Check Settings › Privacy & Security › Local Network › Splat Capture, and that you're on the same Wi-Fi as your Mac.")
+            state = .waiting("Can't search the local network (\(error.localizedDescription)). Check Settings › Privacy & Security › Local Network › SplatWork, and that you're on the same Wi-Fi as your Mac.")
         case .failed(let error):
             state = .failed(error.localizedDescription)
             browser?.cancel()

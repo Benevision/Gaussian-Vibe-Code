@@ -67,7 +67,7 @@ enum FrameMasker {
         let list = frames.frames
         let counter = ProgressCounter(total: list.count)
         let model = options.model
-        let results: [String?] = try await parallelMap(list.count, maxConcurrent: 4) { i in
+        let results: [String?] = try await parallelMap(list.count, maxConcurrent: min(4, imageDecodeConcurrency)) { i in
             let f = list[i]
             defer { let n = counter.increment(); progress?(PipelineProgress(stage: stage, fraction: Double(n) / Double(list.count), message: f.image)) }
             let url = root.appendingPathComponent(f.image)
@@ -95,6 +95,9 @@ enum FrameMasker {
         var ranRemotely = false
         if let worker {
             do { try await runRemote(r, frames: frames, worker: worker, progress: progress); ranRemotely = true } catch {
+                #if !os(macOS)
+                throw error   // no local splatprep on iOS
+                #endif
                 progress?(PipelineProgress(stage: "Finding the sky", fraction: -1,
                                            message: "worker couldn't run the sky model (\(error.localizedDescription)) — on this Mac"))
             }
@@ -137,6 +140,9 @@ enum FrameMasker {
                 ranRemotely = true
             } catch {
                 // e.g. the worker hasn't installed the processing models yet: do it here instead.
+                #if !os(macOS)
+                throw error   // no local splatprep on iOS
+                #endif
                 progress?(PipelineProgress(stage: "Masking", fraction: -1,
                                            message: "worker couldn't run \(modelId) (\(error.localizedDescription)) — masking on this Mac"))
             }

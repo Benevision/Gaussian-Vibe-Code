@@ -11,7 +11,7 @@ struct SplatStudioApp: App {
     }
 
     var body: some Scene {
-        Window("Splat Studio", id: "main") {
+        Window("SplatWork", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 1080, minHeight: 680)
                 .onAppear {
@@ -23,6 +23,7 @@ struct SplatStudioApp: App {
                     for u in Set(urls.map { $0.standardizedFileURL }) { model.open(u) }
                     UISnapshots.run(model: model)
                     WorkerBrowser.shared.start()
+                    MacWorker.shared.restore()
                     if UserDefaults.standard.object(forKey: "receiveFromiPhone") as? Bool ?? true { CaptureReceiverHolder.shared.receiver.start() }
                     CaptureReceiverHolder.shared.receiver.onCapture = { _ in NSSound(named: "Purr")?.play() }
                 }

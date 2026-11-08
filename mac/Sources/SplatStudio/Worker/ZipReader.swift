@@ -1,7 +1,7 @@
 import Compression
 import Foundation
 
-/// Minimal ZIP extractor for dataset uploads from Splat Studio (`ditto -c -k --sequesterRsrc --keepParent`):
+/// Minimal ZIP extractor for dataset uploads from SplatWork (`ditto -c -k --sequesterRsrc --keepParent`):
 /// stored (0) and deflate (8) entries, data descriptors (sizes come from the central directory), ZIP64.
 /// Rejects encrypted entries, absolute paths and `..`; skips symlinks, `__MACOSX/` and AppleDouble `._*` files.
 enum ZipReader {
@@ -141,7 +141,7 @@ enum ZipReader {
             try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
             _ = fm.createFile(atPath: dst.path, contents: nil)
             let out = try FileHandle(forWritingTo: dst)
-            var crc = CRC32()
+            var crc = ZipCRC32()
             var produced: UInt64 = 0
             let sink: (Data) throws -> Void = { d in
                 produced += UInt64(d.count)
@@ -217,7 +217,7 @@ enum ZipReader {
 }
 
 extension Data {
-    // CRC32 is shared with ZipWriter.swift.
+    // ZipCRC32 is shared with ZipWriter.swift.
     /// Little-endian reads at an offset from `startIndex`.
     func readLE16(_ o: Int) -> UInt16 {
         let i = startIndex + o

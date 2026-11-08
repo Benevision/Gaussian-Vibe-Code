@@ -211,7 +211,7 @@ enum CaptureImporter {
         let counter = ProgressCounter(total: jobs.count)
         let imageOpts = options.images
         let allJobs = jobs
-        let cams: [DatasetCamera?] = try await parallelMap(allJobs.count) { i in
+        let cams: [DatasetCamera?] = try await parallelMap(allJobs.count, maxConcurrent: imageDecodeConcurrency) { i in
             let j = allJobs[i]
             defer { let n = counter.increment(); progress?(PipelineProgress(stage: stage, fraction: 0.8 * Double(n) / Double(allJobs.count), message: j.src.lastPathComponent)) }
             guard FileManager.default.fileExists(atPath: j.src.path) else { return nil }

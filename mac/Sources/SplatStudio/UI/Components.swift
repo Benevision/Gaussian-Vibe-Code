@@ -265,18 +265,4 @@ struct ActionCard: View {
     }
 }
 
-func formatCount(_ n: Int) -> String {
-    if n >= 1_000_000 { return String(format: "%.2f M", Double(n) / 1e6) }
-    if n >= 10_000 { return String(format: "%.0f k", Double(n) / 1e3) }
-    return "\(n)"
-}
-
-func formatDuration(_ s: Double) -> String {
-    guard s.isFinite, s >= 0 else { return "–" }
-    let t = Int(s)
-    if t >= 3600 { return String(format: "%d h %02d min", t / 3600, (t % 3600) / 60) }
-    if t >= 60 { return String(format: "%d min %02d s", t / 60, t % 60) }
-    return "\(t) s"
-}
-
-func formatBytes(_ b: Int) -> String { ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file) }
+// formatCount / formatDuration / formatBytes live in Pipeline/PipelineCommon.swift (shared with the iPhone app).

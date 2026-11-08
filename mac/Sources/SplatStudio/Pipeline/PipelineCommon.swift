@@ -451,6 +451,7 @@ enum ProcessUtil {
     /// Runs a command to completion, throwing with captured stderr on non-zero exit. Cancels (terminates) with the task.
     @discardableResult
     static func run(_ exe: String, _ args: [String], cwd: URL? = nil, environment: [String: String]? = nil) async throws -> String {
+        #if os(macOS)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = args
@@ -476,6 +477,9 @@ enum ProcessUtil {
             throw PipelineError.processFailed("\(URL(fileURLWithPath: exe).lastPathComponent) exited \(p.terminationStatus): \(String(decoding: errBox.data, as: UTF8.self).suffix(2000))")
         }
         return String(decoding: outBox.data, as: UTF8.self)
+        #else
+        throw PipelineError.unsupported("\(URL(fileURLWithPath: exe).lastPathComponent) can't run on iOS")
+        #endif
     }
 
     /// Thread-safe byte accumulator.
@@ -487,22 +491,46 @@ enum ProcessUtil {
     }
 }
 
-/// Zip helpers built on `/usr/bin/ditto` (preserves the directory as the single top-level entry).
+/// Zip helpers built on `/usr/bin/ditto` (preserves the directory as the single top-level entry). On iOS
+/// (no ditto) the pure-Swift ZipWriter (stored entries) / ZipReader (stored + deflate) from the iPhone app.
 enum ZipUtil {
     /// `ditto -c -k --keepParent <dir> <zip>`
     static func zip(directory: URL, to zip: URL) async throws {
         try? FileManager.default.removeItem(at: zip)
+        #if os(macOS)
         try await ProcessUtil.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", directory.path, zip.path])
+        #else
+        try await Task.detached { try ZipWriter.zipDirectory(directory, to: zip) }.value
+        #endif
     }
     /// Zips the *contents* of a directory (no top-level folder).
     static func zipContents(of directory: URL, to zip: URL) async throws {
         try? FileManager.default.removeItem(at: zip)
+        #if os(macOS)
         try await ProcessUtil.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", directory.path, zip.path])
+        #else
+        try await Task.detached { try ZipWriter.zipDirectory(directory, to: zip, keepParent: false) }.value
+        #endif
     }
     /// `ditto -x -k <zip> <dir>`
     static func unzip(_ zip: URL, to directory: URL) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        #if os(macOS)
         try await ProcessUtil.run("/usr/bin/ditto", ["-x", "-k", zip.path, directory.path])
+        #else
+        try await Task.detached { _ = try ZipReader.extract(zip, to: directory, maxBytes: UInt64.max) }.value
+        #endif
+    }
+}
+
+/// This device's display name ("Ben's MacBook Pro"; on iOS "This iPhone" — the real name needs an entitlement).
+enum LocalDeviceName {
+    static var current: String {
+        #if os(macOS)
+        return Host.current().localizedName ?? "This Mac"
+        #else
+        return "This iPhone"
+        #endif
     }
 }
 
@@ -537,6 +565,16 @@ extension FileManager {
     }
 }
 
+/// Parallel photo decodes for dataset writing: every core on a Mac; on iOS a few (HEIC goes through the
+/// shared hardware decoder, and each full-size decode is ~50 MB of the app's memory budget).
+var imageDecodeConcurrency: Int {
+    #if os(macOS)
+    return ProcessInfo.processInfo.activeProcessorCount
+    #else
+    return 2
+    #endif
+}
+
 /// Runs `body` for indices 0..<count with bounded parallelism, preserving result order. Cancellable.
 func parallelMap<T: Sendable>(_ count: Int, maxConcurrent: Int = ProcessInfo.processInfo.activeProcessorCount,
                               _ body: @escaping @Sendable (Int) throws -> T) async throws -> [T] {
@@ -562,3 +600,31 @@ extension KeyedDecodingContainer {
         ((try? decodeIfPresent(T.self, forKey: key)) ?? nil) ?? def
     }
 }
+
+extension ImageUtil {
+    /// Stored pixel size (EXIF orientation NOT applied).
+    static func pixelSizeRaw(_ url: URL) -> (Int, Int)? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return (w, h)
+    }
+}
+
+// MARK: - Display formatting
+
+func formatCount(_ n: Int) -> String {
+    if n >= 1_000_000 { return String(format: "%.2f M", Double(n) / 1e6) }
+    if n >= 10_000 { return String(format: "%.0f k", Double(n) / 1e3) }
+    return "\(n)"
+}
+
+func formatDuration(_ s: Double) -> String {
+    guard s.isFinite, s >= 0 else { return "–" }
+    let t = Int(s)
+    if t >= 3600 { return String(format: "%d h %02d min", t / 3600, (t % 3600) / 60) }
+    if t >= 60 { return String(format: "%d min %02d s", t / 60, t % 60) }
+    return "\(t) s"
+}
+
+func formatBytes(_ b: Int) -> String { ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file) }

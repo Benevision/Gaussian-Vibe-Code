@@ -1,10 +1,11 @@
 import Foundation
 import Metal
+import os
 import simd
 
-// Public facade over the Mac app's Metal trainer (mac/Sources/SplatStudio/Train, Core, Render, Shaders,
-// Formats/PLY.swift — compiled into this module unchanged). The iPhone app only sees these types, so the
-// shared sources can stay internal and in Swift 5 language mode.
+// Public facade over the Metal trainer for the worker server (Worker/WorkerEngine.swift). On iOS this is the
+// SplatTrainKit module's API (the trainer sources stay internal there, in Swift 5 mode); in SplatWork it is
+// compiled into the app and used by "act as a worker" (MacWorker).
 
 /// Progress of a running training job (mirrors the Mac's `TrainerStatus`).
 public struct TrainKitProgress: Sendable, Equatable {
@@ -45,6 +46,20 @@ public struct TrainKitBudget: Sendable, Equatable {
 }
 
 public enum TrainKit {
+    /// Memory a training job may still allocate: `os_proc_available_memory()` on iOS (the app's jetsam
+    /// limit), the GPU's recommended working set on a Mac (unified memory, minus what is already in use).
+    public static var availableMemory: UInt64 {
+        #if os(iOS)
+        let a = UInt64(os_proc_available_memory())
+        // 0 in the Simulator (no jetsam limit there): assume an 8 GB phone's typical app budget
+        return a > 0 ? a : min(ProcessInfo.processInfo.physicalMemory / 2, 5 << 30)
+        #else
+        guard let d = MTLCreateSystemDefaultDevice() else { return ProcessInfo.processInfo.physicalMemory / 2 }
+        let ws = d.recommendedMaxWorkingSetSize, used = UInt64(d.currentAllocatedSize)
+        return ws > used ? ws - used : 0
+        #endif
+    }
+
     /// GPU name, e.g. "Apple A18 Pro".
     public static var gpuName: String {
         guard let d = MTLCreateSystemDefaultDevice() else { return "Apple GPU" }
@@ -151,7 +166,7 @@ public final class TrainKitJob: @unchecked Sendable {
     private var cancelled = false
 
     /// - Parameters:
-    ///   - configJSON: the job's `TrainingConfig` as sent by Splat Studio (tolerant decoding, missing keys = defaults).
+    ///   - configJSON: the job's `TrainingConfig` as sent by SplatWork (tolerant decoding, missing keys = defaults).
     ///   - availableBytes: memory the app may still allocate (`os_proc_available_memory()`).
     public init(datasetRoot: URL, configJSON: Data?, availableBytes: UInt64) throws {
         self.datasetRoot = datasetRoot

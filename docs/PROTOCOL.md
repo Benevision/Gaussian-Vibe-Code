@@ -1,12 +1,12 @@
-# Splat Studio — shared formats & network protocols
+# SplatWork — shared formats & network protocols
 
 This document is the contract between the three apps:
 
 | App | Folder | Role |
 |---|---|---|
-| **Splat Studio** (macOS) | `mac/` | Viewer, editor, dataset preparation, Metal training, client for remote workers, receiver for iPhone captures |
-| **Splat Capture** (iOS) | `ios/` | Records LiDAR + ARKit-posed image sequences, sends them to the Mac |
-| **Splat Worker** (Linux) | `linux/` | Optional CUDA training server the Mac can offload jobs to |
+| **SplatWork** (macOS) | `mac/` | Viewer, editor, dataset preparation, Metal training, client for remote workers, receiver for iPhone captures |
+| **SplatWork Capture** (iOS) | `ios/` | Records LiDAR + ARKit-posed image sequences, sends them to the Mac |
+| **SplatWork Worker** (Linux) | `linux/` | Optional CUDA training server the Mac can offload jobs to |
 
 All JSON is UTF-8, `camelCase` keys, numbers as JSON numbers. Unknown keys MUST be ignored (forward compatibility).
 
@@ -67,7 +67,7 @@ Notes
 
 ## 2. Prepared training dataset (`dataset.json`) — Mac → Worker
 
-Splat Studio converts every source (photos, video, 360°, captures, COLMAP, Nerfstudio) into this single representation before training. It is also what gets uploaded to a remote worker.
+SplatWork converts every source (photos, video, 360°, captures, COLMAP, Nerfstudio) into this single representation before training. It is also what gets uploaded to a remote worker.
 
 ```
 dataset/
@@ -169,7 +169,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 ## 4. Worker HTTP API — Mac ↔ Linux
 
 * Default port **7878**, plain HTTP on the LAN (optionally behind TLS reverse proxy).
-* Discovery: the worker advertises Bonjour/mDNS service type **`_splatworker._tcp`**, TXT record `version=1`, `gpu=<name>`, `auth=1|0`, and (worker ≥ 1.3.10) `addrs=<ip>:<kind>,…` listing its LAN addresses preferred first (`ethernet` before `wifi`). `GET /v1/info` returns the same list as `"addresses": [{"address":"192.168.0.113","kind":"ethernet"}, …]`. Splat Studio moves a discovered worker onto its first ethernet address that answers, falls back to the others if that address stops answering, and leaves manually added workers on the address the user typed. A discovered worker can be hidden from the list (Compute page) and added manually instead.
+* Discovery: the worker advertises Bonjour/mDNS service type **`_splatworker._tcp`**, TXT record `version=1`, `gpu=<name>`, `auth=1|0`, and (worker ≥ 1.3.10) `addrs=<ip>:<kind>,…` listing its LAN addresses preferred first (`ethernet` before `wifi`). `GET /v1/info` returns the same list as `"addresses": [{"address":"192.168.0.113","kind":"ethernet"}, …]`. SplatWork moves a discovered worker onto its first ethernet address that answers, falls back to the others if that address stops answering, and leaves manually added workers on the address the user typed. A discovered worker can be hidden from the list (Compute page) and added manually instead.
 * Auth: if the worker has a token configured every request needs `Authorization: Bearer <token>`. Unauthenticated → `401`.
 * Errors: non-2xx with body `{"error": "message"}`.
 
@@ -207,7 +207,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 
 ## 5. Capture transfer — iPhone → Mac
 
-Splat Studio listens (while the app is open and "Receive from iPhone" is enabled) and advertises Bonjour service type **`_splatcapture._tcp`** with TXT `name=<Mac name>`, `version=1`.
+SplatWork listens (while the app is open and "Receive from iPhone" is enabled) and advertises Bonjour service type **`_splatcapture._tcp`** with TXT `name=<Mac name>`, `version=1`.
 
 * `GET /v1/hello` → `{"name":"Ben's MacBook Pro","app":"Splat Studio","version":1}`
 * `POST /v1/captures` — body: zip of the `.splatcapture` bundle, headers `Content-Type: application/zip`, `X-Capture-Name: <url-encoded name>`, optional `X-Pairing-Code: <6 digits>`.

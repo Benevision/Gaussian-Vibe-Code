@@ -1,9 +1,11 @@
 import Foundation
 import Metal
 import os
-import SplatTrainKit
+#if canImport(SplatTrainKit)
+import SplatTrainKit   // iPhone app; on the Mac TrainKit.swift is part of the app itself
+#endif
 
-/// `JobStatus` as Splat Studio's WorkerClient decodes it (docs/PROTOCOL.md §4).
+/// `JobStatus` as SplatWork's WorkerClient decodes it (docs/PROTOCOL.md §4).
 struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
     var jobId: String
     var kind = "train"
@@ -30,10 +32,22 @@ struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// The worker's state and request handling. Thread-safe (one lock); training runs one job at a time on a
-/// private serial queue. Knows nothing about UIKit — the app layer (`ComputeWorker`) drives it.
+/// private serial queue. Knows nothing about UIKit / AppKit — the app layer drives it: `ComputeWorker` on the
+/// iPhone (Compute screen), `MacWorker` in SplatWork ("act as a worker"). Shared by both apps.
 final class WorkerEngine: @unchecked Sendable {
+    #if os(iOS)
     static let workerVersion = "ios-1.0"
-    static let log = Logger(subsystem: "SplatCapture", category: "worker")
+    static let kind = "iphone"
+    static let backend = "Metal (SplatWork Capture, iPhone)"
+    static let deviceLabel = "the iPhone"
+    #else
+    static let workerVersion = "mac-1.0"
+    static let kind = "mac"
+    static let backend = "Metal (SplatWork, Mac)"
+    static let deviceLabel = "the Mac"
+    #endif
+    static let logSubsystem = Bundle.main.bundleIdentifier ?? "SplatWorker"
+    static let log = Logger(subsystem: WorkerEngine.logSubsystem, category: "worker")
 
     struct Info: Encodable {
         struct GPU: Encodable { var name: String; var memoryMB: Int; var freeMemoryMB: Int }
@@ -41,13 +55,13 @@ final class WorkerEngine: @unchecked Sendable {
         var version = 1
         var workerVersion = WorkerEngine.workerVersion
         var gpus: [GPU]
-        var backend = "Metal (Splat Capture, iPhone)"
+        var backend = WorkerEngine.backend
         var busy: Bool
         var queueLength: Int
         var capabilities = ["train"]
         var models: [String] = []
         var auth = false
-        var kind = "iphone"
+        var kind = WorkerEngine.kind
     }
 
     private final class Job {
@@ -105,7 +119,7 @@ final class WorkerEngine: @unchecked Sendable {
     func info() -> Info {
         let s = snapshot()
         let total = Int(ProcessInfo.processInfo.physicalMemory / 1_048_576)
-        let free = Int(os_proc_available_memory() / 1_048_576)
+        let free = Int(TrainKit.availableMemory / 1_048_576)
         return Info(name: name, gpus: [.init(name: gpuName, memoryMB: total, freeMemoryMB: free)],
                     busy: s.contains { $0.isRunning }, queueLength: s.filter { $0.state == "queued" }.count)
     }
@@ -125,7 +139,7 @@ final class WorkerEngine: @unchecked Sendable {
         let needed = len * 2 + 300 << 20
         if free < needed {
             return HTTPBodyPolicy(toFile: true, maxBytes: 0,
-                                  reject: .error(507, "not enough storage on the iPhone: upload needs ~\(needed >> 20) MB, \(free >> 20) MB free"))
+                                  reject: .error(507, "not enough storage on \(Self.deviceLabel): upload needs ~\(needed >> 20) MB, \(free >> 20) MB free"))
         }
         return HTTPBodyPolicy(toFile: true, maxBytes: len)
     }
@@ -214,7 +228,7 @@ final class WorkerEngine: @unchecked Sendable {
         }
     }
 
-    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (Splat Studio uploads
+    /// Phone storage is tight: a new upload replaces datasets no unfinished job uses. (SplatWork uploads
     /// once per device and reuses the id for every block it sends, so older ones are done with.)
     private func purgeUnusedDatasets() {
         lock.lock()
@@ -313,7 +327,7 @@ final class WorkerEngine: @unchecked Sendable {
         lock.unlock()
         onChange?()
 
-        let available = UInt64(os_proc_available_memory())
+        let available = TrainKit.availableMemory
         let trainer: TrainKitJob
         do {
             trainer = try TrainKitJob(datasetRoot: dsRoot, configJSON: configJSON, availableBytes: available)

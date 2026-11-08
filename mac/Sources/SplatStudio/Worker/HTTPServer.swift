@@ -75,7 +75,7 @@ final class HTTPServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "splatworker.http")
     private var listener: NWListener?
     private let onState: @Sendable (State) -> Void
-    static let log = Logger(subsystem: "SplatCapture", category: "worker-http")
+    static let log = Logger(subsystem: WorkerEngine.logSubsystem, category: "worker-http")
 
     init(port: UInt16, service: NWListener.Service?, tempDir: URL, policy: @escaping PolicyProvider,
          onState: @escaping @Sendable (State) -> Void, handler: @escaping Handler) {
@@ -275,7 +275,7 @@ private final class HTTPConnection: @unchecked Sendable {
         headers["Content-Type"] = r.contentType
         headers["Content-Length"] = String(length)
         headers["Connection"] = "close"
-        headers["Server"] = "SplatCapture-worker"
+        headers["Server"] = "SplatWork-worker/\(WorkerEngine.kind)"
         for (k, v) in headers.sorted(by: { $0.key < $1.key }) { head += "\(k): \(v)\r\n" }
         head += "\r\n"
         switch r.body {

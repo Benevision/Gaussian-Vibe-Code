@@ -1,4 +1,4 @@
-# Splat Studio — user guide
+# SplatWork — user guide
 
 Every control in the app has an ⓘ button with a full explanation. The same text is collected in [SETTINGS.md](SETTINGS.md) and in **Help → Settings Reference** (⇧⌘/, searchable). This guide covers the workflow; look up individual settings there.
 
@@ -11,8 +11,8 @@ cd mac && ./scripts/build_app.sh && open "build/Splat Studio.app"
 ```
 
 **Optional extras:**
-- **Splat Capture** on an iPhone (LiDAR models give the best results): build it from `ios/` (see `ios/README.md`).
-- **Splat Worker** on a Linux PC with an NVIDIA GPU, for faster training and processing: see [section 10](#10-setting-up-the-linux-worker).
+- **SplatWork Capture** on an iPhone (LiDAR models give the best results): build it from `ios/` (see `ios/README.md`).
+- **SplatWork Worker** on a Linux PC with an NVIDIA GPU, for faster training and processing: see [section 10](#10-setting-up-the-linux-worker).
 - **Models pack**: learned feature matchers and segmentation models, installed from **Models & Benchmarks**.
 
 **Easy and Advanced.** The segmented control in the toolbar switches modes at any time. **Easy** shows quality presets and the few choices that matter. **Advanced** shows every parameter. Switching keeps your values.
@@ -24,7 +24,7 @@ The sidebar has these pages:
 | Page | What it is for |
 |---|---|
 | **Viewer** | The 3D view plus the inspector (View, Edit, Train, Export tabs). Recent files are listed below it. |
-| **iPhone Inbox** | Captures sent from Splat Capture. Shows the receive switch, the pairing code, the manual address, and the projects and splats made from each capture. |
+| **iPhone Inbox** | Captures sent from SplatWork Capture. Shows the receive switch, the pairing code, the manual address, and the projects and splats made from each capture. |
 | **Compute** | This Mac, Linux workers (found by Bonjour or added by address), their running and recent jobs, the **Benchmark**, and manual worker setup. The green dot means a worker is online. |
 | **Models & Benchmarks** | Install the Models pack and compare models (registration rate, pose accuracy, reprojection error, time, memory, licence). Some models (SuperPoint, MASt3R, the VGGT-1B weights) have non-commercial licences. |
 | **Settings Reference** | Every setting with its default, range and explanation. |
@@ -85,12 +85,12 @@ While a project is being prepared, the progress screen shows overall progress, e
 - Move slowly and keep plenty of overlap. Walk around the subject at two or three heights.
 - Avoid motion blur (good light, faster shutter). Don't zoom.
 - Moving people and changing light cause floaters. Use masks, or capture when it's quiet.
-- iPhone with LiDAR: use Splat Capture. You get poses and depth (no SfM needed), the scene is in metres, and depth supervision cleans up walls and floors.
+- iPhone with LiDAR: use SplatWork Capture. You get poses and depth (no SfM needed), the scene is in metres, and depth supervision cleans up walls and floors.
 
 ### iPhone captures
 
 1. On the Mac, open **iPhone Inbox** and make sure **Receive from iPhone** is on. Note the pairing code.
-2. On the iPhone, record in Splat Capture, then **Library → Send to Mac**. Enter the code if asked. If the Mac doesn't appear, enter the manual address shown in the Inbox.
+2. On the iPhone, record in SplatWork Capture, then **Library → Send to Mac**. Enter the code if asked. If the Mac doesn't appear, enter the manual address shown in the Inbox.
 3. In the Inbox, click **Create splat…** next to the capture.
 
 ## 4. Training
@@ -107,7 +107,7 @@ While a project is being prepared, the progress screen shows overall progress, e
 Start with Quick preview to check the camera solve and coverage. In Advanced mode, changing any value switches the preset to Custom. *Reset to preset* and *Copy as JSON* are in the Train tab.
 
 Defaults that matter (all in the Settings Reference):
-- **Per-photo colour correction** is on. It switches itself off when every photo has the same recorded exposure (Splat Capture locks exposure). Exports bake in the average correction.
+- **Per-photo colour correction** is on. It switches itself off when every photo has the same recorded exposure (SplatWork Capture locks exposure). Exports bake in the average correction.
 - **Ignore moving objects** is off by default. Turn it on for scenes with people walking through. It is skipped automatically when photos are too far apart to tell movers from scenery.
 - **Long-axis splitting**, the **needle-splat penalty** and the **big-splat penalty** are on. They stop large scenes collapsing and reduce streaks and fog in front of cameras.
 
@@ -115,7 +115,7 @@ Defaults that matter (all in the Settings Reference):
 
 The **Compute device** picker has three choices:
 - **This Mac**: the Metal trainer, no setup.
-- **Linux worker**: Splat Worker on your PC, with the live preview streamed back.
+- **Linux worker**: SplatWork Worker on your PC, with the live preview streamed back.
 - **Both**: each stage goes to the faster machine. Scenes with 400 images or more (Advanced: *Split into blocks above*) are split into spatial blocks that train on both machines and are merged. Smaller scenes train whole on the machine estimated to finish first.
 
 After you run the Benchmark (see [section 9](#9-compute-and-the-benchmark)), the line under the picker shows the estimated time on each machine, including the upload, and marks the fastest.
@@ -172,7 +172,7 @@ Speeds, smoothing and what a two-finger trackpad drag does are under **View → 
 
 **Training cameras.** *Show training cameras* draws the solved cameras as frustums. They should follow the path you walked. Double-click a camera in the Cameras list to look through it. Opening a splat from a project's `outputs/` folder loads that project's cameras. When a dataset is open, the viewer starts at a training camera, because splats look best from where they were captured.
 
-**Up direction and level.** Splat files don't record which way is up. Use the toolbar's **Orientation** menu (or View → Orientation) to flip upside down, pick an axis, or rotate until level and choose **Level to current view**. The choice is remembered per file, and Export can bake it in. Datasets built in Splat Studio are levelled automatically: iPhone captures use ARKit gravity, drone sets with GPS use the GPS vertical, and PC-trained results record their up direction in the PLY.
+**Up direction and level.** Splat files don't record which way is up. Use the toolbar's **Orientation** menu (or View → Orientation) to flip upside down, pick an axis, or rotate until level and choose **Level to current view**. The choice is remembered per file, and Export can bake it in. Datasets built in SplatWork are levelled automatically: iPhone captures use ARKit gravity, drone sets with GPS use the GPS vertical, and PC-trained results record their up direction in the PLY.
 
 ## 6. Editing
 
@@ -235,7 +235,7 @@ Full details: [`linux/README.md`](../linux/README.md).
    flatpak install --user https://benevision.github.io/Gaussian-Vibe-Code/flatpak/splatworker.flatpakref
    ```
    You can instead build it from `linux/flatpak` with `bash build.sh`. Copy the project to a folder in your home directory first, because USB drives are often mounted noexec.
-2. **Open Splat Worker.** The setup assistant (**Set Up…**) finds your NVIDIA driver and lists the downloads (about 2.7 GB, needing about 6 GB of disk). It then installs a private Python, PyTorch and gsplat. You can cancel and retry, and it resumes from the failed step. A failed setup leaves the working runtime untouched.
+2. **Open SplatWork Worker.** The setup assistant (**Set Up…**) finds your NVIDIA driver and lists the downloads (about 2.7 GB, needing about 6 GB of disk). It then installs a private Python, PyTorch and gsplat. You can cancel and retry, and it resumes from the failed step. A failed setup leaves the working runtime untouched.
    - Driver 570+ (RTX 20 to RTX 50): PyTorch 2.7 + CUDA 12.8 + **gsplat 1.6** (a development build).
    - Driver 520–569: PyTorch 2.4 + gsplat 1.5.3.
    - No NVIDIA GPU: a processing-only runtime.
@@ -255,7 +255,7 @@ Install the processing models on the worker (from the Mac's Compute page) to run
 - **360° video uses a lot of disk.** An 8K 360° clip decodes to about 10,000 frames, and each frame becomes several views. One test produced 4.4 GB of frames. Leave room on both machines for the video, the frames and the outputs:
   - With *Split videos on the worker*, the frames are made on the PC and kept there between steps. The Mac still downloads a copy in the background, and that download resumes when you reopen the project.
   - The worker keeps uploaded datasets until they are deleted, and caps uploads at 20 GB (40 GB once extracted) by default. Change the cap in the worker's Settings (maximum upload size) or with `--max-upload-gb` / `--max-extracted-gb`.
-- **A feature says it needs a newer worker**, or is quietly done on the Mac instead: update Splat Worker (`flatpak update`; the worker app also shows a banner when a new version is out). Examples: video splitting needs 1.3, and keeping frames on the worker between steps needs 1.3.8. Settings, token and GPU runtime are kept across updates.
+- **A feature says it needs a newer worker**, or is quietly done on the Mac instead: update SplatWork Worker (`flatpak update`; the worker app also shows a banner when a new version is out). Examples: video splitting needs 1.3, and keeping frames on the worker between steps needs 1.3.8. Settings, token and GPU runtime are kept across updates.
 - **Worker setup fails or CUDA is not available after a driver update:** run `flatpak update` so the Flatpak NVIDIA extension matches the host driver exactly, then restart the app. See the Flatpak troubleshooting section in `linux/README.md`.
 - **The Mac doesn't find the worker:** check the firewall (TCP 7878, UDP 5353), use the same subnet, or add the worker by IP. A "Needs token" status means the token is missing or wrong.
 - **Camera solving placed only a few photos:** use more overlapping images, try another camera solver, or try without masks (masks can hide most of each photo).
