@@ -126,14 +126,14 @@ def test_pairing_lockout_and_name_race(tmp_path, monkeypatch):
 
     assert code_matches("123 456", "123456") and not code_matches("123457", "123456")
     now = [0.0]
-    lk = Lockout(per_host=3, total=5, window=60, clock=lambda: now[0])
-    for _ in range(3):
-        assert not lk.blocked("a")
-        lk.failed("a")
-    assert lk.blocked("a") and not lk.blocked("b")
+    lk = Lockout(per_host=3, global_cap=5, window=60, clock=lambda: now[0])
+    toks = [lk.admit("a") for _ in range(3)]          # admitted and counted at once (parallel requests)
+    assert all(toks) and lk.admit("a") is None and lk.blocked("a") and not lk.blocked("b")
+    lk.succeeded(toks[0])                              # a right code is forgiven
+    assert lk.admit("a") is not None and lk.admit("a") is None
+    assert lk.admit("b") and lk.admit("c") and lk.admit("d") is None   # global cap (5) reached: everybody waits
     now[0] = 61
-    assert not lk.blocked("a")
-    assert lk.failed("b") is False and lk.failed("b") is True     # 5th miss overall: replace the code
+    assert not lk.blocked("a") and lk.admit("c") is not None
 
     # two uploads named alike at once get different folders
     import io
@@ -162,9 +162,8 @@ def test_pairing_lockout_and_name_race(tmp_path, monkeypatch):
     assert len({c.path for c in out}) == 3
     changed = []
     r.on_code_changed = changed.append
-    old = r.code
     r.new_code()
-    assert changed and (changed[0] == r.code) and (r.code != old or len(r.code) == 6)
+    assert changed == [r.code] and len(r.code) == 6
 
 
 def test_cli_convert_and_info(tmp_path, capsys):

@@ -83,36 +83,42 @@ def list_captures(inbox: Path) -> List[Capture]:
 
 
 class Lockout:
-    """Wrong pairing codes: after ``per_host`` misses within ``window`` s a sender is refused for ``window`` s;
-    after ``total`` misses from anyone the code is replaced (a 6-digit code can't be guessed in 20 tries)."""
+    """Wrong pairing codes. Every attempt is admitted and recorded in one locked step (so parallel requests from
+    one sender can't all slip through), and forgiven only when the code was right. A sender with ``per_host``
+    misses in the last ``window`` s is refused; once ``global_cap`` misses from anyone pile up in that window,
+    everybody is refused until they age out (spreading guesses over many addresses doesn't help either). The code
+    is never changed because of misses, so nobody on the network can rotate the real phone's code."""
 
-    def __init__(self, per_host: int = 5, total: int = 20, window: float = 600.0, clock=time.monotonic):
-        self.per_host, self.total, self.window, self.clock = per_host, total, window, clock
-        self._fails: dict = {}
-        self._total = 0
+    def __init__(self, per_host: int = 5, global_cap: int = 30, window: float = 600.0, clock=time.monotonic):
+        self.per_host, self.global_cap, self.window, self.clock = per_host, global_cap, window, clock
+        self._events: list = []          # [time, host] per unforgiven attempt
         self._lock = threading.Lock()
+
+    def _prune(self) -> None:
+        now = self.clock()
+        self._events = [e for e in self._events if now - e[0] < self.window]
+
+    def admit(self, host: str):
+        """A token when this attempt may go ahead (already counted as a miss), None when refused."""
+        with self._lock:
+            self._prune()
+            if len(self._events) >= self.global_cap or \
+                    sum(1 for e in self._events if e[1] == host) >= self.per_host:
+                return None
+            token = [self.clock(), host]
+            self._events.append(token)
+            return token
+
+    def succeeded(self, token) -> None:
+        """The code was right: this attempt doesn't count."""
+        with self._lock:
+            self._events = [e for e in self._events if e is not token]
 
     def blocked(self, host: str) -> bool:
         with self._lock:
-            now = self.clock()
-            recent = [t for t in self._fails.get(host, []) if now - t < self.window]
-            self._fails[host] = recent
-            return len(recent) >= self.per_host
-
-    def failed(self, host: str) -> bool:
-        """Record a miss; True when the code should be replaced."""
-        with self._lock:
-            self._fails.setdefault(host, []).append(self.clock())
-            self._total += 1
-            if self._total >= self.total:
-                self._total = 0
-                return True
-            return False
-
-    def reset(self) -> None:
-        with self._lock:
-            self._fails.clear()
-            self._total = 0
+            self._prune()
+            return len(self._events) >= self.global_cap or \
+                sum(1 for e in self._events if e[1] == host) >= self.per_host
 
 
 def code_matches(given: str, code: str) -> bool:
@@ -180,15 +186,15 @@ class CaptureReceiver:
                     return self._json(404, {"error": "not found"})
                 host = self.client_address[0]
                 if receiver.require_code:
-                    if receiver.lockout.blocked(host):
+                    token = receiver.lockout.admit(host)
+                    if token is None:
                         self.close_connection = True
                         return self._json(429, {"error": "too many wrong pairing codes; try again in 10 minutes"})
                     if not code_matches(self.headers.get("X-Pairing-Code", ""), receiver.code):
-                        if receiver.lockout.failed(host):
-                            receiver.new_code()
                         time.sleep(0.5)              # slow guessing down a little more
                         self.close_connection = True
                         return self._json(403, {"error": "wrong or missing pairing code"})
+                    receiver.lockout.succeeded(token)
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
                 except ValueError:
@@ -251,8 +257,7 @@ class CaptureReceiver:
         return cap
 
     def new_code(self) -> str:
-        self.code = new_code()
-        self.lockout.reset()
+        self.code = new_code()           # only on the user's request; misses never rotate it
         if self.on_code_changed:
             self.on_code_changed(self.code)
         return self.code
