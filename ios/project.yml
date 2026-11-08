@@ -90,6 +90,7 @@ targets:
       - path: ../mac/Sources/SplatStudio/Formats/PLY.swift
     settings:
       base:
+        SWIFT_INSTALL_OBJC_HEADER: NO   # pure Swift; XcodeGen's header-copy script fails under script sandboxing
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         SWIFT_OPTIMIZATION_LEVEL: "-O"
