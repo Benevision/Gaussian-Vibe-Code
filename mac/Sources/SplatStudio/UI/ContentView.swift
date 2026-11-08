@@ -35,11 +35,7 @@ struct ContentView: View {
             return true
         }
         .overlay { if dropTargeted { DropOverlay() } }
-        .onChange(of: model.viewer.showCameras) { model.updateCameraLines() }
-        .onChange(of: model.viewer.cropEnabled) { model.updateCameraLines() }
-        .onChange(of: model.viewer.showCropBox) { model.updateCameraLines() }
-        .onChange(of: model.viewer.cropMin) { model.updateCameraLines() }
-        .onChange(of: model.viewer.cropMax) { model.updateCameraLines() }
+        .modifier(CameraLineUpdates(model: model))
     }
 
     private var subtitle: String {
@@ -394,5 +390,19 @@ private struct RemoteWatchBanner: View {
         if watch.splats > 0 { parts.append("\(watch.splats.formatted()) splats") }
         parts.append(watch.previewStep.map { "preview from step \($0.formatted())" } ?? "waiting for the first preview")
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Redraws camera / crop-box lines when their viewer settings change (split out of `ContentView.body`, whose
+/// modifier chain was too long for the compiler to type-check in time on older toolchains).
+private struct CameraLineUpdates: ViewModifier {
+    let model: AppModel
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: model.viewer.showCameras) { model.updateCameraLines() }
+            .onChange(of: model.viewer.cropEnabled) { model.updateCameraLines() }
+            .onChange(of: model.viewer.showCropBox) { model.updateCameraLines() }
+            .onChange(of: model.viewer.cropMin) { model.updateCameraLines() }
+            .onChange(of: model.viewer.cropMax) { model.updateCameraLines() }
     }
 }

@@ -257,7 +257,11 @@ final class MetalTrainer: @unchecked Sendable {
 
     private func allocPixelBuffers() {
         let hw = maxPixels
-        let tiles = views.map { (($0.width + 15) / 16) * (($0.height + 15) / 16) }.max() ?? 1
+        var tiles = 1
+        for v in views {
+            let tx: Int = (v.width + 15) / 16, ty: Int = (v.height + 15) / 16
+            tiles = max(tiles, tx * ty)
+        }
         ranges = ctx.buffer(tiles * 8, label: "ranges")
         img = ctx.buffer(hw * 16, label: "img"); finalT = ctx.buffer(hw * 4, label: "finalT")
         nContrib = ctx.buffer(hw * 4, label: "nContrib"); gradImg = ctx.buffer(hw * 16, label: "gradImg")
