@@ -188,17 +188,119 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `GET /v1/jobs/{id}/preview.ply` | – | full snapshot PLY (worker 1.0 and test backends only), `404` otherwise |
 | `GET /v1/jobs/{id}/result.ply` | – | final PLY once `state == "completed"` |
 | `GET /v1/jobs/{id}/log` | – | `text/plain` training log |
+| `POST /v1/jobs/{id}/prioritize` | – | `JobStatus`; moves a **queued** job to the front (priority above every other queued job); `409` otherwise; desktop app on the worker PC only (`403` for others) (worker ≥ 1.4.0, capability `priority`) |
+| `POST /v1/census` | `{"datasetId","jobId":<completed train job>}` or, from the desktop app on the worker PC only, `{"datasetId","plyPath":"/abs/scene.ply"}` | `{"jobId":"c…"}` — Auto clean census, a job of kind `census` (worker ≥ 1.4.0, capability `census`) |
+| `GET /v1/jobs/{id}/census.npz` | – | numpy `.npz`: `peak` (float32, per splat: largest per-photo summed blending weight, in native pixels) and `views` (uint32: photos where that sum ≥ 0.02) |
+
+**Shared queue (worker ≥ 1.4.0).** One job per GPU at a time; a free GPU takes the queued job with the highest
+`priority`, oldest first; a running job is never pre-empted. `JobStatus` gains `"priority"` (int) and `"origin"`
+(`"local"` for the desktop app on the worker PC, else the client's address). Only that app may submit `"priority"`
+(in the `/v1/jobs`, `/v1/process` and `/v1/census` bodies, 0–1000): it uses 1 so the person at that PC goes ahead of
+jobs queued by other machines; everybody else's requests queue at 0.
+
+**Pause / resume and checkpoints (worker ≥ 1.4.0, capability `pause`).**
+
+| Method & path | Body | Response |
+|---|---|---|
+| `POST /v1/jobs/{id}/pause` | – | `JobStatus`. A **queued** job (any kind) is held back at once (`state` `"paused"`, never started). A **running training** job is asked to stop: the trainer saves its full state (splats, optimizer moments, densification state, RNGs, step) in the job folder and exits, and the job becomes `"paused"` (`message` is `"pausing"` meanwhile) — the GPU goes to the next queued job. `409` for finished jobs and running processing / census jobs; no-op when already paused |
+| `POST /v1/jobs/{id}/resume` | – | `JobStatus`; a **paused** job goes back into the queue (normal priority rules) and training continues from the saved step; `409` while it is still pausing or if it isn't paused |
+| `POST /v1/jobs/{id}/checkpoint?wait=<s>` | – | `JobStatus`; asks a running training job to write `checkpoint.ply` of its current splats without stopping. With `wait` (≤ 300 s) the answer comes once it is written (or the job stops); `checkpointStep` says which step it holds. A paused job already has one (written when it paused). `409` for jobs that are queued, finished or not training |
+| `GET /v1/jobs/{id}/checkpoint.ply` | – | the latest checkpoint (3DGS PLY, same layout as `result.ply`); header `X-Checkpoint-Step`; `404` until one was written |
+
+Who may pause or checkpoint a job: only the client that submitted it (its address equals the job's `origin`;
+the desktop app on the worker PC counts as `"local"`); others get `403`. The desktop app doesn't park other
+computers' jobs, since their apps may have no Resume button. It may resume any paused job. A client whose address
+changed since it submitted (e.g. Wi-Fi → ethernet) can't pause that job. A paused job of another computer
+resumes by itself after an hour and when the worker restarts; a paused job of the desktop app is cancelled
+(its saved state removed) after 14 days. `JobStatus.pausedAt` (epoch seconds) says when it was paused.
+
+A job taken from the queue is `"loading"` straight away; a pause or cancel that arrives before it really starts
+holds or stops it without running it.
+
+`"paused"` is neither active nor finished: `JobStatus` keeps `step`, `elapsedSeconds` (carried on after resuming)
+and `checkpointStep`; `etaSeconds` is `null`; the job keeps its dataset (`DELETE /v1/datasets/{id}` → `409`);
+`cancel` and `DELETE` work as for a queued job. Paused jobs of the desktop app survive a worker restart, and a resumed job that was
+running when the worker stopped returns to `"paused"` (from its last pause) instead of `"failed"`. Clients that
+don't know the state see an unknown, non-terminal value and keep polling (the Mac's `JobState` is tolerant).
+
+**The desktop app on the worker PC.** "Local" means more than a 127.0.0.1 connection (SSH tunnels, `tailscale serve`
+and reverse proxies arrive from loopback too): the app generates a secret at every launch, passes it to the server
+it starts in the environment (`SPLATWORK_LOCAL_SECRET`, read once and removed), and sends it with every request as
+`X-SplatWork-Local: <secret>` from 127.0.0.1. Without both, a request is remote. A server started without the
+secret (e.g. `splatworker serve --allow-local-datasets` by hand) keeps these endpoints off and doesn't advertise
+`local`.
+
+**The desktop app's jobs, seen from other computers (worker ≥ 1.4.0).** They stay in `GET /v1/jobs` (so queue
+estimates still work) with their state, progress, priority and GPU, but `name` is `"Job on this PC"`,
+`datasetId` is `""` and `message` / `outputDatasetId` are null; their files (log, previews, result, census,
+checkpoint, cameras, output) answer `404`, and `cancel` / `DELETE` answer `403`. Other clients' jobs show
+`origin` `"remote"` instead of their address (a client still sees its own). Anybody may still cancel or delete
+other computers' jobs, as before.
+
+**Local datasets (worker ≥ 1.4.0, `--allow-local-datasets` + the secret, capability `local`, the desktop app only).**
+`POST /v1/datasets/local` `{"path":"/abs/folder"}` → `{"datasetId",…,"path"}` registers a folder *in place* (nothing
+copied; deleting the dataset never touches the folder), and `POST /v1/datasets/{id}/export-local`
+`{"path":"/abs/folder"}` → `{"files":n}` merges a dataset (e.g. a processing job's `outputDatasetId`) into a folder
+with hard links — only into a folder registered with `/v1/datasets/local` (or below it); `/`, the home folder and
+anything holding the worker's data can't be registered. The desktop app on the worker PC (SplatWork Node) uses these
+to run its New Project pipeline on its own project folders without uploading. Other clients never see these
+datasets: `GET /v1/datasets` leaves them out (and never lists the folder path), and jobs, compose, archive and
+delete answer `404` for them.
+
+**Mask editor clicks (worker ≥ 1.4.0, capability `maskpreview`).** `POST /v1/process` also accepts splatprep's
+`"task": "maskpreview"` (it existed in splatprep for the Mac's local mask server; the worker now lets it through
+`validate_request`): one image, SAM 2 point / box prompts → `outputDir/preview.png`.
+
+```jsonc
+{"task": "maskpreview", "imagesDir": "images", "outputDir": "_click",
+ "previewImage": "000012.jpg",                       // required in practice; relative, no ".."
+ "maskPrompts": [{"image": "000012.jpg", "points": [[x, y, 1], [x, y, 0]]}],   // required, non-empty; image pixels
+ "previewObjectMask": true}                          // 255 on the object (default: keep convention, object = 0)
+```
+
+SplatWork Node's mask editor sends one per click (the model loads per job, a few seconds on the PC) and tracks the
+clicked objects with the existing `masks` task (`"maskModel": "sam2_track"`, `"maskPrompts"`, `"replaceMasks": true`).
+Its edits are stored as a mask layer of the project's dataset (`splatprep-masks/manual/masks` 255 = keep,
+`…/restore` 255 = keep whatever other layers say), so they survive "Prepare again".
+
+**Stereo footage (worker ≥ 1.4.0, capability `stereo`).** A `task: frames` request may carry an optional
+`"stereo"` object (absent = an ordinary video, as before); see `tools/splatprep/stereo.py`:
+
+```jsonc
+"stereo": {"layout": "auto" | "sideBySide" | "topBottom" | "dualStream" | "separateFiles",
+           "rightVideo": "_right-eye.mp4",   // separateFiles: relative to the dataset, no ".."
+           "rightTimeOffset": 0.0, "swapEyes": false, "anamorphic": null,
+           "baseline": 0.064,                // metres, overrides calibration
+           "horizontalFOV": 90.0}            // one eye, degrees, when there is no calibration / focal metadata
+```
+
+`auto` follows the Mac (`StereoVideoIngest.detect`): two equal video streams → `dualStream`; aspect / name →
+side-by-side (anamorphic when the frame is narrower than 2.6:1) or top-bottom. Output: `images/<frame>_L.jpg` and
+`_R.jpg`; `frames.json` entries carry `group` + `eye` (+ `focalPx/cx/cy` when known) and the file gets
+`"stereoLayout"` and `"rig"` (the Mac's `StereoRig`: `baseline`, `leftIntrinsics`, `rightIntrinsics`, `origin`, plus
+`parallel` — the eyes can be treated as a rectified pair — and `lens`). Arcturus Vision files carry their factory
+calibration (`offlineCal` container tag): the baseline, per-eye intrinsics, which stream is the left eye, and the
+fisheye image circle (written as `masks/<frame>_L.png` keep masks). Only the chosen frames' other eye is decoded on
+demand (two decoded frames held). Apple MV-HEVC spatial video needs VideoToolbox and stays Mac-only.
+
+**Rigs with a baseline (worker ≥ 1.4.0).** In an `sfm` request's `rig.groups`, a value may be
+`{"R": R, "t": [x, y, z]}` instead of `R` (`t` = camera centre in the rig frame, metres). Sensors are told apart by
+rotation and centre, views of one frame with a baseline are matched with each other, and the rig config holds the
+translation, so a stereo pair maps in metres. SplatWork Node sends this for parallel stereo pairs with a known
+baseline (left = `I`, right = `{"R": I, "t": [b, 0, 0]}`). An older splatprep can't parse such a group, so the
+Node sends it only to its own worker (same version).
 
 ```jsonc
 // JobStatus
 {
   "jobId": "j1", "name": "Kitchen",
-  "state": "queued",            // queued | loading | training | completed | failed | cancelled
+  "state": "queued",            // queued | loading | training | completed | failed | cancelled (| paused, capability "pause")
   "step": 1200, "totalSteps": 30000,
   "loss": 0.051, "psnr": 24.3,  // psnr is the latest eval/holdout or train-batch PSNR
   "numGaussians": 812345,
   "elapsedSeconds": 64.2, "etaSeconds": 1540.0,
   "previewStep": 1000,          // step of latest preview.ply, null if none
+  "checkpointStep": 900,        // step of checkpoint.ply (capability "pause"), null/absent if none
   "message": "optional human readable status or error"
 }
 ```
@@ -291,6 +393,11 @@ The Mac app is always the coordinator. Per project the user picks **This Mac**, 
 * Stage placement: each stage (frame extraction, masking, SfM, training) is assigned to the device with the best benchmark score that supports the chosen model (e.g. LightGlue on CUDA, Object Capture on the Mac).
 * Block-parallel training for large scenes: the scene is partitioned into K spatial blocks (CityGaussian/VastGaussian style). Each block is a training job with `TrainingConfig.region = {"min":[x,y,z],"max":[x,y,z],"margin":0.15}`: only gaussians inside the expanded box are kept/densified, and only cameras that see the block are used. Blocks are distributed across devices proportional to measured throughput; the Mac merges results keeping, for each block, gaussians whose centre lies inside the *un-expanded* box.
 * Workers accept `TrainingConfig.region` (optional) and `TrainingConfig.cameraIds` (optional list restricting which cameras are used).
+* SplatWork Node's Studio (worker ≥ 1.4.0) coordinates the same way with only the existing endpoints: it prepares
+  on its own GPU, then trains on one chosen worker or block-parallel on itself + every online worker (SplatWork
+  Nodes, Macs with "Act as a worker", iPhones), using the Mac's split, placement and merge rules. Uploads carry a
+  `Content-Length`; on `chain` workers the photos stay as a dataset of their own and later runs compose
+  `dataset.json` / masks / points over them; Macs and iPhones get one full upload per run, shared by their blocks.
 
 ---
 

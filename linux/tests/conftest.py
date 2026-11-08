@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from splatworker.backends import Backend, JobCancelled, JobFailed  # noqa: E402
+from splatworker.backends import Backend, JobCancelled, JobFailed, JobPaused  # noqa: E402
 from splatworker.ply import write_gaussian_ply  # noqa: E402
 
 
@@ -110,9 +110,13 @@ def dataset_zip(dataset_dir):
 class FakeBackend(Backend):
     """In-thread backend that mimics the trainer's callbacks without torch."""
 
+    pausable = True
+
     def __init__(self):
         self.mode = "ok"            # ok | fail | block
         self.steps = 5
+        self.step_delay = 0.0       # seconds per step (lets tests pause / checkpoint mid-run)
+        self.resumed_from = []      # start step of every train run (0 = fresh)
         self.started = threading.Event()
         self.release = threading.Event()
         self.contexts = []
@@ -132,6 +136,14 @@ class FakeBackend(Backend):
             return run_processing(ctx.dataset_dir, ctx.spec, ctx.job_dir,
                                   progress_cb=ctx.status, log=ctx.log,
                                   should_stop=ctx.cancel_event.is_set)
+        if ctx.kind == "census":
+            self.started.set()
+            from splatworker.studio.formats import load
+
+            n = load(ctx.spec["plyPath"], with_skybox=False).count
+            np.savez(ctx.job_dir / "census.npz", peak=np.linspace(0, 1, n, dtype=np.float32),
+                     views=np.arange(n, dtype=np.uint32))
+            return {"splats": n}
         ctx.status(state="loading", message="loading dataset")
         ctx.log("fake trainer loading")
         self.started.set()
@@ -144,15 +156,31 @@ class FakeBackend(Backend):
             raise JobFailed("CUDA out of memory (fake)")
         ctx.status(state="training", message="training")
         n = 10
-        for step in range(1, self.steps + 1):
+        resume = ctx.job_dir / "resume.json"      # the fake's stand-in for the trainer's resume.pt
+        start = json.loads(resume.read_text())["step"] if resume.is_file() else 0
+        self.resumed_from.append(start)
+        for step in range(start + 1, self.steps + 1):
             if ctx.cancel_event.is_set():
                 raise JobCancelled()
+            if ctx.checkpoint_event.is_set():
+                ctx.checkpoint_event.clear()
+                write_fake_ply(ctx.job_dir / "checkpoint.ply", n)
+                ctx.checkpoint(step - 1)
+            if ctx.pause_event.is_set():
+                write_fake_ply(ctx.job_dir / "checkpoint.ply", n)
+                ctx.checkpoint(step - 1)
+                resume.write_text(json.dumps({"step": step - 1}))
+                (ctx.job_dir / "resume.pt").write_bytes(b"fake")   # what the server looks for
+                raise JobPaused(step - 1)
             ctx.status(step=step, loss=0.1 / step, psnr=20.0 + step, numGaussians=n,
                        etaSeconds=float(self.steps - step))
             if step == 2:
                 write_fake_ply(ctx.job_dir / "preview.ply", n)
                 ctx.preview(step)
+            if self.step_delay:
+                time.sleep(self.step_delay)
         write_fake_ply(ctx.job_dir / "result.ply", n)
+        resume.unlink(missing_ok=True)
         return {"numGaussians": n, "psnr": 25.0, "loss": 0.02}
 
 

@@ -23,9 +23,10 @@ class WorkerApiError(Exception):
 
 class WorkerClient:
     def __init__(self, base_url: str, token: Optional[str] = None, timeout: float = 5.0,
-                 opener: Optional[Callable[..., Any]] = None):
+                 opener: Optional[Callable[..., Any]] = None, local_secret: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.local_secret = local_secret     # the desktop app's per-launch secret (X-SplatWork-Local)
         self.timeout = timeout
         self._open = opener or urllib.request.urlopen
 
@@ -33,6 +34,8 @@ class WorkerClient:
         req = urllib.request.Request(self.base_url + path, method=method)
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
+        if self.local_secret:
+            req.add_header("X-SplatWork-Local", self.local_secret)
         try:
             return self._open(req, timeout=timeout or self.timeout)
         except urllib.error.HTTPError as e:

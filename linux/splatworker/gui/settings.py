@@ -130,7 +130,7 @@ class AppSettings:
 
     def serve_args(self, paths: AppPaths) -> List[str]:
         """Arguments after ``splatworker serve``. The token goes via a file, never argv."""
-        args = ["--port", str(self.port),
+        args = ["--port", str(self.port), "--allow-local-datasets",
                 "--data-dir", str(self.effective_data_dir(paths)),
                 "--name", self.effective_name(),
                 "--max-upload-gb", repr(float(self.max_upload_gb)),

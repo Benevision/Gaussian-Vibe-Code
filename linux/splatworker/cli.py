@@ -1,4 +1,4 @@
-"""Command line interface: ``splatworker serve | train | gen-token | info``."""
+"""Command line interface: ``splatworker serve | train | gen-token | info | convert | splat-info | benchmark``."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Optional
+
+from .config import LOCAL_SECRET_ENV
 
 from . import __version__
 
@@ -51,7 +53,13 @@ def cmd_serve(args) -> int:
         advertise_ips=args.advertise_ip or None,
         max_upload_bytes=int(args.max_upload_gb * 1024 ** 3),
         max_extracted_bytes=int(args.max_extracted_gb * 1024 ** 3),
+        allow_local_datasets=bool(getattr(args, "allow_local_datasets", False)),
+        # read once and removed, so jobs' subprocesses don't inherit it
+        local_secret=os.environ.pop(LOCAL_SECRET_ENV, None) or None,
     )
+    if settings.allow_local_datasets and not settings.local_enabled:
+        logging.getLogger("splatworker").info(
+            "--allow-local-datasets without %s: the desktop-app-only endpoints stay off", LOCAL_SECRET_ENV)
     log = logging.getLogger("splatworker")
     if token is None:
         log.warning("no token configured: anyone on the network can use this worker "
@@ -132,6 +140,29 @@ def cmd_gen_token(args) -> int:
     return 0
 
 
+def cmd_convert(args) -> int:
+    """Splat format conversion (the Mac's ``--convert``): PLY / compressed PLY / .splat / .spz, skybox kept."""
+    from .studio import formats
+
+    g = formats.load(args.input)
+    out = formats.save(g, args.output, fmt=args.format, sh_degree=args.sh)
+    print(f"{g.count} splats → {out} ({out.stat().st_size / 1e6:.1f} MB)")
+    return 0
+
+
+def cmd_splat_info(args) -> int:
+    from .studio import formats
+
+    g = formats.load(args.file)
+    lo, hi = g.robust_bounds(0.0)
+    print(json.dumps({"file": str(args.file), "format": formats.format_for_path(args.file), "splats": g.count,
+                      "shDegree": g.sh_degree, "antialiased": g.antialiased,
+                      "up": None if g.up is None else [float(x) for x in g.up], "skybox": g.skybox is not None,
+                      "bounds": [[float(x) for x in lo], [float(x) for x in hi]],
+                      "meanOpacity": float(g.opacities.mean()) if g.count else None}, indent=1))
+    return 0
+
+
 def cmd_info(args) -> int:
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     from .gpu import backend_description, list_gpus, training_available
@@ -145,6 +176,66 @@ def cmd_info(args) -> int:
         "models": available_models(),
         "gpus": list_gpus(),
     }, indent=1))
+    return 0
+
+
+def cmd_benchmark(args) -> int:
+    """The standard training benchmark (the Mac's Compute → Benchmark / ``--benchmark``) on a running worker:
+    by default this PC's (SplatWork Node's server, or ``splatworker serve``). Saved to benchmarks.json."""
+    from urllib.parse import urlparse
+
+    from .gui.paths import AppPaths
+    from .studio import benchmark
+    from .studio.client import ApiError, Client
+
+    paths = AppPaths.from_env()
+    config_dir = Path(args.config_dir).expanduser() if args.config_dir else paths.config_dir
+    url, token = args.url, _read_token(args)
+    if url is None:
+        port, require = 7878, True
+        try:
+            gs = json.loads(paths.settings_file.read_text(encoding="utf-8"))
+            port = int(gs.get("port", port))
+            require = bool(gs.get("require_token", True))
+        except (OSError, ValueError, TypeError):
+            pass
+        url = f"http://127.0.0.1:{port}"
+        if token is None and require and paths.token_file.is_file():
+            token = paths.token_file.read_text(encoding="utf-8").strip() or None
+    host = (urlparse(url).hostname or "").lower()
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    spec = benchmark.BenchmarkSpec(width=320, height=240, views=8, splats=20_000, steps=200, measure_from=50) \
+        if args.quick else benchmark.BenchmarkSpec()
+    scene = Path(args.scene_dir).expanduser() if args.scene_dir else paths.cache_dir / (
+        benchmark.SCENE_DIR + ("-quick" if args.quick else ""))
+    client = Client(url, token, timeout=60)
+    last = {"m": None}
+
+    def progress(msg, frac):
+        if msg != last["m"]:
+            last["m"] = msg
+            print(f"[{frac * 100:5.1f} %] {msg}", file=sys.stderr, flush=True)
+    try:
+        rec = benchmark.run(client, scene, spec, local=False, progress=progress, poll=args.poll,
+                            device_id="local" if loopback else url.rstrip("/"),
+                            name="This PC" if loopback else None, tmp_dir=paths.cache_dir / "tmp")
+    except KeyboardInterrupt:
+        print("interrupted (the benchmark job may still be running on the worker)", file=sys.stderr)
+        return 130
+    except (ApiError, benchmark.BenchmarkError) as e:
+        print(f"benchmark failed: {getattr(e, 'message', None) or e}", file=sys.stderr)
+        if isinstance(e, ApiError) and e.status is None:
+            print("Is the worker running? Start SplatWork Node (or `splatworker serve`), or pass --url.",
+                  file=sys.stderr)
+        return 1
+    if loopback:
+        rec["uploadMBps"] = rec["downloadMBps"] = None       # loopback "network" speed means nothing
+    if args.quick:
+        print("(quick run: a tiny scene, not comparable - not saved)", file=sys.stderr)
+    else:
+        benchmark.save_benchmark(config_dir, rec)
+        print(f"saved to {config_dir / benchmark.FILE}", file=sys.stderr)
+    print(json.dumps(rec, indent=1))
     return 0
 
 
@@ -169,6 +260,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-upload-gb", type=float, default=20.0)
     s.add_argument("--max-extracted-gb", type=float, default=40.0)
     s.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug"])
+    s.add_argument("--allow-local-datasets", action="store_true",
+                   help="enable the endpoints for SplatWork Node's desktop app on this PC (local folders as "
+                        "datasets, queue order); it must also pass its per-launch secret in $" + LOCAL_SECRET_ENV)
     s.set_defaults(func=cmd_serve)
 
     t = sub.add_parser("train", help="train a dataset directory locally")
@@ -189,6 +283,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     i = sub.add_parser("info", help="print GPU / backend information")
     i.set_defaults(func=cmd_info)
+
+    c = sub.add_parser("convert", help="convert a splat between PLY, compressed PLY, .splat and .spz")
+    c.add_argument("input")
+    c.add_argument("output", help="format from the extension (.ply, .compressed.ply, .splat, .spz)")
+    c.add_argument("--format", choices=["ply", "compressed.ply", "splat", "spz"])
+    c.add_argument("--sh", type=int, choices=[0, 1, 2, 3], help="SH degree to keep")
+    c.set_defaults(func=cmd_convert)
+
+    si = sub.add_parser("splat-info", help="print what a splat file contains")
+    si.add_argument("file")
+    si.set_defaults(func=cmd_splat_info)
+
+    b = sub.add_parser("benchmark", help="measure training speed (the standard SplatWork benchmark) on a running "
+                                         "worker, by default this PC's; saved to benchmarks.json")
+    b.add_argument("--url", help="worker URL (default: this PC's SplatWork Node server, from its settings)")
+    b.add_argument("--token", help="bearer token (default: SplatWork Node's own token file)")
+    b.add_argument("--token-file")
+    b.add_argument("--config-dir", help="where benchmarks.json is kept (default: the app's config dir)")
+    b.add_argument("--scene-dir", help="where the synthetic scene is built and cached")
+    b.add_argument("--quick", action="store_true", help="tiny scene and 200 steps: checks it works, not saved")
+    b.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)
+    b.set_defaults(func=cmd_benchmark)
     return p
 
 

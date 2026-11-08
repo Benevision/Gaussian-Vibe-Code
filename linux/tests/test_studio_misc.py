@@ -1,0 +1,195 @@
+import numpy as np
+
+from splatworker.studio import autoclean
+from splatworker.studio.presets import PRESETS, ProjectOptions, training_config
+
+
+def test_autoclean_rules_match_mac():
+    n = 1000
+    peak = np.full(n, 0.5, np.float32)
+    views = np.full(n, 40, np.uint32)
+    peak[:100] = 0.01                  # invisible
+    views[100:150] = 5                 # floaters: < 25 % of 40
+    p = autoclean.plan(peak, views, np.full(n, 3.0))
+    assert p.invisible == 100 and p.few_views == 50 and p.typical_views == 40
+    assert p.remove[:150].all() and not p.remove[150:].any()
+    q = autoclean.plan(peak, views, np.full(n, 3.0), include_few_views=False)
+    assert q.few_views == 0 and q.total == 100
+
+
+def test_autoclean_small_capture_skips_few_views():
+    peak = np.full(100, 0.5, np.float32)
+    views = np.full(100, 8, np.uint32)
+    views[:10] = 1
+    p = autoclean.plan(peak, views, np.zeros(100))
+    assert p.typical_views == 0 and p.few_views == 0
+
+
+def test_presets_and_requests():
+    assert set(PRESETS) == {"preview", "balanced", "high", "ultra"}
+    cfg = training_config("ultra", {"seed": 7})
+    assert cfg["iterations"] == 40_000 and cfg["maxGaussians"] == 3_000_000 and cfg["seed"] == 7
+    o = ProjectOptions(name="x", source_kind="video360", source="/v.mp4", views_360=8, target_frames=200)
+    r = o.frames_request("v.mp4")
+    assert r["equirect"]["rings"][0]["count"] == 8 and r["videoOptions"]["targetFrameCount"] == 200
+    s = o.sfm_request(True, True, True)
+    assert s["masksDir"] == "masks" and s["priorMode"] == "auto"
+    assert ProjectOptions.from_dict({**o.to_dict(), "unknown": 1}) == o
+    from splatworker.config import TrainingConfig
+
+    TrainingConfig.from_dict(o.train_config())       # every key is valid for the worker
+
+
+def test_catalog_in_sync_with_mac():
+    import importlib.util
+    from pathlib import Path
+
+    import pytest
+
+    from splatworker.studio import catalog
+
+    root = Path(__file__).resolve().parents[2]
+    swift = root / "mac/Sources/SplatStudio/Core/SettingsCatalog.swift"
+    if not swift.is_file():
+        pytest.skip("Mac sources not present")
+    spec = importlib.util.spec_from_file_location("gen_catalog", root / "linux/scripts/gen_catalog.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    assert gen.parse(swift.read_text(encoding="utf-8")) == catalog.load(), \
+        "catalog.json is stale: run python3 linux/scripts/gen_catalog.py"
+    assert catalog.doc("viewer.displayMode")["group"] == "Viewer"
+    assert any(s["id"] == "edit.autoClean" for s in catalog.search("floaters"))
+    # every Studio training control is documented
+    from splatworker.studio.presets import TRAIN_FIELDS
+
+    missing = [cid for cid, *_ in TRAIN_FIELDS if catalog.doc(cid) is None]
+    assert not missing, missing
+
+
+def test_prefs_lenient(tmp_path):
+    import json
+
+    from splatworker.studio.prefs import StudioPrefs
+
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"fov": 75, "invert_vertical": "yes", "background": [1, 1], "x": 1}))
+    s = StudioPrefs.load(p)
+    assert s.fov == 75.0 and s.invert_vertical is False and s.background == [0.06, 0.06, 0.07]
+    s.save(p)
+    assert StudioPrefs.load(p) == s
+
+
+def test_capture_receiver(tmp_path):
+    import io
+    import json
+    import urllib.request
+    import zipfile
+
+    import pytest
+
+    from splatworker.studio.inbox import CaptureReceiver, list_captures
+
+    got = []
+    r = CaptureReceiver(tmp_path / "inbox", "Test PC", port=17879, on_received=got.append, mdns=False)
+    assert r.start()
+    try:
+        base = f"http://127.0.0.1:{r.port}"
+        hello = json.loads(urllib.request.urlopen(base + "/v1/hello").read())
+        assert hello == {"name": "Test PC", "app": "SplatWork", "version": 1}
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("Kitchen.splatcapture/manifest.json", json.dumps({"format": "splatcapture", "frames": [{}]}))
+            z.writestr("Kitchen.splatcapture/images/000000.jpg", b"jpeg")
+        body = buf.getvalue()
+
+        def post(code):
+            req = urllib.request.Request(base + "/v1/captures", data=body, method="POST", headers={
+                "Content-Type": "application/zip", "X-Capture-Name": "Kitchen%20one", "X-Pairing-Code": code})
+            return urllib.request.urlopen(req)
+        with pytest.raises(urllib.error.HTTPError) as e:
+            post("000000" if r.code != "000000" else "111111")
+        assert e.value.code == 403
+        res = json.loads(post(r.code[:3] + " " + r.code[3:]).read())
+        assert res == {"ok": True, "savedAs": "Kitchen one.splatcapture"}
+        caps = list_captures(tmp_path / "inbox")
+        assert len(caps) == 1 and caps[0].frames == 1 and got and got[0].name == "Kitchen one"
+        assert (caps[0].path / "images" / "000000.jpg").read_bytes() == b"jpeg"
+    finally:
+        r.stop()
+
+
+def test_pairing_lockout_and_name_race(tmp_path, monkeypatch):
+    import threading
+
+    from splatworker.studio import inbox
+    from splatworker.studio.inbox import CaptureReceiver, Lockout, code_matches
+
+    assert code_matches("123 456", "123456") and not code_matches("123457", "123456")
+    now = [0.0]
+    lk = Lockout(per_host=3, global_cap=5, window=60, clock=lambda: now[0])
+    toks = [lk.admit("a") for _ in range(3)]          # admitted and counted at once (parallel requests)
+    assert all(toks) and lk.admit("a") is None and lk.blocked("a") and not lk.blocked("b")
+    lk.succeeded(toks[0])                              # a right code is forgiven
+    assert lk.admit("a") is not None and lk.admit("a") is None
+    assert lk.admit("b") and lk.admit("c") and lk.admit("d") is None   # global cap (5) reached: everybody waits
+    now[0] = 61
+    assert not lk.blocked("a") and lk.admit("c") is not None
+
+    # two uploads named alike at once get different folders
+    import io
+    import json
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("manifest.json", json.dumps({"frames": []}))
+    data = buf.getvalue()
+    r = CaptureReceiver(tmp_path / "inbox", "PC", mdns=False)
+    r.inbox.mkdir(parents=True)
+    real_move = inbox.shutil.move
+
+    def slow_move(a, b):
+        import time
+        time.sleep(0.05)
+        return real_move(a, b)
+    monkeypatch.setattr(inbox.shutil, "move", slow_move)
+    out = []
+    ts = [threading.Thread(target=lambda: out.append(r._receive(io.BytesIO(data), len(data), "Same", "x")))
+          for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len({c.path for c in out}) == 3
+    changed = []
+    r.on_code_changed = changed.append
+    r.new_code()
+    assert changed == [r.code] and len(r.code) == 6
+
+
+def test_cli_convert_and_info(tmp_path, capsys):
+    import json
+
+    from splatworker.cli import main
+    from splatworker.studio import formats
+    from splatworker.studio.splats import GaussianCloud
+
+    n = 300
+    rot = np.zeros((n, 4))
+    rot[:, 0] = 1
+    g = GaussianCloud(np.random.default_rng(0).normal(size=(n, 3)), np.full((n, 3), -3.0), rot, np.zeros(n),
+                      np.zeros((n, 4, 3)))
+    formats.save(g, tmp_path / "a.ply")
+    assert main(["convert", str(tmp_path / "a.ply"), str(tmp_path / "b.spz"), "--sh", "0"]) == 0
+    assert formats.load(tmp_path / "b.spz").sh_degree == 0
+    capsys.readouterr()
+    assert main(["splat-info", str(tmp_path / "b.spz")]) == 0
+    info = json.loads(capsys.readouterr().out)
+    assert info["splats"] == n and info["format"] == "spz"
+
+
+def test_train_fields_exist_in_worker_config():
+    from splatworker.config import TrainingConfig
+    from splatworker.studio.presets import TRAIN_FIELDS
+
+    base = TrainingConfig().to_dict()
+    assert [k for _, k, _, _ in TRAIN_FIELDS if k not in base] == []

@@ -41,7 +41,7 @@ class HelpPage(Gtk.ScrolledWindow):
         for g in self._groups:
             self.page.remove(g)
         self._groups = []
-        addr = addresses[0] if addresses else "<this computer's IP address>"
+        addr = addresses[0] if addresses else "this computer's IP address"
 
         g1 = Adw.PreferencesGroup(title="1. Start the server here",
                                   description="Flip the big switch on the Status page. The status dot turns "

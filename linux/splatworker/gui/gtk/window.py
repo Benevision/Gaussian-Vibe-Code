@@ -13,6 +13,7 @@ from ..server_process import FAILED, RUNNING, STARTING, STOPPED, STOPPING
 from .common import (action_row, alert, append_text, copy_text, icon_button, label, run_in_thread,
                      scrolled_page, text_view, toast)
 from .help_page import HelpPage
+from .studio.shell import StudioShell
 from .widgets import GpuRow, JobRow, empty_clients_row, qr_available, show_job_log, show_qr
 
 POLL_MS = 2000
@@ -25,9 +26,9 @@ STATE_TEXT = {
 }
 
 
-class MainWindow(Adw.ApplicationWindow):
+class MainWindow(StudioShell, Adw.ApplicationWindow):
     def __init__(self, app, state):
-        super().__init__(application=app, title=APP_NAME, default_width=920, default_height=760)
+        super().__init__(application=app, title=APP_NAME, default_width=1320, default_height=860)
         self.app = app
         self.state = state
         self._updating = False
@@ -40,8 +41,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.toasts = Adw.ToastOverlay()
         self.set_content(self.toasts)
-        view = Adw.ToolbarView()
-        self.toasts.set_child(view)
+        view = Adw.ToolbarView()     # "Queue & Worker" page: the worker's own status / jobs / log / connect
 
         header = Adw.HeaderBar()
         self.stack = Adw.ViewStack()
@@ -95,6 +95,19 @@ class MainWindow(Adw.ApplicationWindow):
             bp.add_setter(bottom, "reveal", True)
             self.add_breakpoint(bp)
 
+        try:
+            self.toasts.set_child(self.build_studio(view, menu))
+        except Exception:  # noqa: BLE001 — the worker must keep running even if the Studio can't start
+            import traceback
+            traceback.print_exc()
+            partial = getattr(self, "studio", None)
+            self.studio = None
+            if partial is not None:
+                partial.shutdown()   # nothing it may have started (devices, receiver) outlives it
+            parent = view.get_parent()
+            if parent is not None:   # build_studio may already have put the worker page into its stack
+                parent.remove(view)
+            self.toasts.set_child(view)
         self.refresh_static()
         self._render(self.state.poll(with_gpus=True))
         GLib.timeout_add(POLL_MS, self._tick)
@@ -308,6 +321,24 @@ class MainWindow(Adw.ApplicationWindow):
               "cancelled first. Results the Mac already downloaded are not affected.",
               (("cancel", "Cancel", "default"), ("delete", "Delete", "destructive")), answer)
 
+    def _job_prioritize(self, job_id: str) -> None:
+        port, token = self.state.running_port, self.state.token()
+        def work():
+            from ...studio.client import Client as C
+
+            C(f"http://127.0.0.1:{port}", token, local_secret=self.state.local_secret).prioritize(job_id)
+        run_in_thread(work, self._after_job_action)
+
+    def _job_pause(self, job_id: str, resume: bool) -> None:
+        """Pause / resume any job on this PC's queue: the desktop app may (it owns the GPU, PROTOCOL.md §4)."""
+        port, token = self.state.running_port, self.state.token()
+        def work():
+            from ...studio.client import Client as C
+
+            c = C(f"http://127.0.0.1:{port}", token, local_secret=self.state.local_secret)
+            c.resume(job_id) if resume else c.pause(job_id)
+        run_in_thread(work, self._after_job_action)
+
     def _after_job_action(self, _result, error) -> None:
         if error is not None:
             toast(self.toasts, f"Failed: {getattr(error, 'message', error)}")
@@ -420,11 +451,17 @@ class MainWindow(Adw.ApplicationWindow):
         jobs = self._last_poll.jobs if self._last_poll else []
         from .. import updates as U
         busy = U.busy_jobs(jobs)
-        if not busy:
+        studio = self.studio.busy_names() if getattr(self, "studio", None) else []
+        if not busy and not studio:
             action()
             return
-        alert(self, heading, f"{len(busy)} job(s) are running or queued. To {what} now, they are stopped "
-                             "(the Mac can start them again).",
+        parts = []
+        if busy:
+            parts.append(f"{len(busy)} job(s) are running or queued")
+        if studio:
+            parts.append("this PC is working on " + ", ".join(studio))
+        alert(self, heading, "; ".join(parts) + f". To {what} now, they are stopped "
+                             "(the Mac can start its jobs again).",
               (("cancel", "Cancel", "default"), ("go", "Stop Jobs and Continue", "destructive")),
               lambda r: action() if r == "go" else None)
 
@@ -439,14 +476,20 @@ class MainWindow(Adw.ApplicationWindow):
             return True
         client = self.state.client() if self.state.server.is_active else None
 
+        studio_busy = self._studio_busy()   # a local pipeline between server jobs (importing, stacking masks…)
+
         def work():
             try:
                 busy = bool(U.busy_jobs(client.jobs())) if client is not None else False
             except Exception:
                 busy = True          # can't tell: don't restart under a job
-            GLib.idle_add(self._auto_update_decide, busy)
+            GLib.idle_add(self._auto_update_decide, busy or studio_busy)
         threading.Thread(target=work, daemon=True).start()
         return True
+
+    def _studio_busy(self) -> bool:
+        studio = getattr(self, "studio", None)
+        return bool(studio is not None and studio.busy)
 
     def _auto_update_decide(self, busy: bool) -> bool:
         from .. import updates as U
@@ -566,7 +609,8 @@ class MainWindow(Adw.ApplicationWindow):
             seen.add(jid)
             row = self._job_rows.get(jid)
             if row is None:
-                row = JobRow(jid, self._job_cancel, self._job_delete, self._job_log, self._job_export)
+                row = JobRow(jid, self._job_cancel, self._job_delete, self._job_log, self._job_export,
+                             self._job_prioritize, self._job_pause)
                 self._job_rows[jid] = row
                 self.jobs_group.add(row)
             row.update(j)

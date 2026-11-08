@@ -73,6 +73,9 @@ class SplatWorkerApp(Adw.Application):
     def do_shutdown(self) -> None:
         if self.window is not None:
             self.window.updater.close()
+            studio = getattr(self.window, "studio", None)
+            if studio is not None:
+                studio.shutdown()  # cancel local pipelines (while the server still answers), stop the receiver
         if self.state is not None:
             self.state.shutdown()  # stops the server (jobs are cancelled cleanly)
         Adw.Application.do_shutdown(self)
@@ -132,14 +135,19 @@ class SplatWorkerApp(Adw.Application):
     def _quit(self, *_args) -> None:
         jobs = self.window._last_poll.jobs if self.window and self.window._last_poll else []
         running = [j for j in jobs if j.get("state") in ("loading", "training")]
-        if running and self.window is not None:
+        studio = getattr(self.window, "studio", None) if self.window else None
+        local = studio.busy_names() if studio is not None else []
+        if (running or local) and self.window is not None:
             self._present()
 
             def answer(rid):
                 if rid == "quit":
                     self._really_quit()
+            what = [f"{len(running)} job(s) are running"] if running else []
+            if local:
+                what.append("working on " + ", ".join(local))
             alert(self.window, "Quit SplatWork Node?",
-                  f"{len(running)} job(s) are running and will be stopped.",
+                  " and ".join(what).capitalize() + "; this is stopped.",
                   (("cancel", "Cancel", "default"), ("quit", "Quit", "destructive")), answer)
         else:
             self._really_quit()
@@ -152,7 +160,7 @@ class SplatWorkerApp(Adw.Application):
     def _preferences(self, *_args) -> None:
         self._present()
         Preferences(self.window, self.state, self._setting_changed, self._autostart_changed,
-                    self._setup).present()
+                    self._setup, studio=getattr(self.window, "studio", None)).present()
 
     def _setting_changed(self, name: str) -> None:
         self.window.refresh_static()
@@ -183,8 +191,8 @@ class SplatWorkerApp(Adw.Application):
     def _about(self, *_args) -> None:
         kwargs = dict(application_name=APP_NAME, application_icon=APP_ID, version=__version__,
                       developer_name="SplatWork", license_type=Gtk.License.MIT_X11,
-                      comments="Lets SplatWork on your Mac train Gaussian splats on this computer's NVIDIA "
-                               "GPU.")
+                      comments="View, create and edit Gaussian splats on this PC, and train them for "
+                               "SplatWork on your Mac with this computer's NVIDIA GPU.")
         if hasattr(Adw, "AboutDialog"):  # libadwaita 1.5
             Adw.AboutDialog(**kwargs).present(self.window)
         else:  # pragma: no cover

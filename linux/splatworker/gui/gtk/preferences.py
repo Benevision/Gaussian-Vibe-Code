@@ -1,10 +1,11 @@
-"""Settings page. Every setting has its explanation right under it."""
+"""Settings dialog: the worker server's settings, and (with the Studio) a "Studio" page for ``studio.json``.
+Every setting has its explanation right under it."""
 
 from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from ..installer import remove_runtime
 from ..nvidia import GpuInfo, detect
@@ -18,9 +19,10 @@ class Preferences:
     """Builds an Adw.PreferencesDialog (libadwaita >= 1.5) or Adw.PreferencesWindow."""
 
     def __init__(self, window, state, on_changed: Callable[[str], None],
-                 on_autostart: Callable[[bool], None], on_setup: Callable[[], None]):
+                 on_autostart: Callable[[bool], None], on_setup: Callable[[], None], studio=None):
         self.window = window
         self.state = state
+        self.studio = studio                  # StudioController, or None (worker-only window)
         self.on_changed = on_changed          # called with the setting name after saving
         self.on_autostart = on_autostart
         self.on_setup = on_setup
@@ -36,6 +38,15 @@ class Preferences:
                     self._runtime(), self._advanced()):
             page.add(grp)
         self.dialog.add(page)
+        self.studio_page = None
+        if studio is not None:
+            self._studio_prefs = StudioPreferences(self.window, studio, self._toast)
+            self.studio_page = self._studio_prefs.page
+            self.dialog.add(self.studio_page)
+
+    def show_studio(self) -> None:
+        if self.studio_page is not None:
+            self.dialog.set_visible_page(self.studio_page)
 
     def present(self) -> None:
         if isinstance(self.dialog, getattr(Adw, "PreferencesDialog", ())):
@@ -271,3 +282,121 @@ class Preferences:
               "The server is stopped. You will have to run the setup assistant (a large download) before "
               "this computer can train again.",
               (("cancel", "Cancel", "default"), ("remove", "Remove", "destructive")), answer)
+
+
+class StudioPreferences:
+    """Preferences → Studio: everything in ``studio.json`` (studio/prefs.py). Saved through the controller, so
+    the Viewer, iPhone Inbox and New Project pages pick the values up (``StudioController.prefs_listeners``)."""
+
+    def __init__(self, window, controller, toast: Callable[[str], None]):
+        from .studio.rows import combo_row, spin_row, switch_row
+
+        self.window = window
+        self.ctl = controller
+        self.toast = toast
+        p = controller.prefs
+        self.page = Adw.PreferencesPage(title="Studio", icon_name="applications-graphics-symbolic")
+
+        proj = Adw.PreferencesGroup(title="Projects", description="Where New Project creates project folders, and "
+                                    "how this PC's jobs share the GPU with jobs sent from the Mac.")
+        self.dir_row = action_row("Projects folder", str(controller.projects_root), icon="folder-symbolic")
+        choose = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+        choose.connect("clicked", lambda *_: self._choose())
+        reset = Gtk.Button(icon_name="edit-undo-symbolic", tooltip_text="Use ~/Documents/SplatWork",
+                           valign=Gtk.Align.CENTER)
+        reset.add_css_class("flat")
+        reset.connect("clicked", lambda *_: self._set_dir(""))
+        self.dir_row.add_suffix(reset)
+        self.dir_row.add_suffix(choose)
+        proj.add(self.dir_row)
+        proj.add(switch_row("Local jobs go first", p.local_jobs_first, lambda v: self._set("local_jobs_first", v),
+                            subtitle="This PC's jobs start before jobs the Mac queued (a running job is never "
+                                     "interrupted)."))
+        self.page.add(proj)
+
+        view = Adw.PreferencesGroup(title="Viewer", description="Defaults for the viewer; the inspector changes "
+                                    "the current view.")
+        self.fov_row = spin_row("Field of view", 20, 110, 1, p.fov, lambda v: self._set("fov", float(v)),
+                                setting_id="viewer.fov")
+        view.add(self.fov_row)
+        scale = f"{p.render_scale:g}" if f"{p.render_scale:g}" in ("0.75", "0.5", "0.33") else "1.0"
+        view.add(combo_row("Render resolution", [("1.0", "100 %"), ("0.75", "75 %"), ("0.5", "50 %"),
+                                                 ("0.33", "33 %")], scale,
+                           lambda v: self._set("render_scale", float(v)), "viewer.renderScale"))
+        view.add(switch_row("Show training cameras", p.show_cameras, lambda v: self._set("show_cameras", v),
+                            "viewer.showCameras"))
+        bg = action_row("Background colour", "Colour behind the scene (display only).")
+        self.bg_btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False), valign=Gtk.Align.CENTER)
+        c = Gdk.RGBA()
+        c.red, c.green, c.blue, c.alpha = (*p.background, 1.0)
+        self.bg_btn.set_rgba(c)
+        self.bg_btn.connect("notify::rgba", self._bg)
+        bg.add_suffix(self.bg_btn)
+        view.add(bg)
+        self.page.add(view)
+
+        nav = Adw.PreferencesGroup(title="Navigation")
+        for title, attr, sid in (("Rotation speed", "rotate_speed", "nav.rotateSpeed"),
+                                 ("Pan speed", "pan_speed", "nav.panSpeed"),
+                                 ("Zoom speed", "zoom_speed", "nav.zoomSpeed"),
+                                 ("Fly speed", "fly_speed", "nav.flySpeed")):
+            nav.add(spin_row(title, 0.1, 5.0, 0.1, getattr(p, attr), lambda v, a=attr: self._set(a, float(v)), 1,
+                             sid))
+        nav.add(switch_row("Invert vertical rotation", p.invert_vertical,
+                           lambda v: self._set("invert_vertical", v), "nav.invertVertical"))
+        self.page.add(nav)
+
+        rx = Adw.PreferencesGroup(title="iPhone receiver", description="SplatWork Capture sends captures to this "
+                                  "PC (Bonjour _splatcapture._tcp). Off by default: it listens on every network "
+                                  "interface while on.")
+        self.recv_row = switch_row("Receive captures", p.receive_captures, self._receive, "net.receive")
+        rx.add(self.recv_row)
+        rx.add(switch_row("Require pairing code", p.require_pairing, self._pairing, "net.pairing"))
+        self.port_row = spin_row("Port", 1024, 65535, 1, p.capture_port, self._port,
+                                 subtitle="TCP port for captures (7879 by default; the next free one is used if "
+                                          "it's taken).")
+        rx.add(self.port_row)
+        self.page.add(rx)
+
+    def _set(self, attr: str, value) -> None:
+        if getattr(self.ctl.prefs, attr) == value:
+            return
+        setattr(self.ctl.prefs, attr, value)
+        self.ctl.save_prefs()
+
+    def _bg(self, btn, _p) -> None:
+        c = btn.get_rgba()
+        self._set("background", [c.red, c.green, c.blue])
+
+    def _receive(self, on: bool) -> None:
+        if on == self.ctl.prefs.receive_captures:
+            return
+        ok = self.ctl.set_receive_captures(on)
+        if on and not ok:
+            r = self.ctl.receiver
+            self.toast(f"The receiver didn't start: {r.error if r and r.error else 'port in use?'}")
+
+    def _pairing(self, on: bool) -> None:
+        self._set("require_pairing", on)
+        self.ctl.apply_receiver_prefs()
+
+    def _port(self, v: float) -> None:
+        self._set("capture_port", int(v))
+        self.ctl.apply_receiver_prefs()
+
+    def _choose(self) -> None:
+        dlg = Gtk.FileDialog(title="Choose the projects folder", modal=True)
+        dlg.set_initial_folder(Gio.File.new_for_path(str(self.ctl.projects_root.parent)))
+
+        def done(d, result):
+            try:
+                f = d.select_folder_finish(result)
+            except GLib.Error:
+                return
+            if f is not None and f.get_path():
+                self._set_dir(f.get_path())
+        dlg.select_folder(self.window, None, done)
+
+    def _set_dir(self, path: str) -> None:
+        self._set("projects_dir", path)
+        self.dir_row.set_subtitle(str(self.ctl.projects_root))

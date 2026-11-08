@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=SplatWork Node
-GenericName=GPU Training Server
-Comment=Train Gaussian splats for SplatWork on this computer's NVIDIA GPU
+GenericName=Gaussian Splat Editor & Trainer
+Comment=View, create and edit Gaussian splats; train them on this computer's NVIDIA GPU, also for your Mac
 Exec=splatworker-app
 Icon=com.example.SplatWorker
 Terminal=false
 Categories=Graphics;3DGraphics;Network;
-Keywords=gaussian;splat;3dgs;cuda;nvidia;gpu;training;server;
+Keywords=gaussian;splat;3dgs;cuda;nvidia;gpu;training;server;worker;viewer;ply;spz;
 StartupNotify=true
 SingleMainWindow=true

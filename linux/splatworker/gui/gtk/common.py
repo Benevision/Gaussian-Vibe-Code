@@ -18,6 +18,8 @@ switch.big-switch > slider { min-width: 34px; min-height: 34px; border-radius: 9
 .status-failed { background-color: @error_color; }
 .job-progress { min-width: 150px; }
 textview.log-view { font-family: monospace; font-size: 0.9em; }
+.coverage-ramp { border-radius: 4px; min-height: 8px;
+  background-image: linear-gradient(to right, rgb(219, 41, 31), rgb(245, 199, 31), rgb(51, 184, 82)); }
 """
 
 

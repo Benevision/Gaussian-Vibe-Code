@@ -1,4 +1,4 @@
-# SplatWork Node desktop app (GTK 4 + libadwaita) with the CUDA training server.
+# SplatWork Node (GTK 4 + libadwaita, OpenGL viewer and studio) with the CUDA training server.
 #
 #   ./build.sh          build and install for the current user
 #   ./make-bundle.sh    single-file SplatWorker-<version>-x86_64.flatpak for sharing
@@ -30,6 +30,7 @@ finish-args:
   - --device=all              # /dev/nvidia*, /dev/nvidia-uvm, /dev/nvidiactl for CUDA
   - --talk-name=org.freedesktop.Avahi   # see README "Network behaviour" (zeroconf does the mDNS itself)
   - --filesystem=xdg-download # exporting results (the file chooser portal covers other folders)
+  - --filesystem=xdg-documents/SplatWork:create   # projects (same layout as the Mac's ~/Documents/Splat Studio; copy either way)
   - --env=CUDA_DEVICE_ORDER=PCI_BUS_ID  # torch GPU indices = nvidia-smi / NVML indices
 
 cleanup:

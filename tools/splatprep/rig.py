@@ -18,6 +18,11 @@ Request (from SplatWork)::
 
 ``R`` is the 3×3 row-major rotation rig_from_cam (a direction in the view's camera frame — x right, y down,
 z forward — times R gives the direction in the 360° frame).
+
+Sensors with a baseline (stereo pairs, SplatWork Node ≥ 1.4.0): a group value may instead be
+``{"R": R, "t": [x, y, z]}`` — ``t`` is the camera centre in the rig frame (metres; the rig frame of a stereo pair
+is the left eye). Sensors are then told apart by rotation *and* centre, views of the same frame are paired with
+each other (they have parallax), and the rig config carries the translations, so the mapper solves in metres.
 """
 from __future__ import annotations
 
@@ -40,6 +45,14 @@ class RigLayout:
     rotations: List[np.ndarray]            # per sensor: rig_from_cam 3×3
     intrinsics: Optional[List[float]] = None
     db_names: List[str] = field(default_factory=list)   # "sNN/FFFFFF.ext" names used in the database / image tree
+    centres: List[np.ndarray] = field(default_factory=list)   # per sensor: camera centre in the rig frame (m)
+
+    def centre(self, s: int) -> np.ndarray:
+        return self.centres[s] if self.centres else np.zeros(3)
+
+    @property
+    def has_baseline(self) -> bool:
+        return any(np.linalg.norm(c) > 1e-9 for c in self.centres)
 
     @property
     def num_sensors(self) -> int:
@@ -66,6 +79,7 @@ def parse_rig(request: dict, names: Sequence[str]) -> Optional[RigLayout]:
         return None
     index = {Path(n).name: i for i, n in enumerate(names)}
     sensors: List[np.ndarray] = []
+    centres: List[np.ndarray] = []
     sensor = [-1] * len(names)
     frame = [-1] * len(names)
     f = 0
@@ -75,10 +89,17 @@ def parse_rig(request: dict, names: Sequence[str]) -> Optional[RigLayout]:
             i = index.get(Path(img).name)
             if i is None:
                 continue
+            if isinstance(R, dict):
+                c = np.asarray(R.get("t") or [0.0, 0.0, 0.0], np.float64).reshape(3)
+                R = R.get("R")
+            else:
+                c = np.zeros(3)
             R = np.asarray(R, np.float64).reshape(3, 3)
-            s = next((k for k, S in enumerate(sensors) if np.abs(S - R).max() < 1e-3), None)
+            s = next((k for k, S in enumerate(sensors)
+                      if np.abs(S - R).max() < 1e-3 and np.abs(centres[k] - c).max() < 1e-6), None)
             if s is None:
                 sensors.append(R)
+                centres.append(c)
                 s = len(sensors) - 1
             sensor[i], frame[i] = s, f
             used = True
@@ -93,6 +114,7 @@ def parse_rig(request: dict, names: Sequence[str]) -> Optional[RigLayout]:
     ext = {i: Path(n).suffix or ".jpg" for i, n in enumerate(names)}
     lay = RigLayout(list(names), sensor, frame, sensors,
                     [float(v) for v in rig["intrinsics"]] if rig.get("intrinsics") else None)
+    lay.centres = centres
     lay.db_names = [f"s{sensor[i]:02d}/{frame[i]:06d}{ext[i]}" for i in range(len(names))]
     return lay
 
@@ -105,7 +127,8 @@ def rig_pairs(lay: RigLayout, descriptors: Optional[np.ndarray] = None, window: 
     * frame t ↔ t+2…t+window: the same direction only;
     * loop closure: each view's ``loop_k`` most similar views (global descriptors) in frames more than
       ``window`` apart.
-    Views of the same frame share the optical centre (no parallax), so they are never paired."""
+    Views of the same frame that share the optical centre (360°: no parallax) are never paired; sensors with a
+    baseline between them (stereo) are paired within the frame when they look the same way."""
     by_fs: Dict[Tuple[int, int], int] = {(lay.frame[i], lay.sensor[i]): i for i in range(len(lay.names))}
     D = lay.directions()
     ang = np.degrees(np.arccos(np.clip(D @ D.T, -1, 1)))
@@ -113,6 +136,14 @@ def rig_pairs(lay: RigLayout, descriptors: Optional[np.ndarray] = None, window: 
     pairs: Set[Pair] = set()
     F = lay.num_frames
     for t in range(F):
+        for a in range(lay.num_sensors):
+            for b in near[a]:
+                b = int(b)
+                if b <= a or np.linalg.norm(lay.centre(a) - lay.centre(b)) < 1e-9:
+                    continue
+                i, j = by_fs.get((t, a)), by_fs.get((t, b))
+                if i is not None and j is not None:
+                    pairs.add((min(i, j), max(i, j)))
         for k in range(1, window + 1):
             if t + k >= F:
                 break
@@ -187,17 +218,18 @@ def _quat_wxyz(R: np.ndarray) -> List[float]:
 def write_rig_config(lay: RigLayout, path: Path) -> Path:
     """COLMAP rig config (``colmap rig_configurator`` / ``pycolmap.read_rig_config``).
 
-    Sensor 0 is the reference; every sensor's pose relative to it is the known view rotation (zero baseline)."""
-    R0 = lay.rotations[0]
+    Sensor 0 is the reference; every sensor's pose relative to it is the known view rotation and, for rigs with a
+    baseline, translation."""
+    R0, c0 = lay.rotations[0], lay.centre(0)
     cams = []
     for s, R in enumerate(lay.rotations):
         cam = {"image_prefix": f"s{s:02d}/"}
         if s == 0:
             cam["ref_sensor"] = True
         else:
-            # cam_from_ref = cam_from_rig360 · rig360_from_ref = Rᵀ · R0
+            # cam_from_ref = cam_from_rig · rig_from_ref = [Rᵀ | −Rᵀc] · [R0 | c0] = [RᵀR0 | Rᵀ(c0 − c)]
             cam["cam_from_rig_rotation"] = _quat_wxyz(R.T @ R0)
-            cam["cam_from_rig_translation"] = [0.0, 0.0, 0.0]
+            cam["cam_from_rig_translation"] = [float(v) for v in R.T @ (c0 - lay.centre(s))]
         cams.append(cam)
     path.write_text(json.dumps([{"cameras": cams}], indent=1))
     return path

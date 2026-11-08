@@ -208,3 +208,23 @@ def test_sh_degree_zero_empty_shn():
     opt = CompactAdam([p], lr=1e-2, moments="int8")
     (p.sum() * 0).backward()
     opt.step()   # nothing to do, must not crash
+
+
+@pytest.mark.parametrize("moments", ["bf16", "int8"])
+def test_state_survives_save_and_load(moments, tmp_path):
+    """Pause / resume: the trainer saves optimizer state with torch.save and reloads it with weights_only=True;
+    load_state_dict casts the compact moments to fp32, restore_dtypes() must bring them back losslessly."""
+    x = torch.nn.Parameter(torch.randn(16, 45))
+    opt = CompactAdam([{"params": [x], "lr": 1e-2, "name": "shN"}], moments=moments)
+    for _ in range(3):
+        (x ** 2).sum().backward()
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+    torch.save({"opt": opt.state_dict()}, tmp_path / "s.pt")
+    y = torch.nn.Parameter(x.detach().clone())
+    opt2 = CompactAdam([{"params": [y], "lr": 1e-2, "name": "shN"}], moments=moments)
+    opt2.load_state_dict(torch.load(tmp_path / "s.pt", map_location="cpu", weights_only=True)["opt"])
+    opt2.restore_dtypes()
+    a, b = opt.state[x], opt2.state[y]
+    for k in a:
+        assert a[k].dtype == b[k].dtype and torch.equal(a[k], b[k]), k

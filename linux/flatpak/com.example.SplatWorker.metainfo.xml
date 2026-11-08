@@ -4,17 +4,25 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>SplatWork Node</name>
-  <summary>Train Gaussian splats for your Mac on this NVIDIA GPU</summary>
+  <summary>Create, view and edit Gaussian splats on your NVIDIA GPU</summary>
   <developer id="com.example">
     <name>SplatWork</name>
   </developer>
   <description>
     <p>
-      SplatWork Node turns a Linux computer with an NVIDIA graphics card into a training server for
-      SplatWork on macOS. The Mac finds it automatically on the local network and sends it
-      Gaussian-splat training and dataset processing jobs.
+      SplatWork Node views, creates and edits 3D Gaussian splats: open PLY, compressed PLY,
+      .splat and .spz files with their learned skybox, turn photos, videos, 360° footage and iPhone
+      captures into splats on this computer's NVIDIA GPU, clean them up and export them.
+    </p>
+    <p>
+      It also stays a training server for SplatWork on macOS: the Mac finds it on
+      the local network and sends it training and processing jobs, which share one queue with the
+      jobs started here.
     </p>
     <ul>
+      <li>Fast OpenGL viewer with orbit / fly navigation, display modes, crop box and brush selection</li>
+      <li>New Project: frames, stacked masks, sky, camera solving and training in one go</li>
+      <li>Auto clean, opacity / size / outlier tools, export to PLY, compressed PLY, .splat and SPZ</li>
       <li>One switch to start and stop the server</li>
       <li>Guided setup that downloads the right PyTorch and gsplat build for your driver</li>
       <li>Live GPU memory, temperature and utilisation</li>
@@ -73,6 +81,19 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.4.0" date="2026-11-08">
+      <description>
+        <p>SplatWork Node becomes a full studio, and keeps working for your Mac.</p>
+        <ul>
+          <li>Viewer for PLY, compressed PLY, .splat and .spz with the learned skybox, display modes, orientation, training cameras and 4K screenshots</li>
+          <li>New Project from photos, video, 360° video, iPhone captures, COLMAP or Nerfstudio: frames, stacked masks, sky, camera solving and training on this PC with a live dashboard</li>
+          <li>Editing: brush selection, crop box, opacity / size / isolated-splat tools, Auto clean, undo; export to all four formats</li>
+          <li>iPhone Inbox receives captures from SplatWork Capture; Settings Reference; Models page</li>
+          <li>One queue for everybody: jobs started on this PC go ahead of queued jobs from the Mac (never interrupting a running one), and any queued job can be moved to the front</li>
+          <li>New permission: the Documents/SplatWork folder, where projects are saved</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.3.16" date="2026-11-08">
       <description>
         <p>Updates itself: when a new version is published, SplatWork Node downloads and installs it through the Flatpak portal and restarts into it as soon as no job is running or queued (also when it runs in the background). Turn it off in Preferences → Install updates automatically; the banner then offers Update and Restart buttons instead.</p>

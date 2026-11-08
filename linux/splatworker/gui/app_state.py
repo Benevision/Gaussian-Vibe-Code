@@ -47,6 +47,9 @@ class AppState:
         self._running_token: Optional[str] = None
         self._running_settings: Optional[Dict[str, Any]] = None
         self.last_info: Optional[Dict[str, Any]] = None
+        # per-launch secret: the Studio proves to the server child it is this app (see ServerSettings.local_secret)
+        import secrets as _secrets
+        self.local_secret = _secrets.token_urlsafe(32)
 
     # ------------------------------------------------------------- settings
     def save_settings(self) -> None:
@@ -77,7 +80,10 @@ class AppState:
         with self._lock:
             token = self.token()
             spec = launch_spec(self.paths, self.environ, fallback_python=self.fallback_python)
-            ok = self.server.start(spec.python, self.settings.serve_args(self.paths), spec.env,
+            from ..config import LOCAL_SECRET_ENV
+            env = dict(spec.env)
+            env[LOCAL_SECRET_ENV] = self.local_secret
+            ok = self.server.start(spec.python, self.settings.serve_args(self.paths), env,
                                    self.settings.port)
             if ok:
                 self._running_port = self.settings.port
@@ -96,7 +102,8 @@ class AppState:
     def client(self) -> Optional[WorkerClient]:
         if self._running_port is None:
             return None
-        return WorkerClient(f"http://127.0.0.1:{self._running_port}", self._running_token, timeout=4)
+        return WorkerClient(f"http://127.0.0.1:{self._running_port}", self._running_token, timeout=4,
+                            local_secret=self.local_secret)
 
     @property
     def running_port(self) -> Optional[int]:
