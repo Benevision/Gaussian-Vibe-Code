@@ -76,10 +76,40 @@ class StudioController:
         self.listeners: List[Callable[[], None]] = []      # "something changed" (runs, inbox)
         self.receiver: Optional[CaptureReceiver] = None
         self.receiver_listeners: List[Callable[[str, object], None]] = []
+        self.prefs_listeners: List[Callable[[], None]] = []       # Studio prefs saved (Preferences, pages)
 
     # ------------------------------------------------------------- prefs / paths
     def save_prefs(self) -> None:
+        """Save ``studio.json`` and tell every page using the prefs (they re-read what they show)."""
         self.prefs.save(self.prefs_path)
+        for cb in list(self.prefs_listeners):
+            try:
+                cb()
+            except Exception:  # noqa: BLE001 — a page's refresh must not break saving
+                pass
+
+    def set_receive_captures(self, on: bool) -> bool:
+        """Turn the iPhone receiver on / off (saved). Returns whether it is running."""
+        self.prefs.receive_captures = bool(on)
+        self.save_prefs()
+        if on:
+            return self.start_receiver()
+        self.stop_receiver()
+        return False
+
+    def apply_receiver_prefs(self) -> None:
+        """Pairing / port changed: update a running receiver (a new port needs a restart)."""
+        r = self.receiver
+        if r is None or not r.running:
+            return
+        r.require_code = self.prefs.require_pairing
+        # compare with the port it was asked for, not the fallback it may have taken
+        if getattr(self, "_receiver_port", r.port) != self.prefs.capture_port:
+            self.stop_receiver()
+            self.receiver = None
+            self.start_receiver()
+        else:
+            self._receiver_event("state", True)
 
     @property
     def projects_root(self) -> Path:
@@ -203,6 +233,7 @@ class StudioController:
     def start_receiver(self) -> bool:
         if self.receiver and self.receiver.running:
             return True
+        self._receiver_port = self.prefs.capture_port
         self.receiver = CaptureReceiver(
             self.inbox_dir, self.state.settings.effective_name() or socket.gethostname(),
             port=self.prefs.capture_port, require_code=self.prefs.require_pairing,

@@ -255,13 +255,18 @@ def build_scene(root: Path, spec: BenchmarkSpec = BenchmarkSpec(),
 
 # ---------------------------------------------------------------------------------------------- running
 def measure(samples: List[tuple], measure_from: int) -> float:
-    """Steps per second from (step, seconds) samples: from the first sample at or past ``measure_from`` to the
-    last one (all samples when the run never got there, e.g. very short test runs)."""
-    s = sorted(set(samples))
-    use = [x for x in s if x[0] >= measure_from] or [x for x in s if x[0] > 0]
-    if len(use) < 2 or use[-1][0] <= use[0][0] or use[-1][1] <= use[0][1]:
-        raise BenchmarkError(f"the benchmark run was too short to measure ({len(s)} progress samples)")
-    return (use[-1][0] - use[0][0]) / (use[-1][1] - use[0][1])
+    """Steps per second from (step, seconds[, seconds…]) samples, in poll order: from the first sample at or past
+    ``measure_from`` to the last one (all samples when the run never got there, e.g. very short test runs).
+    Each further column is another clock (the worker's ``elapsedSeconds`` or None, then this side's wall clock):
+    the first one every used sample has and that advances is taken."""
+    s = [x for x in samples if x[0] > 0]
+    use = [x for x in s if x[0] >= measure_from] or s
+    if len(use) >= 2 and use[-1][0] > use[0][0]:
+        for k in range(1, len(use[0])):
+            a, b = use[0][k], use[-1][k]
+            if a is not None and b is not None and all(x[k] is not None for x in use) and b > a:
+                return (use[-1][0] - use[0][0]) / (b - a)
+    raise BenchmarkError(f"the benchmark run was too short to measure ({len(s)} progress samples)")
 
 
 def _upload_zip(client, folder: Path, tmp_dir: Path) -> tuple:
@@ -322,7 +327,8 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
             step = int(s.get("step") or 0)
             if s.get("state") == "training" and step > 0:
                 el = s.get("elapsedSeconds")
-                samples.append((step, float(el) if isinstance(el, (int, float)) else time.monotonic() - t_start))
+                samples.append((step, float(el) if isinstance(el, (int, float)) else None,
+                                time.monotonic() - t_start))
             if s.get("state") in ("completed", "failed", "cancelled"):
                 break
             where = "this PC" if local else (info.get("name") or "the worker")
@@ -331,9 +337,6 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
             time.sleep(poll)
         if s["state"] != "completed":
             raise BenchmarkError(f"benchmark job {s['state']}: {s.get('message') or ''}".strip())
-        el = s.get("elapsedSeconds")         # the final wall time, when the worker recorded one that fits
-        if isinstance(el, (int, float)) and s.get("step") and samples and float(el) > max(t for _, t in samples):
-            samples.append((int(s["step"]), float(el)))
         rate = measure(samples, spec.measure_from)
         down_mbps = None
         if not local:

@@ -49,6 +49,10 @@ def test_measure():
     assert benchmark.measure([(5, 1.0), (15, 2.0)], 1000) == pytest.approx(10.0)    # never reached: all samples
     with pytest.raises(benchmark.BenchmarkError):
         benchmark.measure([(5, 1.0)], 1)
+    # worker clock missing in one sample (or not advancing): this side's wall clock is used instead
+    assert benchmark.measure([(10, None, 1.0), (20, 5.0, 2.0)], 1) == pytest.approx(10.0)
+    assert benchmark.measure([(10, 3.0, 1.0), (20, 3.0, 3.0)], 1) == pytest.approx(5.0)
+    assert benchmark.measure([(10, 3.0, 1.0), (20, 4.0, 3.0)], 1) == pytest.approx(10.0)
 
 
 def test_store(tmp_path):

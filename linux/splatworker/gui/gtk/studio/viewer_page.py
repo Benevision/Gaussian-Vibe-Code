@@ -132,7 +132,9 @@ class ViewerPage(Gtk.Box):
         self.split.set_sidebar(self._inspector())
         self.split.set_show_sidebar(False)
         self.inspector_btn.set_sensitive(False)
-        self._apply_prefs()
+        self._applied_prefs = {}
+        self._prefs_changed()
+        controller.prefs_listeners.append(self._prefs_changed)
         GLib.timeout_add(500, self._hud_tick)
         drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
         drop.connect("drop", self._on_drop)
@@ -228,7 +230,9 @@ class ViewerPage(Gtk.Box):
         self.bg_btn.connect("notify::rgba", self._bg_changed)
         bg_row.add_suffix(self.bg_btn)
         disp.add(bg_row)
-        disp.add(switch_row("Show training cameras", a.show_cameras, self._show_cameras, "viewer.showCameras"))
+        self.cams_switch = switch_row("Show training cameras", a.show_cameras, self._show_cameras,
+                                      "viewer.showCameras")
+        disp.add(self.cams_switch)
         disp.add(switch_row("Learned skybox", s.show_sky, lambda v: self._set("show_sky", v),
                             subtitle="Draw the sky panorama trained with the scene (Colour mode)."))
 
@@ -246,18 +250,25 @@ class ViewerPage(Gtk.Box):
         nav.add(vb)
         nav.add(button_row("Frame scene", "Frame", lambda: self.area.frame(), subtitle="F"))
         p = self.ctl.prefs
+        self._pref_rows = {}
         for title, attr, sid in (("Rotation speed", "rotate_speed", "nav.rotateSpeed"),
                                  ("Pan speed", "pan_speed", "nav.panSpeed"),
                                  ("Zoom speed", "zoom_speed", "nav.zoomSpeed"),
                                  ("Fly speed", "fly_speed", "nav.flySpeed")):
-            nav.add(spin_row(title, 0.1, 5.0, 0.1, getattr(p, attr), lambda v, a_=attr: self._nav_pref(a_, v), 1, sid))
-        nav.add(switch_row("Invert vertical rotation", p.invert_vertical,
-                           lambda v: self._nav_pref("invert_vertical", v), "nav.invertVertical"))
+            self._pref_rows[attr] = spin_row(title, 0.1, 5.0, 0.1, getattr(p, attr),
+                                             lambda v, a_=attr: self._nav_pref(a_, v), 1, sid)
+            nav.add(self._pref_rows[attr])
+        self._pref_rows["invert_vertical"] = switch_row("Invert vertical rotation", p.invert_vertical,
+                                                        lambda v: self._nav_pref("invert_vertical", v),
+                                                        "nav.invertVertical")
+        nav.add(self._pref_rows["invert_vertical"])
 
         perf = group("Performance")
-        perf.add(combo_row("Render resolution", [("1.0", "100 %"), ("0.75", "75 %"), ("0.5", "50 %"), ("0.33", "33 %")],
-                           f"{s.render_scale:g}" if f"{s.render_scale:g}" in ("1", "0.75", "0.5", "0.33") else "1.0",
-                           lambda v: self._set("render_scale", float(v)), "viewer.renderScale"))
+        self.scale_row = combo_row(
+            "Render resolution", [("1.0", "100 %"), ("0.75", "75 %"), ("0.5", "50 %"), ("0.33", "33 %")],
+            f"{s.render_scale:g}" if f"{s.render_scale:g}" in ("0.75", "0.5", "0.33") else "1.0",
+            lambda v: self._set("render_scale", float(v)), "viewer.renderScale")
+        perf.add(self.scale_row)
         self.gl_row = plain_row(title="Renderer", subtitle="—")
         perf.add(self.gl_row)
 
@@ -869,15 +880,43 @@ class ViewerPage(Gtk.Box):
                                  if self.area.tool == "select" else ""))
         return True
 
-    def _apply_prefs(self) -> None:
+    def _prefs_changed(self) -> None:
+        """Studio prefs saved (here, or in Preferences → Studio): apply the values that changed since last time
+        to the viewer and its inspector rows (so a saved nav speed doesn't reset a FOV changed in the inspector)."""
         p = self.ctl.prefs
         a = self.area
-        a.rotate_speed, a.pan_speed, a.zoom_speed, a.fly_speed = p.rotate_speed, p.pan_speed, p.zoom_speed, p.fly_speed
-        a.invert_vertical = p.invert_vertical
-        a.camera.fov_y = p.fov
-        a.settings.background = tuple(p.background)
-        a.settings.render_scale = p.render_scale
-        a.show_cameras = p.show_cameras
+        now = {k: (list(v) if isinstance(v, list) else v) for k, v in p.__dict__.items()}
+        changed = {k for k, v in now.items() if self._applied_prefs.get(k, object()) != v}
+        self._applied_prefs = now
+        for attr in ("rotate_speed", "pan_speed", "zoom_speed", "fly_speed", "invert_vertical"):
+            if attr in changed:
+                setattr(a, attr, getattr(p, attr))
+                row = self._pref_rows.get(attr)
+                if isinstance(row, Adw.SpinRow) and abs(row.get_value() - getattr(p, attr)) > 1e-9:
+                    row.set_value(getattr(p, attr))
+                elif isinstance(row, Adw.SwitchRow) and row.get_active() != getattr(p, attr):
+                    row.set_active(getattr(p, attr))
+        if "fov" in changed:
+            a.camera.fov_y = p.fov
+            if abs(self.fov_row.get_value() - p.fov) > 1e-9:
+                self.fov_row.set_value(p.fov)
+        if "background" in changed:
+            a.settings.background = tuple(p.background)
+            c = self.bg_btn.get_rgba()
+            if (round(c.red, 4), round(c.green, 4), round(c.blue, 4)) != tuple(round(x, 4) for x in p.background):
+                rgba = Gdk.RGBA()
+                rgba.red, rgba.green, rgba.blue, rgba.alpha = (*p.background, 1.0)
+                self.bg_btn.set_rgba(rgba)
+        if "render_scale" in changed:
+            a.settings.render_scale = p.render_scale
+            set_combo(self.scale_row, f"{p.render_scale:g}" if f"{p.render_scale:g}" in self.scale_row.keys
+                      else "1.0")
+        if "show_cameras" in changed:
+            a.show_cameras = p.show_cameras
+            if self.cams_switch.get_active() != p.show_cameras:
+                self.cams_switch.set_active(p.show_cameras)
+            a.update_lines()
+        a.queue_render()
 
     # ------------------------------------------------------------------ export
     def _export_cloud(self):

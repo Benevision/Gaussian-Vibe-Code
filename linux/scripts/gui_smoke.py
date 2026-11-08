@@ -81,7 +81,10 @@ class T(SplatWorkerApp):
             (1200, lambda: shot("7-models")),
             (300, lambda: self.window.show_section("reference")),
             (1200, lambda: shot("8-reference")),
-            (300, lambda: self.window.new_project("video", None)),
+            (300, lambda: self.studio_prefs()),
+            (1500, lambda: shot("10-preferences-studio")),
+            (300, lambda: self.studio_prefs_check()),
+            (500, lambda: self.window.new_project("video", None)),
             (1500, lambda: shot("9-newproject")),
             (500, lambda: self.quit()),
         ]
@@ -162,6 +165,33 @@ class T(SplatWorkerApp):
         assert hasattr(mp, "refresh_benchmarks"), mp           # not a BrokenPage
         mp.refresh_benchmarks()
         print("benchmarks table rows:", len(mp.benchmark_rows(benchmark.sorted_results(cfg))), flush=True)
+
+    def studio_prefs(self):
+        from splatworker.gui.gtk.preferences import Preferences
+        self.prefs_dlg = Preferences(self.window, self.state, lambda n: None, lambda e: None, lambda: None,
+                                     studio=self.window.studio)
+        self.prefs_dlg.present()
+        self.prefs_dlg.show_studio()
+
+    def studio_prefs_check(self):
+        """Changes made in Preferences → Studio reach the controller, studio.json and the pages using them."""
+        import json as _json
+        ctl = self.window.studio
+        sp = self.prefs_dlg.studio_page
+        assert sp is not None
+        rows = self.prefs_dlg._studio_prefs
+        rows.recv_row.set_active(True)
+        assert ctl.prefs.receive_captures and self.window.inbox_page.recv_switch.get_active()
+        assert ctl.receiver is not None and ctl.receiver.running, ctl.receiver and ctl.receiver.error
+        rows.recv_row.set_active(False)
+        assert not ctl.prefs.receive_captures and not self.window.inbox_page.recv_switch.get_active()
+        assert not ctl.receiver.running
+        rows.fov_row.set_value(75)
+        assert self.window.viewer_page.fov_row.get_value() == 75 and self.window.viewer_page.area.camera.fov_y == 75
+        saved = _json.loads(ctl.prefs_path.read_text())
+        assert saved["fov"] == 75 and saved["receive_captures"] is False, saved
+        self.prefs_dlg.dialog.close()
+        print("preferences studio page ok", flush=True)
 
     def offscreen(self):
         img = self.window.viewer_page.area.screenshot(640, 360)

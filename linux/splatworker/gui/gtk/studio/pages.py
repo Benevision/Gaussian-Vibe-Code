@@ -126,7 +126,9 @@ class InboxPage(Gtk.Box):
         b.connect("clicked", lambda *_: self._new_code())
         self.code_row.add_suffix(b)
         recv.add(self.code_row)
-        recv.add(switch_row("Require pairing code", controller.prefs.require_pairing, self._pairing, "net.pairing"))
+        self.pair_switch = switch_row("Require pairing code", controller.prefs.require_pairing, self._pairing,
+                                      "net.pairing")
+        recv.add(self.pair_switch)
         self.progress = Gtk.ProgressBar(show_text=True, visible=False)
         recv.add(self.progress)
         box.append(recv)
@@ -142,19 +144,29 @@ class InboxPage(Gtk.Box):
         self.append(_page("iPhone Inbox", sw, header_extra=[refresh]))
         controller.receiver_listeners.append(self._event)
         controller.listeners.append(self.refresh)
+        controller.prefs_listeners.append(self._prefs_changed)
         self.refresh()
         self._render_status()
 
     def _toggle(self, on: bool) -> None:
-        self.ctl.prefs.receive_captures = on
-        self.ctl.save_prefs()
-        self.ctl.start_receiver() if on else self.ctl.stop_receiver()
+        if on != self.ctl.prefs.receive_captures:
+            self.ctl.set_receive_captures(on)
 
     def _pairing(self, on: bool) -> None:
+        if on == self.ctl.prefs.require_pairing:
+            return
         self.ctl.prefs.require_pairing = on
         self.ctl.save_prefs()
-        if self.ctl.receiver:
-            self.ctl.receiver.require_code = on
+        self.ctl.apply_receiver_prefs()
+        self._render_status()
+
+    def _prefs_changed(self) -> None:
+        """Preferences → Studio changed the receiver settings: show them."""
+        p = self.ctl.prefs
+        if self.recv_switch.get_active() != p.receive_captures:
+            self.recv_switch.set_active(p.receive_captures)
+        if self.pair_switch.get_active() != p.require_pairing:
+            self.pair_switch.set_active(p.require_pairing)
         self._render_status()
 
     def _new_code(self) -> None:
