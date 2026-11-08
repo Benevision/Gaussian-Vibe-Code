@@ -119,6 +119,7 @@ class Device:
     info: Optional[Dict[str, Any]] = None
     latency_ms: Optional[float] = None
     checked_at: Optional[float] = None
+    measured: Optional[float] = None    # throughput from a saved benchmark (benchmarks.json), wins over the table
 
     @property
     def base_url(self) -> str:
@@ -192,7 +193,7 @@ class Device:
 
     @property
     def throughput(self) -> float:
-        return estimate_throughput(self.gpus)
+        return self.measured if self.measured else estimate_throughput(self.gpus)
 
     def client(self, timeout: float = 30.0) -> Client:
         return Client(self.base_url, self.token, timeout=timeout)
@@ -215,6 +216,19 @@ class Device:
         elif self.status == "checking":
             bits.append("checking…")
         return " · ".join(bits)
+
+
+def apply_benchmarks(devices: Iterable[Device], config_dir: Optional[Path]) -> None:
+    """Use measured speeds (Models & Benchmarks / ``splatworker benchmark``) where there are any: a record's
+    ``deviceId`` is ``"local"`` for this PC, otherwise the worker's base URL (or the device id)."""
+    if config_dir is None:
+        return
+    from .benchmark import load_benchmarks, throughput
+
+    recs = load_benchmarks(config_dir)
+    for d in devices:
+        r = recs.get(d.id) or recs.get(d.base_url)
+        d.measured = throughput(r) if r else None
 
 
 def local_device(info: Dict[str, Any]) -> Device:
@@ -380,6 +394,7 @@ class DeviceRegistry:
     def __init__(self, store_path: Path, own: Optional[Callable[[], Iterable[Tuple[str, int]]]] = None,
                  own_names: Optional[Callable[[], Iterable[str]]] = None, interval: float = 15.0):
         self.store = DeviceStore.load(store_path)
+        self.bench_dir = Path(store_path).parent      # benchmarks.json lives next to devices.json
         self.interval = interval
         self._own = own or (lambda: [])                    # (address, port) of this PC's worker
         self._own_names = own_names or (lambda: [])        # its advertised name(s)
@@ -407,6 +422,7 @@ class DeviceRegistry:
             own = set(self._own_names())
             ds = [d for d in self._discovered.values() if d.id not in self.store.hidden and d.name not in own]
             ds += list(self._manual.values())
+        apply_benchmarks(ds, self.bench_dir)
         return sorted(ds, key=lambda d: d.name.lower())
 
     def get(self, device_id: str) -> Optional[Device]:

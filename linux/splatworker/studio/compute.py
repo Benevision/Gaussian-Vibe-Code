@@ -134,6 +134,9 @@ class ComputeRun:
             info = pipeline.client.info()
             if "train" in (info.get("capabilities") or []):
                 self.local = local_device(info)
+                if self.reg is not None:
+                    from .devices import apply_benchmarks
+                    apply_benchmarks([self.local], getattr(self.reg, "bench_dir", None))
         except ApiError:
             self.local = None
 

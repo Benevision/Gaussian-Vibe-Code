@@ -532,3 +532,20 @@ def test_cancel_cancels_the_remote_job(tmp_path, workers):
     assert ("cancelled", None) in events
     remote = Client(dev.base_url)
     assert remote.jobs() and wait_for(lambda: all(j["state"] == "cancelled" for j in remote.jobs()))
+
+
+def test_measured_benchmark_overrides_gpu_table(tmp_path):
+    from splatworker.studio import benchmark
+    from splatworker.studio.devices import Device, apply_benchmarks, local_device
+
+    rec = {"name": "x", "date": "d", "trainStepsPerSecond": 60.0, "splats": 1, "megapixels": 1.0}
+    benchmark.save_benchmark(tmp_path, {**rec, "deviceId": "local"})
+    benchmark.save_benchmark(tmp_path, {**rec, "deviceId": "http://10.0.0.7:7878", "trainStepsPerSecond": 10.0})
+    me = local_device({"gpus": [{"name": "NVIDIA GeForce RTX 4080"}]})
+    other = Device(id="manual:10.0.0.7:7878", name="o", host="10.0.0.7", port=7878,
+                   info={"gpus": [{"name": "NVIDIA GeForce RTX 4090"}]})
+    plain = Device(id="manual:10.0.0.8:7878", name="p", host="10.0.0.8", port=7878,
+                   info={"gpus": [{"name": "NVIDIA GeForce RTX 4090"}]})
+    apply_benchmarks([me, other, plain], tmp_path)
+    assert me.throughput == 3.0 and other.throughput == 0.5
+    assert plain.measured is None and plain.throughput > 0.5
