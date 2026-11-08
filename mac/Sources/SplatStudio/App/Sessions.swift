@@ -304,9 +304,13 @@ final class TrainingSession {
                 let pc = dataset.pointCloudURL.flatMap { try? PLYCodec.readPointCloud(url: $0) }
                 var blockCount = initialCount
                 var blocks = BlockPartitioner(blockCount: blockCount).partition(dataset: dataset, points: pc)
+                // More blocks only while that actually shrinks them: when every camera sees most of the scene
+                // (gardens, rooms), splitting further keeps nearly all photos in every block.
+                func widest(_ bs: [SceneBlock]) -> Int { bs.map(\.cameraIds.count).max() ?? 0 }
                 while blockCount < 32, !blocks.allSatisfy({ b in devices.contains { fits($0.id, b, blocks) } }) {
-                    blockCount += max(1, blockCount / 2)
-                    blocks = BlockPartitioner(blockCount: blockCount).partition(dataset: dataset, points: pc)
+                    let next = BlockPartitioner(blockCount: blockCount + max(1, blockCount / 2)).partition(dataset: dataset, points: pc)
+                    if Double(widest(next)) > 0.85 * Double(widest(blocks)) { break }
+                    blockCount += max(1, blockCount / 2); blocks = next
                 }
                 self?.remoteMessage = "Training \(blocks.count) blocks on \(devices.count) devices."
                 let scheduler = ComputeScheduler(devices: devices, placement: .both)

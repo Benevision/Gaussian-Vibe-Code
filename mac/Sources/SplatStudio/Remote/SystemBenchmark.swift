@@ -363,6 +363,8 @@ enum MemoryForecast {
     /// Why a run would not fit on this worker (GPU memory for the splats; host RAM for the photos on workers
     /// that hold every photo in memory), with what to change; nil when it fits or nothing is known.
     static func workerProblem(info: WorkerInfo, dataset: PreparedDataset, config: TrainingConfig) -> String? {
+        // iPhones (Compute screen) size each job to their own memory (fewer splats, smaller images).
+        if info.workerVersion?.hasPrefix("ios") ?? false { return nil }
         var images: Int64 = 0, maxPx: Int64 = 0
         for c in dataset.manifest.cameras {
             let longest = max(c.width, c.height)
