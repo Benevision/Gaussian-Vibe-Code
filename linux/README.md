@@ -12,6 +12,18 @@ Splat Studio (Mac) ──Bonjour _splatworker._tcp──▶ discovers worker
                    ◀─GET preview.ply / result.ply
 ```
 
+## Splat Studio for Linux (1.4.0)
+
+Since 1.4.0 the desktop app is a full **Splat Studio** — viewer (PLY, compressed PLY, .splat, .spz with the learned
+skybox), New Project (photos, video, 360° video, iPhone captures, COLMAP, Nerfstudio → frames, stacked masks, sky,
+camera solving, training), editing (brush, crop, thresholds, Auto clean), export and an iPhone Inbox — and it is
+still the worker your Mac uses. Its old Status / Jobs / Log / Connect pages are the **Queue & Worker** page.
+Everything GPU-heavy the Studio does runs as ordinary jobs of the same server, so jobs from this PC and from the
+Mac share one queue per GPU (this PC's go first among the *waiting* ones; see docs/PROTOCOL.md §4).
+Projects are saved in `~/Documents/SplatStudio`. Feature checklist and status: [docs/LINUX_APP.md](../docs/LINUX_APP.md).
+
+CLI extras: `splatworker convert in.ply out.spz [--sh 0]`, `splatworker splat-info scene.ply`.
+
 ## Install the Flatpak (recommended)
 
 The Flatpak is a desktop app (GTK 4 + libadwaita) around the same server. It suits GNOME, KDE, the

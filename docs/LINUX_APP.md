@@ -31,9 +31,9 @@ Status: ✅ done · 🟡 partial (what is missing is said) · ⏳ not yet · ➖
   and only when the server was started with `--allow-local-datasets`, which the GUI does); the dataset points
   at the folder instead of copying it.
 * **GPU sharing.** One job per GPU at a time, as before. Queued jobs are ordered by priority, then age: local
-  Studio jobs are submitted with `priority: 1` (the person at the PC goes first) unless *Settings → Studio →
-  Local jobs wait their turn* is on; nothing running is ever pre-empted. Every queued job can be moved to the
-  front (`POST /v1/jobs/{id}/prioritize`) or cancelled from the Studio's queue list, which shows each job's
+  Studio jobs are submitted with `priority: 1` (the person at the PC goes first) unless *Local jobs go first* is
+  switched off (New Project dialog, stored in `studio.json`); nothing running is ever pre-empted. Every queued job
+  can be moved to the front (`POST /v1/jobs/{id}/prioritize`) or cancelled on the Queue & Worker page, which shows each job's
   origin (this PC / the address of the Mac). The viewer renders with OpenGL and does not use CUDA, so it
   works while either side trains.
 * **Projects** live in `~/Documents/SplatStudio/<name>/` (Flatpak permission `xdg-documents/SplatStudio:create`),
@@ -65,102 +65,104 @@ the bottleneck beyond ~10 M splats.
 
 ## Checklist
 
+Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/tests/test_studio_*.py`), GTK pages
+`linux/splatworker/gui/gtk/studio/`, server additions in `linux/splatworker/server.py` + `census.py`.
+
 ### Shell
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| Sidebar: Viewer, iPhone Inbox, Compute, Models & Benchmarks, Settings Reference, Recent | `Adw.NavigationSplitView` sidebar: Viewer, Projects, Queue & Worker (the old Status/Jobs/Log pages), iPhone Inbox, Models & Benchmarks, Settings Reference, Recent | see rows |
-| Home screen tiles (Photos, Video, 360°, iPhone LiDAR, Stereo, COLMAP/Nerfstudio, Open splat, Open dataset) | Viewer placeholder page with the same tiles | ✅ |
-| Drag & drop anything onto the window | `Gtk.DropTarget` on the window: splats open, folders / videos start New Project | ✅ |
-| Recent files (12) | `~/.var/app/…/config/splatworker/recent.json` | ✅ |
-| Toolbar: Home, New, Open, Reset view, Orientation menu, Navigate/Select, Inspector toggle | Viewer header bar | ✅ (Easy/Advanced picker ⏳: all options are shown) |
-| Menus + shortcuts (⌘N/O/E, ⌘Z, F frame, 1–6 display modes, Tab orbit/fly, WASDQE, ⌫, ?) | Ctrl instead of ⌘; shortcuts window on `?` | ✅ |
-| Preferences | existing Preferences dialog + Studio group (projects folder, local-job priority) | ✅ |
-| Training finished sound / notification | `Gio.Notification` | ✅ |
+| Sidebar: Viewer, iPhone Inbox, Compute, Models & Benchmarks, Settings Reference, Recent | `Adw.NavigationSplitView`: Viewer, Projects, Queue & Worker (the old Status / Jobs / Log / Connect pages, with a running / waiting badge), iPhone Inbox, Models & Benchmarks, Settings Reference, Recent (12) | ✅ |
+| Home screen tiles (Photos, Video, 360°, iPhone LiDAR, Stereo, COLMAP/Nerfstudio, Open splat, Open dataset) | Viewer home page (no Stereo tile) | ✅ |
+| Drag & drop anything onto the window | splats open; videos / folders / captures / transforms.json / COLMAP start New Project | ✅ |
+| Toolbar: Home, New, Open, Reset view, Orientation menu, Navigate/Select, Inspector toggle | viewer header bar | ✅ |
+| Easy / Advanced mode | everything is shown; advanced training values sit in an "All training settings" expander | 🟡 |
+| Menus + shortcuts (⌘N/O/E, ⌘Z/⇧⌘Z, F, R, 1–5, Tab, WASDQE, ⌫, ?) | Ctrl instead of ⌘; shortcuts window on `?` / Ctrl+? | ✅ (6 = Coverage ⏳) |
+| Preferences | existing Preferences dialog (server); Studio preferences in `studio.json`, edited where they are used (navigation speeds in the inspector, projects folder and queue policy in New Project) | 🟡 no Studio group in the Preferences dialog |
+| Training finished sound / notification | `Gio.Notification`, result opens in the viewer | ✅ (no sound) |
+| Window title subtitle with counts, HUD (fps, visible / total, selected) | header subtitle + overlay | ✅ (no GPU ms) |
 
 ### Viewer (`viewer.*`, `nav.*`)
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| Open PLY / compressed PLY / .splat / .spz | `studio/formats.py` (vectorised numpy) | ✅ |
-| Learned skybox sidecar `<name>.sky.png/.sky.json` | loaded with every format, drawn in Colour mode | ✅ |
-| Orbit / Fly navigation, double-click sets orbit centre, adaptive fly speed | `studio/camera.py` | ✅ (fly speed adapts to scene size, not to the surface in front) |
-| Display modes Colour, Depth, Centres, Ellipses, Opacity | same shader modes | ✅ |
-| Display mode Coverage | needs a per-splat coverage census | ⏳ |
-| SH degree 0–3, splat scale, background colour, minimum opacity, FOV, render scale | inspector View group | ✅ |
-| Anti-aliasing filter (Auto/On/Off) | shader (Mip-Splatting 2D filter compensation) | ✅ |
-| Fast 16-bit sort | always 16-bit log keys on the CPU sorter | ✅ (no 32-bit option) |
-| Skip work when idle | GtkGLArea redraws only on change | ✅ |
-| Scene up direction (6 axes), Flip, Level to current view | `studio/camera.py` orientation | ✅ |
-| Training camera frustums, look through a camera | drawn as GL lines; Cameras list in the inspector | ✅ |
-| Views menu (Front/Back/Left/Right/Top), Frame all, Reset | ✅ | ✅ |
-| Rotation/pan/zoom/fly speed, invert vertical, smoothing | Preferences → Navigation | 🟡 speeds + invert ✅, smoothing ⏳ |
-| Two-finger trackpad gestures | `Gtk.GestureZoom` / scroll | 🟡 pinch zoom + scroll ✅, two-finger rotate ⏳ |
-| HUD: fps, visible / total, selected | overlay label | ✅ |
+| Open PLY / compressed PLY / .splat / .spz | `studio/formats.py`, vectorised numpy (also plain point-cloud PLYs) | ✅ |
+| Learned skybox sidecar `<name>.sky.png/.sky.json` | loaded with every format, drawn in Colour mode, toggle in the inspector | ✅ |
+| Orbit / Fly, double-click sets orbit centre, adaptive fly speed | `studio/camera.py` | ✅ (fly speed scales with scene size, not the surface in front) |
+| Display modes Colour, Depth, Centres, Ellipses, Opacity | compute shader, as `RenderShaders.swift` | ✅ |
+| Display mode Coverage | needs a per-splat coverage measure (the census could supply it) | ⏳ |
+| SH degree, splat scale, background, minimum opacity, FOV, render scale, anti-aliasing (auto/on/off) | inspector View tab | ✅ |
+| Fast 16-bit sort / skip work when idle | always 16-bit log keys (CPU radix sort, background thread); renders only on change | ✅ |
+| Scene up (6 axes), Flip, Level to view | orientation menu; trainer's `splatstudio_up` comment honoured | ✅ |
+| Training camera frustums, look through a camera | GL lines; camera list (holdout / depth / mask tags) | ✅ |
+| Views (Front/Back/Left/Right/Top), Frame, Reset | ✅ | ✅ |
+| Rotation / pan / zoom / fly speed, invert vertical | inspector Navigation | ✅ |
+| Smooth camera, two-finger rotate gesture | | ⏳ |
+| Pinch / scroll zoom | `Gtk.GestureZoom`, scroll | ✅ |
 
 ### Editing (`edit.*`)
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| Undo / Redo (30 levels), Restore all | `studio/edit.py` (deletion masks, cheap) | ✅ |
-| Selection brush (radius, ⌥ deselect), Delete selected, Invert, Clear | screen-space brush on the CPU (projected centres) | ✅ |
-| Crop box (X/Y/Z sliders, Fit, Apply) | ✅ | ✅ |
-| Delete below opacity / larger than / isolated splats (N neighbours) | numpy (+ grid hashing for the outlier test) | ✅ |
-| Auto clean (invisible splats + seen by too few photos) | census job on the worker (gsplat renders every photo), plan in `studio/autoclean.py` (same rules as `AutoClean.swift`) | ✅ (contribution measured as per-photo weight sum ≥ 2 %, not per-pixel peak — see notes) |
-| Mask editor (SAM 2 clicks, paint, track through frames) | | ⏳ (masks come from the automatic models; editing them needs SAM 2 point prompts over HTTP) |
+| Undo / Redo (30), Restore all | `studio/edit.py` (packed deletion masks) | ✅ |
+| Selection brush (radius, Alt deselects), Delete, Invert, Clear | screen-space brush on projected centres | ✅ (selects through all depths, like the Mac) |
+| Crop box (sliders, Fit, Apply) | ✅ | ✅ |
+| Delete below opacity / larger than / isolated splats | numpy; isolated = grid-hashed neighbour count | ✅ |
+| Auto clean (invisible + seen by too few photos) | `census` job on the local worker (gsplat), plan = `studio/autoclean.py` (Mac rules) | ✅ code + tests with a fake backend; **gsplat census untested on a GPU** |
+| Mask editor (SAM 2 clicks, paint, track) | | ⏳ |
 
 ### New Project (`source.*`, `sfm.*`, `mask.*`)
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| Sources: photos folder, video, COLMAP project, Nerfstudio `transforms.json`, prepared dataset | `studio/pipeline.py` | ✅ |
-| 360° video / 360° photos (`source.360views`, `360fov`, `360dropNadir`) | splatprep `frames` with an equirect rig | 🟡 360° video ✅ via splatprep frames; 360° photo folders ⏳ |
-| iPhone / headset capture `.splatcapture` (LiDAR depth, ARKit poses as priors) | converted to images + `priors.json` | 🟡 images + poses (priorMode auto) ✅; LiDAR depth supervision ⏳ |
-| Stereo footage (SBS/TB/two files, MV-HEVC, baseline, stereo depth) | | ⏳ (needs the Mac's stereo pipeline ported to splatprep) |
-| Max image size, video FPS / target frames / sharpest in window, blur rejection, holdout | request keys | ✅ (HDR tone mapping ⏳) |
-| Camera solver: learned features × matching × mapper × lens model, "use poses from source" | splatprep `sfm` request | ✅ (Apple Object Capture ➖) |
-| Refine capture poses | `priorMode` | ✅ |
-| Masking: none, people & pets, moving things, remove sky; invert | splatprep `masks` (`person`, `sam2_auto`, `sky`) | ✅ (Apple Vision ➖ → `person`; "keep main subject" / "isolate one object" ⏳) |
-| Stacked masks (each source ANDed into `masks/`, 4 px dilation) + separate sky layer `splatprep-sky/masks/` | `studio/masks.py` | ✅ |
+| Photos folder (resize, blur rejection), video (fps / target frames / sharpest / HDR), 360° video (views, FOV, drop floor), holdout | `studio/importers.py`, splatprep `frames` with `equirect` + rig hint for solving | ✅ |
+| 360° photos folder | | ⏳ |
+| iPhone / headset `.splatcapture` | images + the manifest as `priors.json` (`priorMode` auto/solve = Refine capture poses) | 🟡 LiDAR depth supervision and points from depth ⏳ |
+| Stereo footage | | ⏳ (needs the Mac's stereo ingest in splatprep) |
+| COLMAP project, Nerfstudio `transforms.json`, prepared dataset | COLMAP via splatprep's reader / exporter (distorted lenses are re-solved), Nerfstudio converted here | ✅ |
+| Camera solver: features × pair selection × mapper × lens model | splatprep `sfm` | ✅ (Apple Object Capture ➖) |
+| Masks: people & pets, moving things (SAM 2), sky → learned skybox, invert | splatprep `person`, `sam2_auto`, `sky` | ✅ ("keep main subject", "isolate one object", editable class list ⏳) |
+| Stacked masks + separate sky layer | every layer ANDed into `masks/` with 4 px growth; sky in `splatprep-sky/masks/` (photos with < 0.2 % sky dropped) | ✅ |
 | Mask fixed parts of the frame (static regions) | | ⏳ |
-| Training presets (Quick preview / Balanced / High / Maximum) + every `train.*` setting | `studio/presets.py`; the advanced page edits a TrainingConfig JSON per field | ✅ |
-| Start training when ready, progress page with stages, live log, reuse earlier results | | 🟡 stages + log + auto-train ✅; reuse earlier results ⏳ |
+| Presets + all `train.*` settings | `studio/presets.py`; "All training settings" expander (every worker TrainingConfig key) | ✅ (`train.bigSplatReg` is Mac-only: the gsplat trainer has no big-splat penalty) |
+| Start training when ready, stages with durations, live log | ✅ | ✅ |
+| Reuse earlier results (frames / masks / cameras) | "Prepare again" redoes everything; "Train again" reuses the dataset | 🟡 |
 
 ### Training
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| Local training | the CUDA gsplat trainer, as a job of the local server | ✅ |
-| Live progress: step, steps/s, elapsed / ETA, splats, PSNR, holdout PSNR | job status polling | ✅ |
-| PSNR and splat-count charts | `Gtk.DrawingArea` | ✅ |
-| Live preview in the viewer | `preview.splat` reloaded on each new preview step | ✅ |
-| Pause / Resume | worker jobs can't pause | ⏳ (Stop is ✅) |
-| Save checkpoint | | ⏳ |
-| Result saved in `outputs/` with skybox sidecar, opened in the viewer | ✅ | ✅ |
-| Compute devices (`train.device`): This Mac / workers / Both | this PC's GPUs; other Linux workers / the Mac's Metal trainer | 🟡 local GPUs ✅; sending jobs to other workers ⏳ |
-| Block-parallel training of large scenes | the worker already trains a job too big for one device in blocks (1.3.15) | ✅ (single machine); multi-machine ⏳ |
-| Benchmark (steps/s, upload/download) | `/v1/benchmark` on the worker | ⏳ |
+| Local training | gsplat trainer as a job of the local server | ✅ |
+| Live dashboard: step, steps/s, elapsed / ETA, splats, PSNR, holdout PSNR, GPU | Projects page | ✅ |
+| PSNR / splat charts | `Gtk.DrawingArea` | ✅ |
+| Live preview in the viewer | `preview.splat` fetched every new preview step (≥ 8 s apart) and shown, camera kept | ✅ |
+| Pause / Resume, Save checkpoint | worker jobs can't pause or snapshot on demand | ⏳ (Stop ✅) |
+| Results in `outputs/<name>-<time>.ply` + skybox, opened when done | ✅ | ✅ |
+| Shared GPU with the Mac's jobs | one queue per GPU, local priority, "Run next", origin shown | ✅ |
+| Compute devices: other Linux workers / the Mac, Both mode | | ⏳ (this PC's GPUs only) |
+| Block-parallel training | the worker splits a too-big job into blocks on its own (1.3.15) | ✅ single machine; multi-machine ⏳ |
+| Benchmark | | ⏳ (the Mac's Compute page benchmarks this worker) |
 
 ### Export (`export.*`)
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| PLY, compressed PLY, .splat, SPZ | `studio/formats.py` | ✅ |
-| Export SH degree, only kept splats, bake orientation | ✅ | ✅ |
-| Skybox sidecar with the export | ✅ | ✅ |
-| Estimated file size | ✅ | ✅ |
-| Screenshot (4K PNG) | offscreen GL framebuffer | ✅ |
-| Turntable video | frames from the GL viewer → ffmpeg/PyAV if present | ⏳ |
+| PLY, compressed PLY, .splat, SPZ (v2) | `studio/formats.py` (+ CLI `splatworker convert`) | ✅ |
+| Export SH degree, only kept splats, bake orientation, size estimate | ✅ | ✅ |
+| Skybox sidecar with the export | written for every format | ✅ |
+| Screenshot 4K PNG | offscreen framebuffer | ✅ |
+| Turntable video | | ⏳ |
 
 ### Network, Inbox, models, reference
 
 | Mac feature | Linux | Status |
 |---|---|---|
-| Worker server for the Mac (Bonjour `_splatworker._tcp`, token, GPUs, jobs, log) | unchanged; its pages are now "Queue & Worker" | ✅ |
-| iPhone Inbox (`_splatcapture._tcp` on 7879, pairing code, receive zips) | the same receiver protocol (PROTOCOL.md §5) in the GUI process | ✅ |
-| Models & Benchmarks (installed models, licence, size; install packs) | model cards from `tools/splatprep/model_cards.json`; installs through the setup assistant | 🟡 list ✅, per-model benchmark table ⏳ |
-| Settings Reference (searchable, grouped, details) | `studio/catalog.json` generated from `SettingsCatalog.swift` (`tools/../linux/scripts/gen_catalog.py`; a test keeps it in sync) | ✅ |
-| CLI (`--convert`, `--info`, …) | `splatworker studio convert|info` | ✅ (render/eval/benchmark ⏳) |
+| Worker server (Bonjour, token, GPUs, jobs, log, connect help) | unchanged, "Queue & Worker" page | ✅ |
+| iPhone Inbox (`_splatcapture._tcp` on 7879, pairing code, receive, New splat…, trash) | `studio/inbox.py` (stdlib HTTP + zeroconf) | ✅ |
+| Models & Benchmarks | runtime status, installed models (from `/v1/info`), model cards | 🟡 per-model benchmark table ⏳ |
+| Install processing models | the existing Set Up GPU Runtime assistant | ✅ |
+| Settings Reference (searchable, grouped, details, ⓘ on controls) | `studio/catalog.json` generated by `linux/scripts/gen_catalog.py` from `SettingsCatalog.swift` (a test keeps them in sync); every Studio control shows the summary and the full text as a tooltip | ✅ |
+| CLI | `splatworker convert`, `splatworker splat-info` | 🟡 (render / eval / benchmark ⏳) |
 
 ## Notes and differences
 
@@ -172,6 +174,35 @@ the bottleneck beyond ~10 M splats.
 * The Flatpak's app id stays `com.example.SplatWorker` so existing installs update in place; the window and
   launcher are called **Splat Studio**.
 
-## What needs testing on the PC (RTX 4080, CachyOS)
+## What needs testing on the PC (RTX 4080, CachyOS, fish)
 
-See the bottom of this file after each round of work — kept as a checklist with exact commands.
+Nothing below could run on the Mac (no NVIDIA GPU). The GL viewer was tested with Mesa llvmpipe in a Debian
+container (render tests + the real GTK window driven by `linux/scripts/gui_smoke.py`); the pipeline was tested
+end to end against a real HTTP server with a fake trainer and a stand-in splatprep.
+
+Install the build from the branch (after the CI build or a local `linux/flatpak/build.sh`), then:
+
+1. **Update prompt.** `flatpak update` should ask to allow the new `xdg-documents/SplatStudio` folder. The app is
+   now called *Splat Studio*; the worker must still show up on the Mac and train a job sent from it.
+2. **Viewer on NVIDIA.** Open a trained PLY with a skybox (one of the Mac's outputs or `…/jobs/<id>/result.ply`):
+   the window must not show "The viewer can't start". Check the Renderer row (View tab → Performance) says NVIDIA
+   and OpenGL 4.6. Orbit / pan / zoom / double-click, WASD fly, display modes 1–5, skybox on/off, a 4K screenshot.
+   Note the fps for a 3–6 M splat scene (HUD); if the sort lags behind fast rotation, say so (GPU sort is the next step).
+   Also try under X11 (`flatpak run --env=GDK_BACKEND=x11 com.example.SplatWorker`).
+3. **Formats.** Open a `.compressed.ply`, `.splat` and `.spz` exported by the Mac; export each format here and open it
+   on the Mac (and SuperSplat for compressed PLY).
+4. **New Project → train.** Photos folder (Quick preview), then a phone video with *Remove people* + sky, then a 360°
+   video. Watch stages, the log and the live dashboard; the live preview should appear in the viewer; the result
+   must open when done and land in `~/Documents/SplatStudio/<name>/outputs/` with `.sky.png/.sky.json`.
+   `flatpak run --command=splatworker com.example.SplatWorker splat-info <result.ply>` shows the splat count.
+5. **Queue sharing.** Start a long training from the Mac, then a project here: the local job waits (status "Waiting
+   for the GPU"), then runs before any other job the Mac queued meanwhile; "Run next" (↑ on the Queue & Worker page)
+   reorders queued jobs; nothing running gets interrupted.
+6. **Auto clean.** Open a project's result, Edit → Auto clean: a `census` job runs (Queue & Worker shows it), then
+   splats are selected; Delete, Undo. Compare the count with the Mac's Auto clean on the same file (the measure
+   differs slightly, see Notes).
+7. **iPhone Inbox.** Send a capture from Splat Capture to the PC (pairing code), then *New splat…* on it.
+8. **Fish / paths.** Nothing in the app uses the shell; `flatpak run …` commands above work as is in fish.
+
+Logs: Queue & Worker → Log, `~/.var/app/com.example.SplatWorker/data/splatworker/data/jobs/<id>/train.log`, and
+each project's `prep.log`.

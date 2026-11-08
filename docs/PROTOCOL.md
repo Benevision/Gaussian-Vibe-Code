@@ -188,6 +188,22 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 | `GET /v1/jobs/{id}/preview.ply` | – | full snapshot PLY (worker 1.0 and test backends only), `404` otherwise |
 | `GET /v1/jobs/{id}/result.ply` | – | final PLY once `state == "completed"` |
 | `GET /v1/jobs/{id}/log` | – | `text/plain` training log |
+| `POST /v1/jobs/{id}/prioritize` | – | `JobStatus`; moves a **queued** job to the front (priority above every other queued job); `409` otherwise (worker ≥ 1.4.0, capability `priority`) |
+| `POST /v1/census` | `{"datasetId","jobId":<completed train job>}` or, from 127.0.0.1 only, `{"datasetId","plyPath":"/abs/scene.ply"}` | `{"jobId":"c…"}` — Auto clean census, a job of kind `census` (worker ≥ 1.4.0, capability `census`) |
+| `GET /v1/jobs/{id}/census.npz` | – | numpy `.npz`: `peak` (float32, per splat: largest per-photo summed blending weight, in native pixels) and `views` (uint32: photos where that sum ≥ 0.02) |
+
+**Shared queue (worker ≥ 1.4.0).** One job per GPU at a time; a free GPU takes the queued job with the highest
+`priority`, oldest first; a running job is never pre-empted. `JobStatus` gains `"priority"` (int) and `"origin"`
+(`"local"` for 127.0.0.1, else the client's address). Only loopback clients may submit `"priority"` (in the
+`/v1/jobs`, `/v1/process` and `/v1/census` bodies): Splat Studio on the worker's own PC uses 1 so the person at that
+PC goes ahead of jobs queued by other machines; remote requests always queue at 0.
+
+**Local datasets (worker ≥ 1.4.0, `--allow-local-datasets`, capability `local`, loopback clients only).**
+`POST /v1/datasets/local` `{"path":"/abs/folder"}` → `{"datasetId",…,"path"}` registers a folder *in place* (nothing
+copied; deleting the dataset never touches the folder), and `POST /v1/datasets/{id}/export-local`
+`{"path":"/abs/folder"}` → `{"files":n}` merges a dataset (e.g. a processing job's `outputDatasetId`) into a folder
+with hard links. The desktop app on the worker PC (Splat Studio for Linux) uses these to run its New Project
+pipeline on its own project folders without uploading.
 
 ```jsonc
 // JobStatus
