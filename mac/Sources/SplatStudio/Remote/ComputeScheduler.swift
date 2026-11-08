@@ -76,8 +76,15 @@ struct ComputeScheduler: Sendable {
     static func estimateThroughput(gpus: [WorkerInfo.GPU]) -> Double {
         let table: [(String, Double)] = [("H200", 9), ("H100", 8), ("B200", 10), ("5090", 6), ("4090", 5), ("A100", 5), ("L40", 4.5),
                                          ("6000 Ada", 5), ("4080", 3.8), ("5080", 4.2), ("3090", 3), ("A6000", 3), ("4070", 2.5),
-                                         ("3080", 2.5), ("A10", 2), ("3070", 1.8), ("T4", 0.8), ("2080", 1.5)]
+                                         ("3080", 2.5), ("A10", 2), ("3070", 1.8), ("T4", 0.8), ("2080", 1.5),
+                                         // Apple GPUs (iPhone / other Macs running the Metal trainer); before "A10"-style
+                                         // CUDA names can't collide: checked in order, longest names first
+                                         ("M4 Max", 2), ("M4 Pro", 1), ("M3 Max", 1.7), ("M3 Pro", 0.8), ("M2 Max", 1.4),
+                                         ("A18 Pro", 0.22), ("A18", 0.18), ("A17 Pro", 0.18)]
+        // Apple chip names first (an "Apple A18 Pro" must not match the CUDA "A10"/"A100" entries)
+        let apple = table.filter { ["M4", "M3", "M2", "A18", "A17"].contains(where: $0.0.hasPrefix) }
         let s = gpus.map { g -> Double in
+            if g.name.hasPrefix("Apple"), let hit = apple.first(where: { g.name.localizedCaseInsensitiveContains($0.0) }) { return hit.1 }
             if let hit = table.first(where: { g.name.localizedCaseInsensitiveContains($0.0) }) { return hit.1 }
             return max(0.5, Double(g.memoryMB ?? 8000) / 8000)
         }.reduce(0, +)

@@ -76,6 +76,8 @@ struct RenderStats: Equatable {
     var total: Int = 0
 }
 
+// The viewer is macOS-only; the types above are also compiled into the iPhone app's trainer (ios/project.yml).
+#if os(macOS)
 /// Draws a `SplatScene` into an MTKView: project → sort → instanced quads (+ line overlays).
 final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     let ctx: MetalContext
@@ -346,3 +348,4 @@ final class SplatRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         return tex
     }
 }
+#endif

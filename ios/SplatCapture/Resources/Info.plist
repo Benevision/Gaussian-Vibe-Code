@@ -34,11 +34,12 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_splatcapture._tcp</string>
+		<string>_splatworker._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac.</string>
+	<string>Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac, and (Compute screen) lets Splat Studio send training work to this iPhone.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>

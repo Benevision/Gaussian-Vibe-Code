@@ -7,6 +7,7 @@ struct CaptureView: View {
     @State private var model = CaptureViewModel()
     @State private var showLibrary = false
     @State private var showSettings = false
+    @State private var showCompute = false
     @State private var flash = false
     @State private var sendTarget: CaptureItem?
 
@@ -66,7 +67,7 @@ struct CaptureView: View {
                     model.stopRecording()
                 }
             case .active:
-                if !showLibrary && !showSettings { model.startSession(settings: settings.capture) }
+                if !showLibrary && !showSettings && !showCompute { model.startSession(settings: settings.capture) }
             default: break
             }
         }
@@ -75,6 +76,10 @@ struct CaptureView: View {
         }
         .sheet(isPresented: $showSettings, onDismiss: { model.startSession(settings: settings.capture) }) {
             SettingsView()
+        }
+        // The AR session is paused while the Compute screen is up: training wants the whole GPU.
+        .fullScreenCover(isPresented: $showCompute, onDismiss: { model.startSession(settings: settings.capture) }) {
+            ComputeView()
         }
         .sheet(isPresented: $model.showFinished) {
             if let summary = model.lastSummary {
@@ -196,17 +201,24 @@ struct CaptureView: View {
                 .background(.ultraThinMaterial, in: Capsule())
             }
             HStack {
-                circleButton("square.stack.3d.up", label: "Library") { openLibrary() }
-                    .opacity(model.phase == .idle ? 1 : 0)
-                    .disabled(model.phase != .idle)
-                Spacer()
+                HStack {
+                    circleButton("square.stack.3d.up", label: "Library") { openLibrary() }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .opacity(model.phase == .idle ? 1 : 0)
+                .disabled(model.phase != .idle)
                 RecordButton(phase: model.phase) {
                     if model.isRecording { model.stopRecording() } else { model.startRecording(settings: settings.capture) }
                 }
-                Spacer()
-                circleButton("gearshape", label: "Settings") { showSettings = true }
-                    .opacity(model.phase == .idle ? 1 : 0)
-                    .disabled(model.phase != .idle)
+                HStack(spacing: 10) {
+                    Spacer()
+                    circleButton("cpu", label: "Compute") { model.pauseSession(); showCompute = true }
+                    circleButton("gearshape", label: "Settings") { showSettings = true }
+                }
+                .frame(maxWidth: .infinity)
+                .opacity(model.phase == .idle ? 1 : 0)
+                .disabled(model.phase != .idle)
             }
         }
     }

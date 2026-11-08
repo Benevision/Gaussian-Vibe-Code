@@ -7,67 +7,178 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0C3A53A25B0D2E5957AC8D78 /* RenderShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F8B6036D2B206D4917C169 /* RenderShaders.swift */; };
+		172AF28DCB37B4E80029D195 /* TrainingData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AE6CA3FC42FE6EFDD3DC4D4 /* TrainingData.swift */; };
 		1856929F32D179B03BB94595 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64939A11153C5CCB19C3F165 /* SettingsView.swift */; };
 		19604350768953FEE29548EA /* ARCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1967B5E415C2458998D042F3 /* ARCaptureView.swift */; };
+		1D5754C23A604FF71B5DF611 /* HTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC7897FB9F1FAC1619A6C1F /* HTTPServer.swift */; };
 		299B4D8EE2C8DF9B1BCEC1CE /* CaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF41F58A2BB1AA8A56C19F27 /* CaptureStore.swift */; };
+		3AD4ABCD1EFF242A29175670 /* CommonShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = C77BC5C83B6155013ADD0900 /* CommonShaders.swift */; };
 		3CEFF53BE29C024D9EBFEAC8 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEFFAFEA95589D94A7784FFB /* LibraryView.swift */; };
+		443E4924AEF0A9763B82BE47 /* libSplatTrainKit.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */; };
+		4530EF48D3933CE7BBA7E7DB /* TrainKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2F5DB8F3ED27AACCB62CB7 /* TrainKit.swift */; };
 		47773DE0AFB8030284C22FD8 /* CaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E82E0A0E82B4AB3D759285D4 /* CaptureEngine.swift */; };
+		4CCA28D1813B5FE271167174 /* ComputeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E260976EBB2B7F5210EFB5 /* ComputeView.swift */; };
 		4D7FDF4BB7998684197D9D6B /* CaptureMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27751E67941D1E997EF6BF0 /* CaptureMath.swift */; };
 		4E4CAE3563DA54A1683ECF88 /* KeyframeSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4ED171959AEA0BD153F5C17 /* KeyframeSelector.swift */; };
 		54D0BB47FBFB13975FCFD547 /* CaptureUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD4598D368998A0C3D3DBEFE /* CaptureUploader.swift */; };
+		627BA7943483B5D7486E5397 /* SplatScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9D93F2E1151B29A4DF01E18 /* SplatScene.swift */; };
 		7ED61AFC936F05A204566086 /* SplatCaptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4754FAF3FE754B14931580F5 /* SplatCaptureApp.swift */; };
 		7FA94F992D70BA8CE807BD41 /* FrameProcessing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7230BB00608C7000385A1398 /* FrameProcessing.swift */; };
+		8CE5799AC51E4E2AFB176A8B /* WorkerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 738A9126E8ABD718EB432486 /* WorkerEngine.swift */; };
+		8DBF103CAE62AD8E751D8BC2 /* Orientation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 125E7121EBE8E6A02250027A /* Orientation.swift */; };
+		8EC67CE16C617F1A81F9BB02 /* ZipReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E996A0C926E38823DCA5E5BC /* ZipReader.swift */; };
 		91D7099B83469EB5D927B315 /* ZipWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40FC10AED40D99412EF33CDA /* ZipWriter.swift */; };
+		970C8EACAE1848F7FF0453D9 /* SortShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEE078DC37C6A8A3EE1AD26 /* SortShaders.swift */; };
+		997AECC865BADFD71AE7298D /* Dataset.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5931E6AE322FF3EA761A66 /* Dataset.swift */; };
+		9CA596FEF55D2B0116D155C2 /* TrainShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F46906B03EBFC6B7CE135FB /* TrainShaders.swift */; };
+		A75F90BBBF2911232F5C5F89 /* WorkerRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6075520FB1132C753F4C6A10 /* WorkerRouter.swift */; };
+		A7D15765859FEE849F7D263F /* MacShims.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B67FFA64D7916F05F96B7D3 /* MacShims.swift */; };
 		A988BB74A895A97D7E0D533F /* MiniMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20C3E7A4204426419D0315C5 /* MiniMapView.swift */; };
+		AA685982625799DBF95386FA /* MetalTrainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CB75762CC6A47897F47538C /* MetalTrainer.swift */; };
+		AEE69BD7A99381990F836E8D /* MetalContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5ED7C3D6A56E0E5F5D87C4D /* MetalContext.swift */; };
+		B2B74E577DA08B698F899880 /* TrainingConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38A6A70AD3BBA9693569029C /* TrainingConfig.swift */; };
 		C3561D2E807E59D8CD9DBA0D /* SendToMacView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4DBA7787CA528054AA4A91D /* SendToMacView.swift */; };
 		C49115AE873BE5BF1C6C5146 /* CaptureLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DE62540330CF8F9125B781B /* CaptureLibrary.swift */; };
 		C87F9D3390496E7B8A034845 /* MacBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA88B695CD280B1A7887921 /* MacBrowser.swift */; };
+		CAA36D7C210183CA6B9FFCEF /* SplatRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE388D3F31111D280E56E67 /* SplatRenderer.swift */; };
 		CEA5C980E9C73C4DB679517F /* Manifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6C42AF3DDA458931753874A /* Manifest.swift */; };
 		CFD437A92C57D1C7EC3DDAEA /* CaptureViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A75CD0B08E056AD6B63A87D /* CaptureViewModel.swift */; };
+		D08E3594660A7ECF3FC63AFE /* PLY.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB78C49B0F431BF2F1B3C52C /* PLY.swift */; };
 		D2DBD5DE47ADBBDFFE02B3EA /* CaptureSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B123AD2869CA42EB988E0E19 /* CaptureSettings.swift */; };
+		DDDA404DD1FFA026A4C84E6F /* Coverage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94432A826967ACC48974A92A /* Coverage.swift */; };
+		E3E427CD47FF637359F7622F /* ComputeWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62BC6700294A26D0674AF7F2 /* ComputeWorker.swift */; };
 		E3F0BF3F7E044D83DBF53167 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C938B6AB63A19BDCA8B5B6A /* AppSettings.swift */; };
 		E5ECE8052AA8A463334A331D /* PointFusion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E6E4AC929F13FF4FC36C42C /* PointFusion.swift */; };
+		E8E23BC6722983C55018FF74 /* GaussianCloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F86D995F2A9DAE99180DC03 /* GaussianCloud.swift */; };
 		F211C19EAF7DC011E2F0A8E7 /* CaptureRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E538DAE29038A250B48D672D /* CaptureRecorder.swift */; };
 		F62E4C46264601F77993CA25 /* CaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F405692A32B48CC65C31790D /* CaptureView.swift */; };
 		F6E9B5FF4A558D404B4EFDF4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D409F3B7B497DC42120D9E69 /* Assets.xcassets */; };
 		F76A0FB6E51B7F26BC8B8C7A /* DeviceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1782901647502ABB335730F8 /* DeviceInfo.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		E27B6F6E1AE6CA58CE090D62 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1C8956FB07095D4864DE8636 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A19D50587F3636DBA18B747F;
+			remoteInfo = SplatTrainKit;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		0B67FFA64D7916F05F96B7D3 /* MacShims.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShims.swift; sourceTree = "<group>"; };
+		0DE388D3F31111D280E56E67 /* SplatRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatRenderer.swift; sourceTree = "<group>"; };
 		0E6E4AC929F13FF4FC36C42C /* PointFusion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PointFusion.swift; sourceTree = "<group>"; };
+		125E7121EBE8E6A02250027A /* Orientation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Orientation.swift; sourceTree = "<group>"; };
 		150DF0AD5C673970BB3E77CE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1782901647502ABB335730F8 /* DeviceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfo.swift; sourceTree = "<group>"; };
 		1967B5E415C2458998D042F3 /* ARCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARCaptureView.swift; sourceTree = "<group>"; };
 		20C3E7A4204426419D0315C5 /* MiniMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMapView.swift; sourceTree = "<group>"; };
 		2DE62540330CF8F9125B781B /* CaptureLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureLibrary.swift; sourceTree = "<group>"; };
+		38A6A70AD3BBA9693569029C /* TrainingConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingConfig.swift; sourceTree = "<group>"; };
 		40FC10AED40D99412EF33CDA /* ZipWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipWriter.swift; sourceTree = "<group>"; };
 		4754FAF3FE754B14931580F5 /* SplatCaptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatCaptureApp.swift; sourceTree = "<group>"; };
+		518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = archive.ar; path = libSplatTrainKit.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		58E260976EBB2B7F5210EFB5 /* ComputeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComputeView.swift; sourceTree = "<group>"; };
 		5C938B6AB63A19BDCA8B5B6A /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		6075520FB1132C753F4C6A10 /* WorkerRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerRouter.swift; sourceTree = "<group>"; };
+		62BC6700294A26D0674AF7F2 /* ComputeWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComputeWorker.swift; sourceTree = "<group>"; };
 		64939A11153C5CCB19C3F165 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		6AA88B695CD280B1A7887921 /* MacBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBrowser.swift; sourceTree = "<group>"; };
+		6CB75762CC6A47897F47538C /* MetalTrainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalTrainer.swift; sourceTree = "<group>"; };
+		6CC7897FB9F1FAC1619A6C1F /* HTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPServer.swift; sourceTree = "<group>"; };
 		7230BB00608C7000385A1398 /* FrameProcessing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessing.swift; sourceTree = "<group>"; };
-		7A2CE60DC8CED6FBC2677AB1 /* SplatCapture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SplatCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		738A9126E8ABD718EB432486 /* WorkerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerEngine.swift; sourceTree = "<group>"; };
+		7A2CE60DC8CED6FBC2677AB1 /* SplatCapture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SplatCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7AE6CA3FC42FE6EFDD3DC4D4 /* TrainingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingData.swift; sourceTree = "<group>"; };
+		94432A826967ACC48974A92A /* Coverage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Coverage.swift; sourceTree = "<group>"; };
 		9A75CD0B08E056AD6B63A87D /* CaptureViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureViewModel.swift; sourceTree = "<group>"; };
+		9F46906B03EBFC6B7CE135FB /* TrainShaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainShaders.swift; sourceTree = "<group>"; };
+		9F86D995F2A9DAE99180DC03 /* GaussianCloud.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianCloud.swift; sourceTree = "<group>"; };
 		B123AD2869CA42EB988E0E19 /* CaptureSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSettings.swift; sourceTree = "<group>"; };
+		B1F8B6036D2B206D4917C169 /* RenderShaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderShaders.swift; sourceTree = "<group>"; };
 		B4ED171959AEA0BD153F5C17 /* KeyframeSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyframeSelector.swift; sourceTree = "<group>"; };
+		B9D93F2E1151B29A4DF01E18 /* SplatScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatScene.swift; sourceTree = "<group>"; };
+		BDEE078DC37C6A8A3EE1AD26 /* SortShaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SortShaders.swift; sourceTree = "<group>"; };
 		C27751E67941D1E997EF6BF0 /* CaptureMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMath.swift; sourceTree = "<group>"; };
 		C6C42AF3DDA458931753874A /* Manifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Manifest.swift; sourceTree = "<group>"; };
+		C77BC5C83B6155013ADD0900 /* CommonShaders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommonShaders.swift; sourceTree = "<group>"; };
+		D0D4AFD97143C34367E60A64 /* SplatCapture.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SplatCapture.entitlements; sourceTree = "<group>"; };
 		D409F3B7B497DC42120D9E69 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DB78C49B0F431BF2F1B3C52C /* PLY.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PLY.swift; sourceTree = "<group>"; };
 		DD4598D368998A0C3D3DBEFE /* CaptureUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureUploader.swift; sourceTree = "<group>"; };
 		DEFFAFEA95589D94A7784FFB /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		DF41F58A2BB1AA8A56C19F27 /* CaptureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStore.swift; sourceTree = "<group>"; };
 		E4DBA7787CA528054AA4A91D /* SendToMacView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SendToMacView.swift; sourceTree = "<group>"; };
 		E538DAE29038A250B48D672D /* CaptureRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureRecorder.swift; sourceTree = "<group>"; };
 		E82E0A0E82B4AB3D759285D4 /* CaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEngine.swift; sourceTree = "<group>"; };
+		E996A0C926E38823DCA5E5BC /* ZipReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipReader.swift; sourceTree = "<group>"; };
+		EE5931E6AE322FF3EA761A66 /* Dataset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dataset.swift; sourceTree = "<group>"; };
 		F405692A32B48CC65C31790D /* CaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureView.swift; sourceTree = "<group>"; };
+		F5ED7C3D6A56E0E5F5D87C4D /* MetalContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalContext.swift; sourceTree = "<group>"; };
+		FA2F5DB8F3ED27AACCB62CB7 /* TrainKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainKit.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		B3228D0F1684036CEFBF4237 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				443E4924AEF0A9763B82BE47 /* libSplatTrainKit.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		11628CBAE981E6FA57B1C0F0 /* SplatTrainKit */ = {
+			isa = PBXGroup;
+			children = (
+				0B67FFA64D7916F05F96B7D3 /* MacShims.swift */,
+				FA2F5DB8F3ED27AACCB62CB7 /* TrainKit.swift */,
+			);
+			path = SplatTrainKit;
+			sourceTree = "<group>";
+		};
+		1B8CD4372CF21A21DCF98494 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				4D5F3BFD618D7ED18A9C2006 /* SplatStudio */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		1F318F73C44D872CC4446715 /* Compute */ = {
+			isa = PBXGroup;
+			children = (
+				62BC6700294A26D0674AF7F2 /* ComputeWorker.swift */,
+				6CC7897FB9F1FAC1619A6C1F /* HTTPServer.swift */,
+				738A9126E8ABD718EB432486 /* WorkerEngine.swift */,
+				6075520FB1132C753F4C6A10 /* WorkerRouter.swift */,
+				E996A0C926E38823DCA5E5BC /* ZipReader.swift */,
+			);
+			path = Compute;
+			sourceTree = "<group>";
+		};
+		1F6CA5345E5BA988B92992C3 /* Shaders */ = {
+			isa = PBXGroup;
+			children = (
+				C77BC5C83B6155013ADD0900 /* CommonShaders.swift */,
+				B1F8B6036D2B206D4917C169 /* RenderShaders.swift */,
+				BDEE078DC37C6A8A3EE1AD26 /* SortShaders.swift */,
+				9F46906B03EBFC6B7CE135FB /* TrainShaders.swift */,
+			);
+			path = Shaders;
+			sourceTree = "<group>";
+		};
 		38D5410CAB83E2A1B7707A22 /* SplatCapture */ = {
 			isa = PBXGroup;
 			children = (
 				3BF03AD419FACE2E9C50EABC /* App */,
 				EF3B22579E99F849A97766DE /* Capture */,
+				1F318F73C44D872CC4446715 /* Compute */,
 				FB2F8403198DF4608A4DABEB /* Library */,
 				8FC5D21D5D12F3FF15FBDB1B /* Resources */,
 				F60FA4FAEF41DAA623A01BA8 /* Transfer */,
@@ -86,11 +197,52 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		4D5F3BFD618D7ED18A9C2006 /* SplatStudio */ = {
+			isa = PBXGroup;
+			children = (
+				7C05815AF74A7BC52066A596 /* Core */,
+				FC98D8E112532DBD8A937542 /* Formats */,
+				E330E7EFFB4E10371C10DC64 /* Render */,
+				1F6CA5345E5BA988B92992C3 /* Shaders */,
+				AD5DA87F54573EAAF6EB7255 /* Train */,
+			);
+			path = SplatStudio;
+			sourceTree = "<group>";
+		};
+		556DB11ABF681A38BD40CAEC /* Guassian Splat Vibe Coded */ = {
+			isa = PBXGroup;
+			children = (
+				628C1000768B48A3FF02BEC7 /* mac */,
+			);
+			name = "Guassian Splat Vibe Coded";
+			path = ..;
+			sourceTree = "<group>";
+		};
+		628C1000768B48A3FF02BEC7 /* mac */ = {
+			isa = PBXGroup;
+			children = (
+				1B8CD4372CF21A21DCF98494 /* Sources */,
+			);
+			path = mac;
+			sourceTree = "<group>";
+		};
+		7C05815AF74A7BC52066A596 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				EE5931E6AE322FF3EA761A66 /* Dataset.swift */,
+				9F86D995F2A9DAE99180DC03 /* GaussianCloud.swift */,
+				125E7121EBE8E6A02250027A /* Orientation.swift */,
+				38A6A70AD3BBA9693569029C /* TrainingConfig.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
 		8FC5D21D5D12F3FF15FBDB1B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
 				D409F3B7B497DC42120D9E69 /* Assets.xcassets */,
 				150DF0AD5C673970BB3E77CE /* Info.plist */,
+				D0D4AFD97143C34367E60A64 /* SplatCapture.entitlements */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -101,6 +253,7 @@
 				1967B5E415C2458998D042F3 /* ARCaptureView.swift */,
 				F405692A32B48CC65C31790D /* CaptureView.swift */,
 				9A75CD0B08E056AD6B63A87D /* CaptureViewModel.swift */,
+				58E260976EBB2B7F5210EFB5 /* ComputeView.swift */,
 				DEFFAFEA95589D94A7784FFB /* LibraryView.swift */,
 				20C3E7A4204426419D0315C5 /* MiniMapView.swift */,
 				E4DBA7787CA528054AA4A91D /* SendToMacView.swift */,
@@ -109,10 +262,32 @@
 			path = UI;
 			sourceTree = "<group>";
 		};
+		AD5DA87F54573EAAF6EB7255 /* Train */ = {
+			isa = PBXGroup;
+			children = (
+				6CB75762CC6A47897F47538C /* MetalTrainer.swift */,
+				7AE6CA3FC42FE6EFDD3DC4D4 /* TrainingData.swift */,
+			);
+			path = Train;
+			sourceTree = "<group>";
+		};
+		E330E7EFFB4E10371C10DC64 /* Render */ = {
+			isa = PBXGroup;
+			children = (
+				94432A826967ACC48974A92A /* Coverage.swift */,
+				F5ED7C3D6A56E0E5F5D87C4D /* MetalContext.swift */,
+				0DE388D3F31111D280E56E67 /* SplatRenderer.swift */,
+				B9D93F2E1151B29A4DF01E18 /* SplatScene.swift */,
+			);
+			path = Render;
+			sourceTree = "<group>";
+		};
 		E6004219EEFA9A4368954E49 = {
 			isa = PBXGroup;
 			children = (
+				556DB11ABF681A38BD40CAEC /* Guassian Splat Vibe Coded */,
 				38D5410CAB83E2A1B7707A22 /* SplatCapture */,
+				11628CBAE981E6FA57B1C0F0 /* SplatTrainKit */,
 				FF21BE7354F11802A88E8955 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -151,9 +326,18 @@
 			path = Library;
 			sourceTree = "<group>";
 		};
+		FC98D8E112532DBD8A937542 /* Formats */ = {
+			isa = PBXGroup;
+			children = (
+				DB78C49B0F431BF2F1B3C52C /* PLY.swift */,
+			);
+			path = Formats;
+			sourceTree = "<group>";
+		};
 		FF21BE7354F11802A88E8955 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */,
 				7A2CE60DC8CED6FBC2677AB1 /* SplatCapture.app */,
 			);
 			name = Products;
@@ -168,10 +352,12 @@
 			buildPhases = (
 				0A730C6CE8D8166BE11F8F33 /* Sources */,
 				4F90FA6E7181B065591796E2 /* Resources */,
+				B3228D0F1684036CEFBF4237 /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D7DA728C925D14A675B450C7 /* PBXTargetDependency */,
 			);
 			name = SplatCapture;
 			packageProductDependencies = (
@@ -179,6 +365,24 @@
 			productName = SplatCapture;
 			productReference = 7A2CE60DC8CED6FBC2677AB1 /* SplatCapture.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A19D50587F3636DBA18B747F /* SplatTrainKit */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 86C399B96C1B566348A4D211 /* Build configuration list for PBXNativeTarget "SplatTrainKit" */;
+			buildPhases = (
+				2C61758EE837B8C8910814F1 /* Sources */,
+				30E14E4F8AD31FA4FE1564FF /* Copy Swift Objective-C Interface Header */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SplatTrainKit;
+			packageProductDependencies = (
+			);
+			productName = SplatTrainKit;
+			productReference = 518274B16DD673B16FBD5FE6 /* libSplatTrainKit.a */;
+			productType = "com.apple.product-type.library.static";
 		};
 /* End PBXNativeTarget section */
 
@@ -190,6 +394,11 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					024E39552749B3923583B0DF = {
+						DevelopmentTeam = "Ben Gunn";
+						ProvisioningStyle = Automatic;
+					};
+					A19D50587F3636DBA18B747F = {
+						DevelopmentTeam = "Ben Gunn";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -209,6 +418,7 @@
 			projectRoot = "";
 			targets = (
 				024E39552749B3923583B0DF /* SplatCapture */,
+				A19D50587F3636DBA18B747F /* SplatTrainKit */,
 			);
 		};
 /* End PBXProject section */
@@ -223,6 +433,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		30E14E4F8AD31FA4FE1564FF /* Copy Swift Objective-C Interface Header */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(DERIVED_SOURCES_DIR)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			name = "Copy Swift Objective-C Interface Header";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_MODULE_NAME)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "ditto \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0A730C6CE8D8166BE11F8F33 /* Sources */ = {
@@ -240,8 +469,11 @@
 				54D0BB47FBFB13975FCFD547 /* CaptureUploader.swift in Sources */,
 				F62E4C46264601F77993CA25 /* CaptureView.swift in Sources */,
 				CFD437A92C57D1C7EC3DDAEA /* CaptureViewModel.swift in Sources */,
+				4CCA28D1813B5FE271167174 /* ComputeView.swift in Sources */,
+				E3E427CD47FF637359F7622F /* ComputeWorker.swift in Sources */,
 				F76A0FB6E51B7F26BC8B8C7A /* DeviceInfo.swift in Sources */,
 				7FA94F992D70BA8CE807BD41 /* FrameProcessing.swift in Sources */,
+				1D5754C23A604FF71B5DF611 /* HTTPServer.swift in Sources */,
 				4E4CAE3563DA54A1683ECF88 /* KeyframeSelector.swift in Sources */,
 				3CEFF53BE29C024D9EBFEAC8 /* LibraryView.swift in Sources */,
 				C87F9D3390496E7B8A034845 /* MacBrowser.swift in Sources */,
@@ -251,11 +483,46 @@
 				C3561D2E807E59D8CD9DBA0D /* SendToMacView.swift in Sources */,
 				1856929F32D179B03BB94595 /* SettingsView.swift in Sources */,
 				7ED61AFC936F05A204566086 /* SplatCaptureApp.swift in Sources */,
+				8CE5799AC51E4E2AFB176A8B /* WorkerEngine.swift in Sources */,
+				A75F90BBBF2911232F5C5F89 /* WorkerRouter.swift in Sources */,
+				8EC67CE16C617F1A81F9BB02 /* ZipReader.swift in Sources */,
 				91D7099B83469EB5D927B315 /* ZipWriter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		2C61758EE837B8C8910814F1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3AD4ABCD1EFF242A29175670 /* CommonShaders.swift in Sources */,
+				DDDA404DD1FFA026A4C84E6F /* Coverage.swift in Sources */,
+				997AECC865BADFD71AE7298D /* Dataset.swift in Sources */,
+				E8E23BC6722983C55018FF74 /* GaussianCloud.swift in Sources */,
+				A7D15765859FEE849F7D263F /* MacShims.swift in Sources */,
+				AEE69BD7A99381990F836E8D /* MetalContext.swift in Sources */,
+				AA685982625799DBF95386FA /* MetalTrainer.swift in Sources */,
+				8DBF103CAE62AD8E751D8BC2 /* Orientation.swift in Sources */,
+				D08E3594660A7ECF3FC63AFE /* PLY.swift in Sources */,
+				0C3A53A25B0D2E5957AC8D78 /* RenderShaders.swift in Sources */,
+				970C8EACAE1848F7FF0453D9 /* SortShaders.swift in Sources */,
+				CAA36D7C210183CA6B9FFCEF /* SplatRenderer.swift in Sources */,
+				627BA7943483B5D7486E5397 /* SplatScene.swift in Sources */,
+				4530EF48D3933CE7BBA7E7DB /* TrainKit.swift in Sources */,
+				9CA596FEF55D2B0116D155C2 /* TrainShaders.swift in Sources */,
+				B2B74E577DA08B698F899880 /* TrainingConfig.swift in Sources */,
+				172AF28DCB37B4E80029D195 /* TrainingData.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D7DA728C925D14A675B450C7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A19D50587F3636DBA18B747F /* SplatTrainKit */;
+			targetProxy = E27B6F6E1AE6CA58CE090D62 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		20ECD1C0BB8957CACD52A41F /* Release */ = {
@@ -320,23 +587,45 @@
 			};
 			name = Release;
 		};
+		41EF10AA232B0A0A1E775F59 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.gunntower.SplatTrainKit;
+				PRODUCT_NAME = SplatTrainKit;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		5D26B38DC6AFD7A4494B6753 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SplatCapture/Resources/SplatCapture.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 8VBNKP8K93;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SplatCapture/Resources/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gunntower.splatcapture;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.splatcapture;
 				PRODUCT_NAME = SplatCapture;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -422,17 +711,19 @@
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SplatCapture/Resources/SplatCapture.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 8VBNKP8K93;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SplatCapture/Resources/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gunntower.splatcapture;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.splatcapture;
 				PRODUCT_NAME = SplatCapture;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -443,9 +734,38 @@
 			};
 			name = Debug;
 		};
+		EA5EF4BCC20E0DD1F541695F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.gunntower.SplatTrainKit;
+				PRODUCT_NAME = SplatTrainKit;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		86C399B96C1B566348A4D211 /* Build configuration list for PBXNativeTarget "SplatTrainKit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EA5EF4BCC20E0DD1F541695F /* Debug */,
+				41EF10AA232B0A0A1E775F59 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		A6EA7CF3A6C4F1F0BDCC2E90 /* Build configuration list for PBXProject "SplatCapture" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

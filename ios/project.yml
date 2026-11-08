@@ -23,6 +23,13 @@ targets:
     platform: iOS
     sources:
       - path: SplatCapture
+    dependencies:
+      - target: SplatTrainKit
+    entitlements:
+      path: SplatCapture/Resources/SplatCapture.entitlements
+      properties:
+        # Lets the on-device trainer (Compute screen) use more of the A18 Pro's 8 GB.
+        com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.splatcapture
@@ -55,7 +62,38 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: "Splat Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
-        NSLocalNetworkUsageDescription: "Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac."
-        NSBonjourServices: [_splatcapture._tcp]
+        NSLocalNetworkUsageDescription: "Splat Capture looks for Splat Studio on your local network so it can send captures to your Mac, and (Compute screen) lets Splat Studio send training work to this iPhone."
+        NSBonjourServices: [_splatcapture._tcp, _splatworker._tcp]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+
+  # The Mac app's Metal trainer (mac/Sources/SplatStudio, Swift 5 language mode there), compiled for iOS from
+  # the same files plus a small public facade (SplatTrainKit/TrainKit.swift). Kept in its own module so the
+  # shared sources build in Swift 5 mode while the app stays Swift 6; optimised even in Debug because the
+  # trainer's CPU-side densification is unusably slow at -Onone.
+  SplatTrainKit:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: SplatTrainKit
+      - path: ../mac/Sources/SplatStudio/Core/Dataset.swift
+      - path: ../mac/Sources/SplatStudio/Core/GaussianCloud.swift
+      - path: ../mac/Sources/SplatStudio/Core/Orientation.swift
+      - path: ../mac/Sources/SplatStudio/Core/TrainingConfig.swift
+      - path: ../mac/Sources/SplatStudio/Train/MetalTrainer.swift
+      - path: ../mac/Sources/SplatStudio/Train/TrainingData.swift
+      - path: ../mac/Sources/SplatStudio/Render/MetalContext.swift
+      - path: ../mac/Sources/SplatStudio/Render/SplatScene.swift
+      - path: ../mac/Sources/SplatStudio/Render/SplatRenderer.swift
+      - path: ../mac/Sources/SplatStudio/Render/Coverage.swift
+      - path: ../mac/Sources/SplatStudio/Shaders
+      - path: ../mac/Sources/SplatStudio/Formats/PLY.swift
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        SWIFT_OPTIMIZATION_LEVEL: "-O"
+        ARCHS: arm64
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SKIP_INSTALL: YES
+        PRODUCT_NAME: SplatTrainKit
