@@ -37,7 +37,7 @@ enum CLI {
             withExtendedLifetime(server) { dispatchMain() }
         }
         if a.contains("--update-check") {
-            // Latest GitHub release vs this build; --download also fetches, verifies and unpacks it (not installed).
+            // Latest GitHub release (--dev: the rolling developer build) vs this build; --download also fetches, verifies and unpacks it (not installed).
             let cases: [(String, String, Bool)] = [("1.1.0", "1.0.0", true), ("1.0.0", "1.0.0", false), ("1.0.0", "1.0.0-dev", false),
                                                   ("1.1.0", "1.0.0-dev", true), ("1.0.0", "1.0.0-rc1", true), ("1.0.10", "1.0.9", true),
                                                   ("1.0", "1.0.1", false), ("2.0.0-rc1", "1.9.0", true)]
@@ -46,8 +46,8 @@ enum CLI {
             let sem = DispatchSemaphore(value: 0)
             Task.detached {
                 do {
-                    guard let r = try await AppUpdater.fetchLatest() else { print("no release"); sem.signal(); return }
-                    print("latest \(r.version) (\(r.dmgName), \(r.dmgSize) bytes, sums: \(r.checksums != nil)); this build \(current); newer: \(AppUpdater.isNewer(r.version, than: current))")
+                    guard let r = try await AppUpdater.fetchLatest(dev: CommandLine.arguments.contains("--dev")) else { print("no release"); sem.signal(); return }
+                    print("latest \(r.displayVersion) (\(r.dmgName), \(r.dmgSize) bytes, sums: \(r.checksums != nil)); this build \(current); newer: \(AppUpdater.isNewer(r.version, than: current))")
                     if CommandLine.arguments.contains("--download") {
                         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("splatwork-update-\(UUID().uuidString)")
                         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -60,7 +60,7 @@ enum CLI {
                             let have = try AppUpdater.sha256(of: dmg)
                             print("sha256 \(have == want ? "ok" : "MISMATCH") \(have)")
                         }
-                        let app = try AppUpdater.extractApp(from: dmg, into: dir, version: r.version)
+                        let app = try AppUpdater.extractApp(from: dmg, into: dir, version: r.version, build: r.build)
                         print("staged \(app.path)")
                     }
                 } catch { print("error: \(error.localizedDescription)") }

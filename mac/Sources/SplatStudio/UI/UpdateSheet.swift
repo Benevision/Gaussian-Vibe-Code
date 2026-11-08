@@ -67,7 +67,7 @@ struct UpdateSheet: View {
     }
 
     private var title: String {
-        let v = updater.release?.version ?? ""
+        let v = updater.release?.displayVersion ?? ""
         switch updater.phase {
         case .checking: return "Checking for updates…"
         case .upToDate, .idle: return "SplatWork is up to date"
@@ -79,10 +79,10 @@ struct UpdateSheet: View {
     }
 
     private var subtitle: String {
-        let cur = updater.currentVersion ?? "?"
+        let cur = updater.devChannel ? "\(updater.currentVersion ?? "?") (build \(updater.currentBuild))" : (updater.currentVersion ?? "?")
         switch updater.phase {
         case .checking: return "Looking at the latest release on GitHub."
-        case .upToDate, .idle: return "You have version \(cur), the latest release."
+        case .upToDate, .idle: return updater.devChannel ? "You have \(cur), the latest developer build." : "You have version \(cur), the latest release."
         case .available: return "You have \(cur)."
         case .downloading: return "You have \(cur). The download is verified before it's offered."
         case .ready: return "You have \(cur). The download is verified. Relaunch now, or it installs the next time you quit SplatWork."

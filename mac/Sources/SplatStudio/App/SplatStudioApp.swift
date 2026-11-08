@@ -149,6 +149,11 @@ struct PreferencesView: View {
                 Text("New releases come from GitHub, are checked against their published SHA-256, and install when you relaunch or quit.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Developer") {
+                Toggle("Developer builds (update from main)", isOn: Bindable(AppUpdater.shared).devChannel)
+                Text("Follows the build made from every push to main instead of tagged releases. Newer features, less tested. Turn off to go back to releases — the next release newer than your build is offered.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .padding(20)
         .frame(width: 460)

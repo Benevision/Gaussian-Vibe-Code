@@ -28,6 +28,11 @@ final class AppUpdater {
         var dmgName: String
         var dmgSize: Int
         var checksums: URL?
+        var buildInfo: URL? = nil
+        /// Developer builds: the build number (commit count) from the release's build.json.
+        var build: Int? = nil
+        var displayVersion: String { build.map { "\(version) (build \($0))" } ?? version }
+        var skipKey: String { build.map { "\(version)#\($0)" } ?? version }
     }
 
     enum Phase: Equatable {
@@ -52,6 +57,18 @@ final class AppUpdater {
     var autoDownload: Bool = UserDefaults.standard.object(forKey: "updates.autoDownload") as? Bool ?? true {
         didSet { UserDefaults.standard.set(autoDownload, forKey: "updates.autoDownload") }
     }
+    /// Developer builds: follow the rolling "dev" pre-release that mac-dev.yml rebuilds on every push to main.
+    var devChannel: Bool = UserDefaults.standard.bool(forKey: "updates.devChannel") {
+        didSet {
+            guard devChannel != oldValue else { return }
+            UserDefaults.standard.set(devChannel, forKey: "updates.devChannel")
+            if phase != .ready, !isDownloading { release = nil; phase = .idle }
+            if autoCheck, isSupported { Task { await check(userInitiated: false) } }
+        }
+    }
+    private var isDownloading: Bool { if case .downloading = phase { return true }; return false }
+    let currentBuild: Int = Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0
+
     private var skippedVersion: String? {
         get { UserDefaults.standard.string(forKey: "updates.skipped") }
         set { UserDefaults.standard.set(newValue, forKey: "updates.skipped") }
@@ -93,13 +110,15 @@ final class AppUpdater {
         phase = .checking
         if userInitiated { showPrompt = true }
         do {
-            guard let r = try await Self.fetchLatest(), Self.isNewer(r.version, than: current) else {
+            let dev = devChannel
+            guard let r = try await Self.fetchLatest(dev: dev),
+                  dev ? (r.build ?? 0) > currentBuild : Self.isNewer(r.version, than: current) else {
                 lastChecked = Date(); phase = .upToDate; release = nil
                 return
             }
             lastChecked = Date()
             release = r
-            if !userInitiated && skippedVersion == r.version { phase = .idle; return }
+            if !userInitiated && skippedVersion == r.skipKey { phase = .idle; return }
             if autoDownload || userInitiated { await download(r, promptWhenReady: true) }
             else { phase = .available; showPrompt = true }
         } catch {
@@ -107,8 +126,9 @@ final class AppUpdater {
         }
     }
 
-    nonisolated static func fetchLatest() async throws -> Release? {
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!)
+    nonisolated static func fetchLatest(dev: Bool = false) async throws -> Release? {
+        let path = dev ? "releases/tags/dev" : "releases/latest"
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repository)/\(path)")!)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("SplatWork-Updater", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 20
@@ -116,13 +136,22 @@ final class AppUpdater {
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 404 { return nil }   // no releases yet
         guard code == 200 else { throw UpdateError("GitHub answered \(code)") }
-        return try parseRelease(data)
+        guard var r = try parseRelease(data, allowPrerelease: dev) else { return nil }
+        if dev {
+            guard let u = r.buildInfo else { return nil }
+            let (d, _) = try await URLSession.shared.data(from: u)
+            let j = try JSONSerialization.jsonObject(with: d) as? [String: Any]
+            r.build = j?["build"] as? Int
+            if let v = j?["version"] as? String { r.version = v }
+            guard r.build != nil else { return nil }
+        }
+        return r
     }
 
-    nonisolated static func parseRelease(_ data: Data) throws -> Release? {
+    nonisolated static func parseRelease(_ data: Data, allowPrerelease: Bool = false) throws -> Release? {
         guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = j["tag_name"] as? String else { throw UpdateError("Unexpected answer from GitHub") }
-        if j["draft"] as? Bool == true || j["prerelease"] as? Bool == true { return nil }
+        if j["draft"] as? Bool == true || (j["prerelease"] as? Bool == true && !allowPrerelease) { return nil }
         let assets = j["assets"] as? [[String: Any]] ?? []
         func asset(_ match: (String) -> Bool) -> (URL, String, Int)? {
             for a in assets {
@@ -134,11 +163,12 @@ final class AppUpdater {
         }
         guard let dmg = asset({ $0.lowercased().hasSuffix(".dmg") }) else { return nil }
         let sums = asset { $0.uppercased().hasPrefix("SHA256SUMS") }
+        let buildInfo = asset { $0 == "build.json" }
         let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
         let page = (j["html_url"] as? String).flatMap(URL.init(string:))
             ?? URL(string: "https://github.com/\(repository)/releases")!
         return Release(version: version, tag: tag, notes: j["body"] as? String ?? "", page: page,
-                       dmg: dmg.0, dmgName: dmg.1, dmgSize: dmg.2, checksums: sums?.0)
+                       dmg: dmg.0, dmgName: dmg.1, dmgSize: dmg.2, checksums: sums?.0, buildInfo: buildInfo?.0)
     }
 
     /// Numeric comparison of `1.2.3[-suffix]`. A suffix marks a build *before* that release (`-rc1`), except
@@ -168,7 +198,7 @@ final class AppUpdater {
 
     private func download(_ r: Release, promptWhenReady: Bool) async {
         phase = .downloading(0)
-        let dir = Self.stagingRoot.appendingPathComponent(r.version, isDirectory: true)
+        let dir = Self.stagingRoot.appendingPathComponent(r.skipKey.replacingOccurrences(of: "#", with: "-b"), isDirectory: true)
         do {
             try? FileManager.default.removeItem(at: dir)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -182,7 +212,7 @@ final class AppUpdater {
                 let have = try await Task.detached { try Self.sha256(of: dmg) }.value
                 guard have == want else { throw UpdateError("The download is damaged (checksum mismatch). Try again.") }
             }
-            let app = try await Task.detached { try Self.extractApp(from: dmg, into: dir, version: r.version) }.value
+            let app = try await Task.detached { try Self.extractApp(from: dmg, into: dir, version: r.version, build: r.build) }.value
             try? FileManager.default.removeItem(at: dmg)
             stagedApp = app
             phase = .ready
@@ -234,7 +264,7 @@ final class AppUpdater {
     }
 
     /// Mounts the disk image, copies the app next to it and checks it is a signed SplatWork of that version.
-    nonisolated static func extractApp(from dmg: URL, into dir: URL, version: String) throws -> URL {
+    nonisolated static func extractApp(from dmg: URL, into dir: URL, version: String, build: Int? = nil) throws -> URL {
         let mount = dir.appendingPathComponent("mnt", isDirectory: true)
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
         try run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen", "-quiet", "-mountpoint", mount.path, dmg.path])
@@ -250,6 +280,9 @@ final class AppUpdater {
         }
         guard info["CFBundleShortVersionString"] as? String == version else {
             throw UpdateError("The downloaded app is version \(info["CFBundleShortVersionString"] ?? "?"), expected \(version).")
+        }
+        if let build, Int(info["CFBundleVersion"] as? String ?? "") != build {
+            throw UpdateError("The downloaded app is build \(info["CFBundleVersion"] ?? "?"), expected \(build).")
         }
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         _ = try? run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", app.path])
@@ -297,7 +330,7 @@ final class AppUpdater {
     }
 
     func skipThisVersion() {
-        skippedVersion = release?.version
+        skippedVersion = release?.skipKey
         showPrompt = false
         if phase == .available { phase = .idle }
         if phase == .ready, let app = stagedApp { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()); stagedApp = nil; phase = .idle }
