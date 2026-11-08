@@ -58,10 +58,11 @@ struct TrainingConfig: Codable, Equatable {
     var appearanceLR: Float = 0.02
     /// Pulls each photo's correction towards its starting value (higher = corrections stay smaller).
     var appearanceReg: Float = 0.001
-    /// Per-photo LOCAL colour correction (bilateral grid) — Linux worker only; the Mac trainer ignores it.
-    /// For long captures where lighting moves between shots (drone flights: sun and shadows). Replaces the
-    /// global per-photo correction when on.
-    var bilateralGrid = false
+    /// Per-photo LOCAL colour correction (bilateral grid), Mac and Linux worker. For captures where lighting
+    /// moves between shots (drone flights: sun and shadows). Replaces the global per-photo correction when on.
+    /// On by default since 2026-11-08: drone +0.8 dB (Mac 16.37 → 17.18, PC 17.16 → 17.91), bedroom neutral
+    /// (23.44 → 23.46, same training time).
+    var bilateralGrid = true
     /// Down-weight LiDAR / stereo depth at image edges, where depth sensors are least reliable.
     var depthEdgeAware = true
     /// Penalty on splats whose longest axis exceeds `anisotropyMaxRatio` × their shortest (needle splats

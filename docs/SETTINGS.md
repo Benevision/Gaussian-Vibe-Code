@@ -1,6 +1,6 @@
 # Splat Studio — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 110 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
@@ -8,7 +8,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 - [Editing](#editing) — 7 settings
 - [Sources & frame extraction](#sources--frame-extraction) — 13 settings
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
-- [Masking](#masking) — 2 settings
+- [Masking](#masking) — 3 settings
 - [Training — basics](#training--basics) — 9 settings
 - [Training — densification](#training--densification) — 12 settings
 - [Training — learning rates](#training--learning-rates) — 5 settings
@@ -867,6 +867,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 | Setting | Default | Range | Mode |
 |---|---|---|---|
 | [Mask model](#mask-model) | None | – | Easy |
+| [Mask fixed parts of the frame](#mask-fixed-parts-of-the-frame) | Off | – | Advanced |
 | [Invert mask](#invert-mask) | Off | – | Advanced |
 
 ### Mask model
@@ -887,6 +888,25 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 - Sky removal for outdoor scenes.
 - You can review and correct any masks afterwards with Edit masks… (click an object once and SAM 2 tracks it through every frame).
 - Masks combine with 'Ignore moving objects' during training.
+
+### Mask fixed parts of the frame
+
+> Masks things that move with the camera: a lens rim, a burned-in timestamp or logo, propellers, a car bonnet or selfie stick.
+
+| | |
+|---|---|
+| **Default** | Off |
+| **Mode** | Advanced |
+| **ID** | `mask.staticRegions` |
+
+**How it works.** For each camera (each 360° view direction separately) up to 48 frames are compared.
+
+- Pixels that stay the same while the camera moves, and are either near-black or have edges in the average image, are masked out of training, so they don't get painted into the scene as a smear that follows the camera.
+- Plain sky also stays the same but has no edges, so it is kept, and the boundary of a fixed band (a horizon that stays put in forward flight) is not treated as an overlay.
+
+**When to change it**
+
+- If more than a quarter of the frame looks fixed (the camera barely moves), nothing is masked for that camera.
 
 ### Invert mask
 
@@ -1320,7 +1340,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 | [Big-splat penalty](#big-splat-penalty) | 10 | 0–30 | Advanced |
 | [Needle ratio limit](#needle-ratio-limit) | 10 | 2–50 | Advanced |
 | [Coverage needed to ignore moving objects](#coverage-needed-to-ignore-moving-objects) | 15° | 5–45 | Advanced |
-| [Local colour correction (PC)](#local-colour-correction-pc) | Off | – | Advanced |
+| [Local colour correction](#local-colour-correction) | On (Mac and Linux worker) | – | Advanced |
 | [Per-photo colour correction](#per-photo-colour-correction) | On (off automatically when exposure is locked) | – | Easy |
 | [Colour-correction learning rate](#colour-correction-learning-rate) | 0.02 | 0.001–0.1 | Advanced |
 | [Colour-correction strength limit](#colour-correction-strength-limit) | 0.001 | 0–0.1 | Advanced |
@@ -1481,13 +1501,13 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 - On a sparse bedroom capture (~21° apart) turning it off improved held-out PSNR by about 1 dB, because real scenery was being ignored as 'moving'.
 - Dense captures are typically 3–10°.
 
-### Local colour correction (PC)
+### Local colour correction
 
-> Lets each photo have its own shadows and lighting, for long captures where the sun moved. Linux worker only.
+> Lets each photo have its own shadows and lighting, for long captures where the sun moved.
 
 | | |
 |---|---|
-| **Default** | Off |
+| **Default** | On (Mac and Linux worker) |
 | **Mode** | Advanced |
 | **ID** | `train.bilateralGrid` |
 
@@ -1496,10 +1516,8 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 - The splats keep the average lighting, so moving shadows come out faded rather than baked in.
 - On a 96-minute, 1,258-photo drone flight: 17.16 → 17.91 dB held-out, with the smeared shadow patches gone; training took about 50 % longer (24 vs 16 min on an RTX 4080).
 - Replaces the per-photo colour correction above while on.
-
-**When to change it**
-
-- Only used when training on a Linux worker; the Mac trainer ignores it.
+- Works on the Mac and on Linux workers (the Mac estimates the grid gradient from every 4th pixel in each direction).
+- On the Mac: drone 16.37 → 17.18 dB; a 649-photo indoor scan was unchanged (23.44 → 23.46 dB) at the same training time, so it is on by default.
 
 ### Per-photo colour correction
 
@@ -1766,7 +1784,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 
 ### File format
 
-> PLY (lossless standard), SPZ (≈10× smaller) or .splat (web).
+> PLY (lossless standard), SPZ (≈10× smaller), .splat (web) or compressed PLY (PlayCanvas).
 
 | | |
 |---|---|
@@ -1777,6 +1795,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 109 sett
 **How it works.** PLY is the reference 3DGS format every tool reads (≈248 bytes/splat at SH 3).
 
 - SPZ (Niantic, open) quantises and compresses to ≈25 bytes/splat with very little visible loss and is supported by most modern viewers. .splat is the compact format used by many web viewers but has no view-dependent colour.
+- C-PLY writes PlayCanvas compressed PLY (.compressed.ply): 256-splat chunks with quantised position, rotation, scale and colour (16 bytes/splat) plus 1 byte per SH value — read by SuperSplat, the PlayCanvas engine, splat-transform and other web viewers.
 
 ### Export SH degree
 
