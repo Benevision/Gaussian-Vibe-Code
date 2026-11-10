@@ -22,6 +22,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -271,8 +272,10 @@ def run_one(
             error = str(e)
     else:
         cmd = [sys.executable, "-m", "splatprep", "run", "--request", str(run_dir / "request.json"), "--progress-jsonl", "-", "--workdir", str(run_dir)]
-        with open(run_dir / "stderr.log", "w") as err:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True, env=_child_env(), cwd=str(run_dir))
+        # The child (and the pycolmap ``-c`` helpers it starts) runs in a fresh empty directory, not run_dir:
+        # ``python -m`` / ``-c`` put the cwd first on sys.path, and run_dir can lie inside an uploaded dataset.
+        with tempfile.TemporaryDirectory(prefix="splatprep-bench-") as child_cwd, open(run_dir / "stderr.log", "w") as err:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True, env=_child_env(), cwd=child_cwd)
             assert proc.stdout is not None
             try:
                 for line in proc.stdout:

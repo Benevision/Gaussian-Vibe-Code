@@ -85,6 +85,10 @@ def validate_request(request: Any) -> Dict[str, Any]:
             raise ProcessingError("request.maskPrompts must be a non-empty list for task 'maskpreview'")
         if req.get("previewImage") is not None:
             req["previewImage"] = _safe_rel(req["previewImage"], "previewImage")
+    if task == "benchmark" and req.get("datasets"):
+        if not isinstance(req["datasets"], list):
+            raise ProcessingError("request.datasets must be a list of relative paths")
+        req["datasets"] = [_safe_rel(d, "datasets") for d in req["datasets"]]
     return req
 
 

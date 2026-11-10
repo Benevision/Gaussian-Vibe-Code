@@ -75,7 +75,10 @@ struct MakeSplatView: View {
         .disabled(!devices.anyProcessor)
 
         Section {
-            ForEach(devices.all) { d in DeviceCheckRow(device: d, isOn: binding(for: d)) }
+            ForEach(devices.all) { d in
+                DeviceCheckRow(device: d, isOn: binding(for: d))
+                if d.needsToken { DeviceTokenRow(device: d, devices: devices) }
+            }
             HStack {
                 TextField("Add by address (192.168.0.20)", text: $manualHost)
                     .keyboardType(.numbersAndPunctuation).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -191,6 +194,22 @@ struct DeviceCheckRow: View {
         case .thisPhone, .iphone: return "iphone"
         case .mac: return "laptopcomputer"
         case .pc: return "pc"
+        }
+    }
+}
+
+/// Access token for a device that wants one (a Mac shows it under Compute › Act as a worker, SplatWork Node in its window).
+struct DeviceTokenRow: View {
+    let device: SplatDeviceInfo
+    let devices: SplatDevices
+    @State private var token = ""
+
+    var body: some View {
+        HStack {
+            SecureField("Access token for \(device.name)", text: $token)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Save") { devices.setToken(token, for: device.id); token = "" }
+                .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 }

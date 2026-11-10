@@ -221,6 +221,18 @@ def test_processing_validates_new_tasks():
         validate_request({"task": "frames", "video": "a.mp4", "stereo": "sbs"})
 
 
+def test_processing_confines_benchmark_datasets():
+    from splatworker.processing import ProcessingError, validate_request
+
+    r = validate_request({"task": "benchmark", "datasets": [".", "images", "sub/scene.zip"]})
+    assert r["datasets"] == [".", "images", "sub/scene.zip"]
+    assert "datasets" not in validate_request({"task": "benchmark"})
+    for bad in (["/home/user/secret.zip"], ["../other/scene.zip"], ["sub/../../x.zip"], [""], [5],
+                "/home/user/secret.zip", {"/home/user/secret.zip": 1}):
+        with pytest.raises(ProcessingError):
+            validate_request({"task": "benchmark", "datasets": bad})
+
+
 # ------------------------------------------------------------------------------------------ stereo
 
 def test_stereo_disparity_and_depth():

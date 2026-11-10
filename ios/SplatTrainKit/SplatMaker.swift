@@ -96,6 +96,8 @@ public struct SplatDeviceInfo: Identifiable, Hashable, Sendable {
     public var canTrain: Bool
     /// Runs splatprep (learned masks, sky, pose refinement): Linux worker.
     public var canProcess: Bool
+    /// The worker answered 401: it wants an access token (`SplatDevices.setToken`).
+    public var needsToken = false
     public var isLocal: Bool { id == Self.localId }
 }
 
@@ -127,6 +129,11 @@ public final class SplatDevices {
         return ep.id
     }
 
+    /// Stores the access token a worker asks for (Keychain) and checks the worker again.
+    public func setToken(_ token: String, for id: String) {
+        browser.setToken(token.trimmingCharacters(in: .whitespacesAndNewlines), for: id)
+    }
+
     public var thisPhone: SplatDeviceInfo {
         SplatDeviceInfo(id: SplatDeviceInfo.localId, name: "This iPhone", kind: .thisPhone,
                         detail: "\(TrainKit.gpuName) · \(ByteCountFormatter.string(fromByteCount: Int64(TrainKit.availableMemory), countStyle: .memory)) free",
@@ -143,7 +150,7 @@ public final class SplatDevices {
             switch h?.status ?? .unknown {
             case .online: online = true
             case .checking, .unknown: status = "checking…"
-            case .unauthorized: status = "needs an access token (set it in SplatWork)"
+            case .unauthorized: status = "needs an access token (enter it below)"
             case .offline(let e): status = "offline: \(e)"
             }
             let kind: SplatDeviceInfo.Kind = {
@@ -157,7 +164,8 @@ public final class SplatDevices {
             var detail = online ? [gpu, info?.busy == true ? "busy" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ") : status
             if online, let q = info?.queueLength, q > 0 { detail += " · \(q) queued" }
             return SplatDeviceInfo(id: w.id, name: info?.name ?? w.name, kind: kind, detail: detail, isOnline: online,
-                                   canTrain: info?.canTrain ?? true, canProcess: info?.canProcess ?? false)
+                                   canTrain: info?.canTrain ?? true, canProcess: info?.canProcess ?? false,
+                                   needsToken: h?.status == .unauthorized)
         }.sorted { ($0.isOnline ? 0 : 1, $0.name) < ($1.isOnline ? 0 : 1, $1.name) }
     }
 

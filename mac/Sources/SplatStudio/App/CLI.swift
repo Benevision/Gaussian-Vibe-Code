@@ -18,7 +18,7 @@ enum CLI {
             let port = value("--port").flatMap(UInt16.init) ?? MacWorker.port
             let name = value("--name") ?? LocalDeviceName.current
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("SplatStudio-worker-\(port)", isDirectory: true)
-            let e = WorkerEngine(name: name, root: root)
+            let e = WorkerEngine(name: name, root: root, token: nil)   // no access token (advertised auth=0)
             let txt = NWTXTRecord(["version": "1", "gpu": e.gpuName, "auth": "0", "kind": "mac"])
             let service = a.contains("--no-bonjour") ? nil : NWListener.Service(name: name, type: WorkerBrowser.serviceType, domain: nil, txtRecord: txt)
             var last = ""
@@ -29,7 +29,7 @@ enum CLI {
                 }
             }
             let server = HTTPServer(port: port, service: service, tempDir: e.tempDir,
-                                    policy: { m, p, len in e.bodyPolicy(method: m, path: p, contentLength: len) },
+                                    policy: { m, p, h, len in e.bodyPolicy(method: m, path: p, headers: h, contentLength: len) },
                                     onState: { st in print("worker server: \(st)"); fflush(stdout) },
                                     handler: { r in print("\(r.method) \(r.path)"); fflush(stdout); return e.handle(r) })
             server.start()

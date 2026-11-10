@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Observation
+import Security
 
 /// "Act as a worker": this Mac takes training jobs from other devices (an iPhone running SplatWork Capture, another
 /// Mac) over the worker API — the same subset the iPhone's Compute screen serves (Worker/WorkerRouter.swift:
@@ -13,7 +14,11 @@ final class MacWorker {
     /// Not 7878, so a Linux worker (or `python -m splatworker serve`) can run on the same Mac.
     static let port: UInt16 = 7879
     static let defaultsKey = "actAsWorker"
+    /// Keychain account (service `Keychain.service`) holding this Mac's own worker token.
+    static let tokenAccount = "macworker:access-token"
 
+    /// The access token other devices must send (`Authorization: Bearer …`): shown under Compute to enter there.
+    private(set) var token = ""
     private(set) var isEnabled = false
     private(set) var serverState: HTTPServer.State = .stopped
     private(set) var jobs: [WorkerJobStatus] = []
@@ -36,15 +41,17 @@ final class MacWorker {
     }
 
     private func start() {
+        guard let token = Self.loadOrCreateToken() else { serverState = .failed("couldn't create an access token"); return }
+        self.token = token
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SplatStudio/Worker", isDirectory: true)
         let name = LocalDeviceName.current
-        let e = WorkerEngine(name: name, root: root)
+        let e = WorkerEngine(name: name, root: root, token: token)
         e.onChange = { [weak self] in Task { @MainActor in self?.scheduleRefresh() } }
-        let txt = NWTXTRecord(["version": "1", "gpu": e.gpuName, "auth": "0", "kind": "mac"])
+        let txt = NWTXTRecord(["version": "1", "gpu": e.gpuName, "auth": "1", "kind": "mac"])
         let service = NWListener.Service(name: name, type: WorkerBrowser.serviceType, domain: nil, txtRecord: txt)
         let s = HTTPServer(port: Self.port, service: service, tempDir: e.tempDir,
-                           policy: { [e] m, p, len in e.bodyPolicy(method: m, path: p, contentLength: len) },
+                           policy: { [e] m, p, h, len in e.bodyPolicy(method: m, path: p, headers: h, contentLength: len) },
                            onState: { [weak self] st in Task { @MainActor in self?.serverState = st } },
                            handler: { [e] r in e.handle(r) })
         engine = e; server = s
@@ -65,6 +72,18 @@ final class MacWorker {
     }
 
     func cancel(_ id: String) { engine?.cancel(id, state: "cancelled", message: "cancelled on the Mac") }
+
+    /// The token from the Keychain, or a new random one (32 bytes, URL-safe base64 like the Linux worker's
+    /// `secrets.token_urlsafe(32)`) saved there. nil only if the system can't produce random bytes.
+    private static func loadOrCreateToken() -> String? {
+        if let t = Keychain.read(account: tokenAccount), !t.isEmpty { return t }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
+        let t = Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        Keychain.write(t, account: tokenAccount)
+        return t
+    }
 
     private func scheduleRefresh() {
         guard !refreshPending else { return }

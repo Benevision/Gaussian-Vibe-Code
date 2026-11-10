@@ -80,6 +80,7 @@ private extension String {
 /// "Act as a worker" switch + the jobs other devices sent to this Mac.
 struct MacWorkerSection: View {
     @State private var worker = MacWorker.shared
+    @State private var showToken = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -89,6 +90,17 @@ struct MacWorkerSection: View {
                     Text("Act as a worker")
                     Text(status).font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            if worker.isEnabled {
+                HStack(spacing: 6) {
+                    Text("Access token").font(.caption).foregroundStyle(.secondary)
+                    Text(showToken ? worker.token : String(repeating: "•", count: 12)).font(.caption.monospaced())
+                        .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    Button(showToken ? "Hide" : "Show") { showToken.toggle() }.controlSize(.small)
+                    Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(worker.token, forType: .string) }
+                        .controlSize(.small)
+                }
+                .help("Other devices need this token to use this Mac: enter it where SplatWork or SplatWork Capture says this Mac needs a token.")
             }
             ForEach(worker.jobs.reversed().prefix(5)) { j in
                 HStack {

@@ -63,7 +63,8 @@ struct HTTPBodyPolicy: Sendable {
 /// Handlers run on a background queue and may block (unzipping an upload, reading a file).
 final class HTTPServer: @unchecked Sendable {
     typealias Handler = @Sendable (HTTPRequest) -> HTTPResponse
-    typealias PolicyProvider = @Sendable (_ method: String, _ path: String, _ contentLength: UInt64?) -> HTTPBodyPolicy
+    /// `headers` as in `HTTPRequest.headers` (lower-cased names), e.g. to refuse an unauthenticated request before its body.
+    typealias PolicyProvider = @Sendable (_ method: String, _ path: String, _ headers: [String: String], _ contentLength: UInt64?) -> HTTPBodyPolicy
 
     enum State: Sendable, Equatable { case stopped, starting, ready(port: UInt16), failed(String) }
 
@@ -124,7 +125,9 @@ final class HTTPServer: @unchecked Sendable {
         }
     }
 
-    fileprivate func bodyPolicy(_ method: String, _ path: String, _ len: UInt64?) -> HTTPBodyPolicy { policy(method, path, len) }
+    fileprivate func bodyPolicy(_ method: String, _ path: String, _ headers: [String: String], _ len: UInt64?) -> HTTPBodyPolicy {
+        policy(method, path, headers, len)
+    }
     fileprivate func handle(_ r: HTTPRequest) -> HTTPResponse { handler(r) }
     fileprivate func newTempFile() -> URL {
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -215,7 +218,7 @@ private final class HTTPConnection: @unchecked Sendable {
             respond(.error(411, "chunked bodies are not supported; send Content-Length")); return
         }
         let len = req.headers["content-length"].flatMap { UInt64($0) }
-        let pol = server.bodyPolicy(req.method, req.path, len)
+        let pol = server.bodyPolicy(req.method, req.path, req.headers, len)
         if let reject = pol.reject { respond(reject); return }
         expected = len ?? 0
         guard expected <= pol.maxBytes else { respond(.error(413, "body exceeds \(pol.maxBytes) bytes")); return }

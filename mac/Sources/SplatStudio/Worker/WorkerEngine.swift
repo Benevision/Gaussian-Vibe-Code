@@ -79,6 +79,8 @@ final class WorkerEngine: @unchecked Sendable {
     let name: String
     let gpuName: String
     let root: URL
+    /// Bearer token every request must carry (`Authorization: Bearer <token>`, PROTOCOL.md §4 Auth); nil = no auth.
+    private let token: String?
     private var datasetsDir: URL { root.appendingPathComponent("datasets") }
     private var jobsDir: URL { root.appendingPathComponent("jobs") }
     var tempDir: URL { root.appendingPathComponent("tmp") }
@@ -92,9 +94,11 @@ final class WorkerEngine: @unchecked Sendable {
     /// Called (on any thread) whenever a job changes state or progress.
     var onChange: (@Sendable () -> Void)?
 
-    init(name: String, root: URL) {
+    /// - token: the access token clients must send on every request, or nil to serve anyone (advertise `auth=0`).
+    init(name: String, root: URL, token: String?) {
         self.name = name
         self.root = root
+        self.token = token
         gpuName = TrainKit.gpuName
         let fm = FileManager.default
         // Jobs and uploads don't survive a restart of the worker (the Mac re-uploads): start clean.
@@ -123,13 +127,35 @@ final class WorkerEngine: @unchecked Sendable {
         let total = Int(ProcessInfo.processInfo.physicalMemory / 1_048_576)
         let free = Int(TrainKit.availableMemory / 1_048_576)
         return Info(name: name, gpus: [.init(name: gpuName, memoryMB: total, freeMemoryMB: free)],
-                    busy: s.contains { $0.isRunning }, queueLength: s.filter { $0.state == "queued" }.count)
+                    busy: s.contains { $0.isRunning }, queueLength: s.filter { $0.state == "queued" }.count,
+                    auth: token != nil)
     }
 
     // MARK: HTTP
 
+    /// Whether the request carries `Authorization: Bearer <token>` (always true without a token). The comparison
+    /// takes the same time wherever the values differ, like the Linux worker's `hmac.compare_digest`.
+    private func isAuthorized(_ headers: [String: String]) -> Bool {
+        guard let token else { return true }
+        let header = headers["authorization"] ?? ""
+        guard let sp = header.firstIndex(of: " "), header[..<sp].lowercased() == "bearer" else { return false }
+        let given = Array(header[header.index(after: sp)...].trimmingCharacters(in: .whitespaces).utf8)
+        let want = Array(token.utf8)
+        var diff: UInt8 = given.count == want.count ? 0 : 1
+        for i in want.indices { diff |= want[i] ^ (i < given.count ? given[i] : 0) }
+        return diff == 0
+    }
+
+    private static var unauthorized: HTTPResponse {
+        var r = HTTPResponse.error(401, "missing or invalid bearer token")
+        r.headers["WWW-Authenticate"] = "Bearer"
+        return r
+    }
+
     /// Decides how to read a request body before it arrives.
-    func bodyPolicy(method: String, path: String, contentLength: UInt64?) -> HTTPBodyPolicy {
+    func bodyPolicy(method: String, path: String, headers: [String: String], contentLength: UInt64?) -> HTTPBodyPolicy {
+        // without the token nothing is read: no unauthenticated upload reaches memory or the disk
+        guard isAuthorized(headers) else { return HTTPBodyPolicy(toFile: false, maxBytes: 0, reject: Self.unauthorized) }
         guard WorkerRoute.match(method: method, path: path) == .uploadDataset else {
             return HTTPBodyPolicy(toFile: false, maxBytes: 8 << 20)
         }
@@ -147,6 +173,10 @@ final class WorkerEngine: @unchecked Sendable {
     }
 
     func handle(_ r: HTTPRequest) -> HTTPResponse {
+        guard isAuthorized(r.headers) else {
+            if let f = r.bodyFile { try? FileManager.default.removeItem(at: f) }
+            return Self.unauthorized
+        }
         let route = WorkerRoute.match(method: r.method, path: r.path)
         if route != .uploadDataset, let f = r.bodyFile { try? FileManager.default.removeItem(at: f) }
         switch route {

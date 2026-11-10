@@ -81,6 +81,9 @@ final class WorkerBrowser {
     private(set) var browserError: String?
 
     private var discovered: [String: WorkerEndpoint] = [:]
+    /// Addresses each discovered worker reported itself in its last `/v1/info`. Only these are ever probed (with the
+    /// worker's token) or switched to: TXT `addrs` is unauthenticated, so anyone on the link could put an address there.
+    private var reportedAddresses: [String: Set<String>] = [:]
     private var manual: [WorkerEndpoint] = []
     private var browser: NWBrowser?
     private var resolving: [String: NWConnection] = [:]
@@ -153,7 +156,7 @@ final class WorkerBrowser {
             }
             resolve(ep, id: id, name: name, txt: txt)
         }
-        for id in discovered.keys where !seen.contains(id) { discovered.removeValue(forKey: id); health.removeValue(forKey: id) }
+        for id in discovered.keys where !seen.contains(id) { discovered.removeValue(forKey: id); health.removeValue(forKey: id); reportedAddresses.removeValue(forKey: id) }
         rebuild()
     }
 
@@ -311,7 +314,8 @@ final class WorkerBrowser {
         guard var w = discovered[id] else { return }
         for a in info.addresses ?? [] { w.alternates[a.address] = a.kind ?? w.alternates[a.address] ?? "" }
         discovered[id] = w
-        guard let target = WorkerEndpoint.preferredAddress(current: w.host, alternates: w.alternates) else { return }
+        reportedAddresses[id] = Set((info.addresses ?? []).map(\.address))
+        guard let target = WorkerEndpoint.preferredAddress(current: w.host, alternates: probeable(id, w)) else { return }
         var probe = w; probe.host = target
         if (try? await WorkerClient(endpoint: probe, token: token(for: id)).info(timeout: 2)) != nil {
             discovered[id]?.host = target
@@ -319,12 +323,20 @@ final class WorkerBrowser {
         }
     }
 
+    /// The worker's alternates limited to the addresses it reported itself in `/v1/info` (never TXT-only ones).
+    private func probeable(_ id: String, _ w: WorkerEndpoint) -> [String: String] {
+        let reported = reportedAddresses[id] ?? []
+        return w.alternates.filter { reported.contains($0.key) }
+    }
+
     private func switchToWorkingAddress(_ id: String, excluding bad: String) async -> WorkerInfo? {
         guard let w = discovered[id] else { return nil }
-        let order = w.alternates.keys.filter { $0 != bad }.sorted { (w.alternates[$0] == "ethernet" ? 0 : 1, $0) < (w.alternates[$1] == "ethernet" ? 0 : 1, $1) }
+        let alts = probeable(id, w)
+        let order = alts.keys.filter { $0 != bad }.sorted { (alts[$0] == "ethernet" ? 0 : 1, $0) < (alts[$1] == "ethernet" ? 0 : 1, $1) }
+        let token = self.token(for: id)
         for a in order {
             var probe = w; probe.host = a
-            if let info = try? await WorkerClient(endpoint: probe, token: token(for: id)).info(timeout: 2) {
+            if let info = try? await WorkerClient(endpoint: probe, token: token).info(timeout: 2) {
                 discovered[id]?.host = a
                 rebuild()
                 return info

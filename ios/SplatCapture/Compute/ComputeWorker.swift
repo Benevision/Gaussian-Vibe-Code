@@ -35,7 +35,7 @@ final class ComputeWorker {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SplatWorker", isDirectory: true)
         let name = DeviceInfo.modelName
-        let e = WorkerEngine(name: name, root: root)
+        let e = WorkerEngine(name: name, root: root, token: nil)   // no access token (advertised auth=0)
         e.onChange = { [weak self] in
             Task { @MainActor in self?.scheduleRefresh() }
         }
@@ -43,7 +43,7 @@ final class ComputeWorker {
         let txt = NWTXTRecord(["version": "1", "gpu": e.gpuName, "auth": "0", "kind": "iphone"])
         let service = NWListener.Service(name: name, type: Self.serviceType, domain: nil, txtRecord: txt)
         let s = HTTPServer(port: Self.port, service: service, tempDir: e.tempDir,
-                           policy: { [e] m, p, len in e.bodyPolicy(method: m, path: p, contentLength: len) },
+                           policy: { [e] m, p, h, len in e.bodyPolicy(method: m, path: p, headers: h, contentLength: len) },
                            onState: { [weak self] st in Task { @MainActor in self?.serverState = st } },
                            handler: { [e] r in e.handle(r) })
         engine = e

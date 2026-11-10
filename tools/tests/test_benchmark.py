@@ -64,6 +64,23 @@ def test_benchmark_pose_metrics_with_mock(tmp_path, synth_small):
     assert rep["datasets"][0]["groundTruth"] == "synthetic"
 
 
+def test_benchmark_child_ignores_modules_in_run_dir(tmp_path, walk_ds):
+    """Python files in a run folder (which can come from an uploaded dataset) are never imported by the child."""
+    from splatprep.benchmark import run_one
+
+    ds = load_dataset(walk_ds, tmp_path / "scratch")
+    run_dir = tmp_path / "runs" / ds.name / "opencv_sift"
+    marker = tmp_path / "planted-code-ran"
+    code = f"open({str(marker)!r}, 'w').write('x')\n"
+    (run_dir / "splatprep").mkdir(parents=True)
+    (run_dir / "splatprep" / "__init__.py").write_text(code)
+    (run_dir / "splatprep" / "__main__.py").write_text(code)
+    (run_dir / "json.py").write_text(code)  # shadows the stdlib module
+    r = run_one(ds, "opencv_sift", run_dir, {"maxKeypoints": 2048}, False, lambda msg: None, timeout=600)
+    assert not marker.exists()
+    assert r["status"] in ("ok", "matching-only"), r
+
+
 def test_load_splatcapture(tmp_path):
     import numpy as np
     from PIL import Image

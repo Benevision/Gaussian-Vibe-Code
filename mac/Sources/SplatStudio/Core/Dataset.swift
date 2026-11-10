@@ -73,7 +73,20 @@ struct PreparedDataset {
     static func load(_ root: URL) throws -> PreparedDataset {
         let data = try Data(contentsOf: root.appendingPathComponent(fileName))
         let m = try JSONDecoder().decode(DatasetManifest.self, from: data)
+        // Manifest paths are joined onto `root`; one with a ".." component could reach files
+        // outside the dataset folder (the manifest may come from an upload in worker mode).
+        var paths: [String] = m.points.map { [$0] } ?? []
+        for c in m.cameras { paths += [c.image] + [c.mask, c.sky, c.depth].compactMap { $0 } }
+        for p in paths where !isInsideRoot(p) {
+            throw FormatError.invalid("path escapes the dataset folder: \(p)")
+        }
         return PreparedDataset(root: root, manifest: m)
+    }
+
+    /// True when `rel` has no ".." component. Splits on UTF-8 bytes, as the filesystem does,
+    /// so a "/" followed by a combining mark still counts as a separator.
+    static func isInsideRoot(_ rel: String) -> Bool {
+        !rel.utf8.split(separator: UInt8(ascii: "/")).contains { $0.elementsEqual("..".utf8) }
     }
 
     func save() throws {
