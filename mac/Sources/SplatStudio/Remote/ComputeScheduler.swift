@@ -181,6 +181,8 @@ struct ComputeScheduler: Sendable {
         case waiting, uploading(Double), queued, loading, training, downloading, done
         case offline(TimeInterval)
         case failed(String)
+        /// Failed, and the user chose to finish without it.
+        case leftOut
 
         /// Word for the combined status line ("2 training, 1 uploading").
         var summaryKey: String {
@@ -194,6 +196,7 @@ struct ComputeScheduler: Sendable {
             case .done: return "done"
             case .offline: return "offline"
             case .failed: return "failed"
+            case .leftOut: return "left out"
             }
         }
 
@@ -208,6 +211,7 @@ struct ComputeScheduler: Sendable {
             case .done: return "Done"
             case .offline(let t): return String(format: "Offline %.0f s", t)
             case .failed(let m): return "Failed: \(m)"
+            case .leftOut: return "Left out"
             }
         }
     }
@@ -228,9 +232,12 @@ struct ComputeScheduler: Sendable {
         return cfg
     }
 
+    /// - Parameter retryGate: when given, a failed block waits for the user to retry it (on any device) or leave it
+    ///   out, instead of failing the whole run. Without it the first failure fails the run.
     func trainBlockParallel(dataset: PreparedDataset, config: TrainingConfig, blocks: [SceneBlock], name: String,
                             local: LocalTrainingRunner?, clients: [String: WorkerClient],
                             fits: ((String, SceneBlock) -> Bool)? = nil,
+                            retryGate: BlockRetryGate? = nil,
                             progress: (@Sendable (BlockProgress) -> Void)? = nil) async throws -> GaussianCloud {
         guard !blocks.isEmpty else { throw PipelineError.noInput("no blocks") }
         var assignment = distribute(blocks, fits: fits)
@@ -242,6 +249,9 @@ struct ComputeScheduler: Sendable {
             assignment[f, default: []] += bs
         }
         let tracker = BlockProgressTracker(count: blocks.count)
+        // A retried block can move to another device: one block at a time per device, and one upload per worker.
+        let deviceLocks = DeviceLocks()
+        let datasetIds = DatasetIdCache()
         // Every block shows up straight away, on its device, before any work starts.
         for (dev, bs) in assignment {
             for b in bs {
@@ -249,60 +259,162 @@ struct ComputeScheduler: Sendable {
                                         overall: 0, stage: .waiting))
             }
         }
+
+        /// Trains one block on one device (waiting for that device to be free first).
+        @Sendable func run(_ b: SceneBlock, on dev: String, last: LastSnapshot) async throws -> GaussianCloud {
+            let cfg = Self.blockConfig(config, block: b, blocks: blocks)
+            let report: @Sendable (TrainingProgressSnapshot, BlockStage) -> Void = { s, stage in
+                last.set(s)
+                let overall = tracker.update(b.index, s.fraction)
+                progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: s, overall: overall, stage: stage))
+            }
+            let stageOnly: @Sendable (BlockStage) -> Void = { stage in report(last.get(), stage) }
+            await deviceLocks.acquire(dev)
+            defer { deviceLocks.release(dev) }
+            try Task.checkCancellation()
+            if dev == "local", let local {
+                stageOnly(.loading)
+                return try await local.train(dataset: dataset.restricted(to: Set(b.cameraIds)), config: cfg,
+                                             progress: { report($0, .training) })
+            } else if let client = clients[dev] {
+                // the worker may already hold the photos (split / masked / solved there): send only the rest
+                var datasetId = datasetIds.get(dev)
+                if datasetId == nil {
+                    stageOnly(.uploading(0))
+                    datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root,
+                                                               progress: { stageOnly(.uploading($0)) })
+                    datasetIds.set(dev, datasetId)
+                }
+                stageOnly(.queued)
+                return try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
+                                              datasetId: datasetId, progress: { js in
+                    let stage: BlockStage = js.state == .queued ? .queued : js.state == .loading ? .loading
+                        : js.state == .completed ? .downloading : .training
+                    report(TrainingProgressSnapshot(js), stage)
+                }, onOffline: { stageOnly(.offline($0)) })
+            }
+            throw PipelineError.unsupported("device \(dev) unavailable")
+        }
+
         return try await withThrowingTaskGroup(of: [(SceneBlock, GaussianCloud)].self) { group in
             for (dev, bs) in assignment {
                 group.addTask {
                     var results: [(SceneBlock, GaussianCloud)] = []
-                    var datasetId: String? = nil
                     for b in bs {
                         try Task.checkCancellation()
-                        let cfg = Self.blockConfig(config, block: b, blocks: blocks)
-                        let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: cfg.iterations))
-                        let report: @Sendable (TrainingProgressSnapshot, BlockStage) -> Void = { s, stage in
-                            last.set(s)
-                            let overall = tracker.update(b.index, s.fraction)
-                            progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: s, overall: overall, stage: stage))
-                        }
-                        let stageOnly: @Sendable (BlockStage) -> Void = { stage in report(last.get(), stage) }
-                        let cloud: GaussianCloud
-                        do {
-                            if dev == "local", let local {
-                                stageOnly(.loading)
-                                cloud = try await local.train(dataset: dataset.restricted(to: Set(b.cameraIds)), config: cfg,
-                                                              progress: { report($0, .training) })
-                            } else if let client = clients[dev] {
-                                // the worker may already hold the photos (split / masked / solved there): send only the rest
-                                if datasetId == nil {
-                                    stageOnly(.uploading(0))
-                                    datasetId = try await client.uploadReusing(RemoteStore.usable(at: dataset.root, by: client), directory: dataset.root,
-                                                                               progress: { stageOnly(.uploading($0)) })
+                        var device = dev
+                        attempts: while true {
+                            let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
+                            do {
+                                let cloud = try await run(b, on: device, last: last)
+                                _ = tracker.update(b.index, 1)
+                                var done = last.get(); done.step = max(done.step, done.totalSteps)
+                                progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: done, overall: tracker.update(b.index, 1), stage: .done))
+                                results.append((b, cloud))
+                                break attempts
+                            } catch {
+                                if error is CancellationError || Task.isCancelled { throw error }
+                                progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: last.get(),
+                                                        overall: tracker.update(b.index, 0), stage: .failed(error.localizedDescription)))
+                                guard let retryGate else { throw error }
+                                switch await retryGate.wait(block: b.index) {
+                                case .retry(let d)?:
+                                    device = d
+                                    tracker.reset(b.index)
+                                    progress?(BlockProgress(blockIndex: b.index, deviceId: d, snapshot: TrainingProgressSnapshot(step: 0, totalSteps: config.iterations),
+                                                            overall: tracker.update(b.index, 0), stage: .waiting))
+                                case .leaveOut?:
+                                    progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: last.get(),
+                                                            overall: tracker.update(b.index, 1), stage: .leftOut))
+                                    break attempts
+                                case nil:
+                                    throw CancellationError()
                                 }
-                                stageOnly(.queued)
-                                cloud = try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
-                                                               datasetId: datasetId, progress: { js in
-                                    let stage: BlockStage = js.state == .queued ? .queued : js.state == .loading ? .loading
-                                        : js.state == .completed ? .downloading : .training
-                                    report(TrainingProgressSnapshot(js), stage)
-                                }, onOffline: { stageOnly(.offline($0)) })
-                            } else { throw PipelineError.unsupported("device \(dev) unavailable") }
-                        } catch {
-                            if !(error is CancellationError) { stageOnly(.failed(error.localizedDescription)) }
-                            throw error
+                            }
                         }
-                        _ = tracker.update(b.index, 1)
-                        var done = last.get(); done.step = max(done.step, done.totalSteps)
-                        report(done, .done)
-                        results.append((b, cloud))
                     }
                     return results
                 }
             }
             var all: [(block: SceneBlock, cloud: GaussianCloud)] = []
             for try await r in group { all += r.map { (block: $0.0, cloud: $0.1) } }
+            guard !all.isEmpty else { throw PipelineError.unsupported("every block was left out") }
             all.sort { $0.block.index < $1.block.index }
             return BlockMerger.merge(all)
         }
     }
+}
+
+/// What the user chose for a failed block.
+enum BlockRetryDecision: Sendable, Equatable {
+    /// Train it again on this device id ("local" = this Mac).
+    case retry(String)
+    /// Finish without it (the merged scene has a gap there).
+    case leaveOut
+}
+
+/// Lets a failed block wait for the user's decision. The UI calls `decide`; Stop (task cancellation) ends the wait.
+final class BlockRetryGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: [Int: CheckedContinuation<BlockRetryDecision?, Never>] = [:]
+
+    /// Waits for `decide(block:)`; nil when the run is cancelled.
+    func wait(block: Int) async -> BlockRetryDecision? {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (c: CheckedContinuation<BlockRetryDecision?, Never>) in
+                lock.lock()
+                if Task.isCancelled { lock.unlock(); c.resume(returning: nil); return }
+                pending[block] = c
+                lock.unlock()
+            }
+        } onCancel: { self.resolve(block, nil) }
+    }
+
+    /// Returns false when that block isn't waiting (already decided, or not failed).
+    @discardableResult
+    func decide(block: Int, _ decision: BlockRetryDecision) -> Bool { resolve(block, decision) }
+
+    @discardableResult
+    private func resolve(_ block: Int, _ value: BlockRetryDecision?) -> Bool {
+        lock.lock()
+        let c = pending.removeValue(forKey: block)
+        lock.unlock()
+        c?.resume(returning: value)
+        return c != nil
+    }
+}
+
+/// One block at a time per device.
+final class DeviceLocks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var busy: Set<String> = []
+    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    func acquire(_ d: String) async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if busy.contains(d) { waiters[d, default: []].append(c); lock.unlock() }
+            else { busy.insert(d); lock.unlock(); c.resume() }
+        }
+    }
+
+    func release(_ d: String) {
+        lock.lock()
+        if var w = waiters[d], !w.isEmpty {
+            let c = w.removeFirst(); waiters[d] = w
+            lock.unlock(); c.resume()       // hand the device straight to the next waiter
+        } else {
+            busy.remove(d); lock.unlock()
+        }
+    }
+}
+
+/// The dataset id each worker got for this run's upload.
+final class DatasetIdCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: [String: String] = [:]
+    func get(_ d: String) -> String? { lock.lock(); defer { lock.unlock() }; return ids[d] }
+    func set(_ d: String, _ id: String?) { lock.lock(); ids[d] = id; lock.unlock() }
 }
 
 /// Latest snapshot of one block, so stage-only updates (upload, queued, done) keep its numbers.
@@ -323,4 +435,5 @@ final class BlockProgressTracker: @unchecked Sendable {
         if i < fractions.count { fractions[i] = max(fractions[i], f) }
         return fractions.reduce(0, +) / Double(max(1, fractions.count))
     }
+    func reset(_ i: Int) { lock.lock(); if i < fractions.count { fractions[i] = 0 }; lock.unlock() }
 }

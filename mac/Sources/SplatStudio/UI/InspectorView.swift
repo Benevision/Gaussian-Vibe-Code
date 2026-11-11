@@ -339,6 +339,10 @@ struct RemoteWatchDashboard: View {
 /// Block-parallel runs: one card per block — device, stage, its own progress, speed, splats, PSNR and ETA.
 struct BlockRowsView: View {
     let rows: [TrainingSession.BlockRow]
+    /// Devices a failed block can be retried on; empty hides the Retry menu.
+    var retryDevices: [TrainingSession.RetryDevice] = []
+    var onRetry: (Int, String) -> Void = { _, _ in }
+    var onLeaveOut: (Int) -> Void = { _ in }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Devices").font(.callout.bold()).padding(.top, 4)
@@ -361,6 +365,7 @@ struct BlockRowsView: View {
                         if let e = r.eta, r.stage != .done { Text(e > 0 ? "\(formatDuration(e)) left" : "") }
                     }
                     .font(.caption).foregroundStyle(.secondary)
+                    if case .failed = r.stage, !retryDevices.isEmpty { retryControls(r) }
                 }
                 .padding(8)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
@@ -368,6 +373,28 @@ struct BlockRowsView: View {
             }
         }
         .font(.callout).monospacedDigit()
+    }
+
+    /// Retry on the same device by default; the menu moves the block to another device, or leaves it out.
+    @ViewBuilder private func retryControls(_ r: TrainingSession.BlockRow) -> some View {
+        let same = retryDevices.first { $0.id == r.deviceId }
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(retryDevices) { d in
+                    Button("Retry on \(d.name)") { onRetry(r.id, d.id) }
+                }
+                Divider()
+                Button("Leave This Block Out", role: .destructive) { onLeaveOut(r.id) }
+            } label: {
+                Label(same.map { "Retry on \($0.name)" } ?? "Retry", systemImage: "arrow.clockwise")
+            } primaryAction: {
+                onRetry(r.id, same?.id ?? retryDevices[0].id)
+            }
+            .menuStyle(.button).fixedSize()
+            .help("Train this block again. Pick another device from the menu, or leave the block out (the scene will have a gap there).")
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
     }
 
     private func progress(_ r: TrainingSession.BlockRow) -> Double {
@@ -378,6 +405,7 @@ struct BlockRowsView: View {
         switch r.stage {
         case .done: return "checkmark.circle.fill"
         case .failed: return "xmark.octagon.fill"
+        case .leftOut: return "minus.circle"
         case .offline: return "wifi.exclamationmark"
         case .uploading: return "arrow.up.circle"
         case .downloading: return "arrow.down.circle"
@@ -416,7 +444,10 @@ struct TrainingDashboard: View {
                 }
             }
             .font(.callout).monospacedDigit()
-            if !session.blockRows.isEmpty { BlockRowsView(rows: session.blockRows) }
+            if !session.blockRows.isEmpty {
+                BlockRowsView(rows: session.blockRows, retryDevices: session.isActive ? session.retryDevices : [],
+                              onRetry: { session.retryBlock($0, on: $1) }, onLeaveOut: { session.leaveOutBlock($0) })
+            }
             TrainingCharts(history: session.history, evalHistory: session.evalHistory)
             if session.isActive {
                 HStack {

@@ -8,14 +8,22 @@ struct MetalTrainingRunner: LocalTrainingRunner {
     func train(dataset: PreparedDataset, config: TrainingConfig,
                progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud {
         try await RemoteImageFetch.shared.ensure(dataset.root)
-        return try await Task.detached(priority: .userInitiated) {
-            let t = MetalTrainer(dataset: dataset, config: config)
-            try t.prepare { _ in }
-            return try t.run(previewEvery: 0, onStatus: { s in
-                progress(TrainingProgressSnapshot(step: s.step, totalSteps: s.totalSteps, loss: Double(s.loss), psnr: Double(s.psnr),
-                                                  numGaussians: s.numGaussians, elapsed: s.elapsed, eta: s.eta))
-            })
-        }.value
+        // Stop (task cancellation) must reach the trainer, which runs on its own thread.
+        let t = MetalTrainer(dataset: dataset, config: config)
+        do {
+            return try await withTaskCancellationHandler {
+                try await Task.detached(priority: .userInitiated) {
+                    try t.prepare { _ in }
+                    return try t.run(previewEvery: 0, onStatus: { s in
+                        progress(TrainingProgressSnapshot(step: s.step, totalSteps: s.totalSteps, loss: Double(s.loss), psnr: Double(s.psnr),
+                                                          numGaussians: s.numGaussians, elapsed: s.elapsed, eta: s.eta))
+                    })
+                }.value
+            } onCancel: { t.cancel() }
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw error
+        }
     }
 }
 
@@ -61,6 +69,15 @@ final class TrainingSession {
         }
     }
     var blockRows: [BlockRow] = []
+    /// Devices a failed block can be retried on (this run's trainers), with display names.
+    struct RetryDevice: Identifiable, Hashable { let id: String; let name: String }
+    var retryDevices: [RetryDevice] = []
+    private var retryGate: BlockRetryGate?
+
+    /// Trains a failed block again on `deviceId` (it waits there if that device is busy with another block).
+    func retryBlock(_ block: Int, on deviceId: String) { retryGate?.decide(block: block, .retry(deviceId)) }
+    /// Finishes the run without a failed block; the merged scene has a gap where it was.
+    func leaveOutBlock(_ block: Int) { retryGate?.decide(block: block, .leaveOut) }
 
     private var trainer: MetalTrainer?
     private var task: Task<Void, Never>?
@@ -75,7 +92,7 @@ final class TrainingSession {
     func start(dataset: PreparedDataset) {
         guard !isActive else { return }
         app?.remoteWatch.stop()   // training this project replaces whatever was being watched
-        history.removeAll(); evalHistory.removeAll(); blockRows.removeAll()
+        history.removeAll(); evalHistory.removeAll(); blockRows.removeAll(); retryDevices.removeAll(); retryGate = nil
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config
         if !dataset.hasDepth { cfg.depthWeight = 0 }
@@ -340,9 +357,13 @@ final class TrainingSession {
                 let finalBlocks = blocks
                 let nDevices = devices.count
                 self?.blockRows = []
+                let gate = BlockRetryGate()
+                self?.retryGate = gate
+                self?.retryDevices = devices.filter { $0.capabilities.contains("train") || $0.isLocal }
+                    .map { RetryDevice(id: $0.id, name: $0.isLocal ? "This Mac" : $0.name) }
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
                                                                    local: useLocal ? MetalTrainingRunner() : nil, clients: clients,
-                                                                   fits: { fits($0, $1, finalBlocks) }) { bp in
+                                                                   fits: { fits($0, $1, finalBlocks) }, retryGate: gate) { bp in
                     Task { @MainActor in
                         guard let self else { return }
                         if self.state != .training, bp.stage != .waiting { self.state = .training }
@@ -390,7 +411,7 @@ final class TrainingSession {
                         }
                         s.eta = unknown ? 0 : (deviceETA.values.max() ?? 0)
                         let counts = Dictionary(grouping: self.blockRows, by: { $0.stage.summaryKey }).mapValues(\.count)
-                        let order = ["training", "uploading", "queued", "loading", "downloading", "waiting", "offline", "failed", "done"]
+                        let order = ["training", "uploading", "queued", "loading", "downloading", "waiting", "offline", "failed", "left out", "done"]
                         let parts = order.compactMap { k in counts[k].map { "\($0) \(k)" } }
                         s.phase = "\(finalBlocks.count) blocks on \(nDevices) device\(nDevices == 1 ? "" : "s"): " + parts.joined(separator: ", ")
                         self.update(s)
