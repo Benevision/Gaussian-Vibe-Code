@@ -36,6 +36,8 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     /// Worker ≥ 1.3.8: processing outputs stay on the worker as datasets (`outputDatasetId`), datasets can be
     /// composed (`/v1/datasets/compose`) and fetched selectively (`archive.zip?only=/skip=`).
     var canChain: Bool { capabilities?.contains("chain") ?? false }
+    /// Worker ≥ 1.4.0: training jobs can be paused (state saved, GPU freed) and resumed.
+    var canPause: Bool { capabilities?.contains("pause") ?? false }
 }
 
 /// Job state (tolerant: unknown values are preserved).
@@ -48,6 +50,8 @@ struct JobState: RawRepresentable, Codable, Hashable, Sendable, CustomStringConv
     static let queued = JobState(rawValue: "queued"), loading = JobState(rawValue: "loading"), training = JobState(rawValue: "training")
     static let running = JobState(rawValue: "running"), completed = JobState(rawValue: "completed")
     static let failed = JobState(rawValue: "failed"), cancelled = JobState(rawValue: "cancelled")
+    /// Worker ≥ 1.4.0: not running and holding no GPU until resumed (neither active nor final).
+    static let paused = JobState(rawValue: "paused")
     var isTerminal: Bool { self == .completed || self == .failed || self == .cancelled }
     var description: String { rawValue }
 }
@@ -219,6 +223,10 @@ final class WorkerClient: @unchecked Sendable {
     func job(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)", timeout: 15)) }
     /// `POST /v1/jobs/{id}/cancel`
     @discardableResult func cancelJob(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)/cancel", method: "POST")) }
+    /// `POST /v1/jobs/{id}/pause` (capability "pause"): a running training job saves its state and stops.
+    @discardableResult func pauseJob(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)/pause", method: "POST")) }
+    /// `POST /v1/jobs/{id}/resume`: back in the queue, continuing from where it paused. 409 while still pausing.
+    @discardableResult func resumeJob(_ id: String) async throws -> JobStatus { try await json(request("v1/jobs/\(id)/resume", method: "POST")) }
     /// `DELETE /v1/jobs/{id}`
     func deleteJob(_ id: String) async throws {
         let (d, resp) = try await session.data(for: request("v1/jobs/\(id)", method: "DELETE"))

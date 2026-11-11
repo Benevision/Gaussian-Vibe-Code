@@ -5,11 +5,15 @@ import simd
 
 /// Adapts the Metal trainer to the scheduler's runner protocol (used for local blocks).
 struct MetalTrainingRunner: LocalTrainingRunner {
+    /// The run's Pause / Resume (blocks started while paused start held).
+    var pause: PauseController? = nil
     func train(dataset: PreparedDataset, config: TrainingConfig,
                progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud {
         try await RemoteImageFetch.shared.ensure(dataset.root)
         // Stop (task cancellation) must reach the trainer, which runs on its own thread.
         let t = MetalTrainer(dataset: dataset, config: config)
+        pause?.add(t)
+        defer { pause?.remove(t) }
         do {
             return try await withTaskCancellationHandler {
                 try await Task.detached(priority: .userInitiated) {
@@ -73,6 +77,8 @@ final class TrainingSession {
     struct RetryDevice: Identifiable, Hashable { let id: String; let name: String }
     var retryDevices: [RetryDevice] = []
     private var retryGate: BlockRetryGate?
+    /// Pause / Resume for runs on workers or in blocks (a single run on this Mac uses `trainer` directly).
+    private var pauseControl: PauseController?
 
     /// Trains a failed block again on `deviceId` (it waits there if that device is busy with another block).
     func retryBlock(_ block: Int, on deviceId: String) { retryGate?.decide(block: block, .retry(deviceId)) }
@@ -93,6 +99,7 @@ final class TrainingSession {
         guard !isActive else { return }
         app?.remoteWatch.stop()   // training this project replaces whatever was being watched
         history.removeAll(); evalHistory.removeAll(); blockRows.removeAll(); retryDevices.removeAll(); retryGate = nil
+        pauseControl = PauseController()
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config
         if !dataset.hasDepth { cfg.depthWeight = 0 }
@@ -177,7 +184,7 @@ final class TrainingSession {
         return { [weak self] js in
             Task { @MainActor in
                 guard let self else { return }
-                self.state = .training
+                if self.state != .paused { self.state = .training }
                 if self.remoteMessage?.hasPrefix("Can't reach") == true { self.remoteMessage = nil }
                 // Live preview: pull the worker's compact snapshot at most every 25 s.
                 if self.livePreview, !fetching, let ps = js.previewStep, ps != lastPreviewStep,
@@ -229,12 +236,15 @@ final class TrainingSession {
         state = .preparing("Uploading dataset")
         let host = client.baseURL.host ?? "the worker"
         let start = Date()
-        let progress = remoteProgress(client: client, start: start)
+        let base = remoteProgress(client: client, start: start)
+        let pause = pauseControl
+        let progress: @Sendable (JobStatus) -> Void = { js in pause?.jobUpdated(js.jobId, state: js.state); base(js) }
         task = Task { [weak self] in
             do {
                 let cloud = try await client.train(dataset: dataset, config: cfg, name: name, progress: progress,
                     uploadProgress: { f in Task { @MainActor in self?.state = .preparing("Uploading dataset \(Int(f * 100)) %") } },
                     onJobCreated: { jid, did in
+                        pause?.add(job: jid, on: client)
                         PendingRemoteJob(workerId: id, baseURL: client.baseURL.absoluteString, jobId: jid, datasetId: did,
                                          name: name, output: output.path, startedAt: start).save()
                     },
@@ -271,7 +281,11 @@ final class TrainingSession {
                     known = WorkerBrowser.shared.client(for: p.workerId)
                 }
                 guard let client = known ?? URL(string: p.baseURL).map({ WorkerClient(baseURL: $0) }) else { return }
-                guard let progress = self?.remoteProgress(client: client, start: p.startedAt) else { return }
+                guard let base = self?.remoteProgress(client: client, start: p.startedAt) else { return }
+                let pause = PauseController()
+                self?.pauseControl = pause
+                pause.add(job: p.jobId, on: client)
+                let progress: @Sendable (JobStatus) -> Void = { js in pause.jobUpdated(js.jobId, state: js.state); base(js) }
                 let cloud = try await client.finishJob(p.jobId, progress: progress, onOffline: self?.offlineNotice(host))
                 try PLYCodec.writeGaussians(cloud, to: output, up: dataset.upVectorSIMD)
                 try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))
@@ -358,15 +372,16 @@ final class TrainingSession {
                 let nDevices = devices.count
                 self?.blockRows = []
                 let gate = BlockRetryGate()
+                let pause = self?.pauseControl
                 self?.retryGate = gate
                 self?.retryDevices = devices.filter { $0.capabilities.contains("train") || $0.isLocal }
                     .map { RetryDevice(id: $0.id, name: $0.isLocal ? "This Mac" : $0.name) }
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
-                                                                   local: useLocal ? MetalTrainingRunner() : nil, clients: clients,
-                                                                   fits: { fits($0, $1, finalBlocks) }, retryGate: gate) { bp in
+                                                                   local: useLocal ? MetalTrainingRunner(pause: pause) : nil, clients: clients,
+                                                                   fits: { fits($0, $1, finalBlocks) }, retryGate: gate, pause: pause) { bp in
                     Task { @MainActor in
                         guard let self else { return }
-                        if self.state != .training, bp.stage != .waiting { self.state = .training }
+                        if case .preparing = self.state, bp.stage != .waiting { self.state = .training }
                         latest[bp.blockIndex] = bp
                         let now = Date()
                         // Per block: its own rate over the last 20 s.
@@ -411,7 +426,7 @@ final class TrainingSession {
                         }
                         s.eta = unknown ? 0 : (deviceETA.values.max() ?? 0)
                         let counts = Dictionary(grouping: self.blockRows, by: { $0.stage.summaryKey }).mapValues(\.count)
-                        let order = ["training", "uploading", "queued", "loading", "downloading", "waiting", "offline", "failed", "left out", "done"]
+                        let order = ["training", "uploading", "queued", "loading", "downloading", "waiting", "paused", "offline", "failed", "left out", "done"]
                         let parts = order.compactMap { k in counts[k].map { "\($0) \(k)" } }
                         s.phase = "\(finalBlocks.count) blocks on \(nDevices) device\(nDevices == 1 ? "" : "s"): " + parts.joined(separator: ", ")
                         self.update(s)
@@ -450,8 +465,14 @@ final class TrainingSession {
         NSSound(named: "Glass")?.play()
     }
 
-    func pause() { trainer?.setPaused(true); if state == .training { state = .paused } }
-    func resume() { trainer?.setPaused(false); if state == .paused { state = .training } }
+    func pause() {
+        guard state == .training else { return }
+        trainer?.setPaused(true); pauseControl?.set(paused: true); state = .paused
+    }
+    func resume() {
+        guard state == .paused else { return }
+        trainer?.setPaused(false); pauseControl?.set(paused: false); state = .training
+    }
     func cancel() { trainer?.cancel(); task?.cancel(); if !isActive { state = .idle } }
 
     /// Save a checkpoint of the current parameters without stopping.

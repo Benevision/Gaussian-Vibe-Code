@@ -181,6 +181,8 @@ struct ComputeScheduler: Sendable {
         case waiting, uploading(Double), queued, loading, training, downloading, done
         case offline(TimeInterval)
         case failed(String)
+        /// Paused by the user (worker job parked with its state saved, or the Mac trainer held).
+        case paused
         /// Failed, and the user chose to finish without it.
         case leftOut
 
@@ -196,6 +198,7 @@ struct ComputeScheduler: Sendable {
             case .done: return "done"
             case .offline: return "offline"
             case .failed: return "failed"
+            case .paused: return "paused"
             case .leftOut: return "left out"
             }
         }
@@ -211,6 +214,7 @@ struct ComputeScheduler: Sendable {
             case .done: return "Done"
             case .offline(let t): return String(format: "Offline %.0f s", t)
             case .failed(let m): return "Failed: \(m)"
+            case .paused: return "Paused"
             case .leftOut: return "Left out"
             }
         }
@@ -238,6 +242,7 @@ struct ComputeScheduler: Sendable {
                             local: LocalTrainingRunner?, clients: [String: WorkerClient],
                             fits: ((String, SceneBlock) -> Bool)? = nil,
                             retryGate: BlockRetryGate? = nil,
+                            pause: PauseController? = nil,
                             progress: (@Sendable (BlockProgress) -> Void)? = nil) async throws -> GaussianCloud {
         guard !blocks.isEmpty else { throw PipelineError.noInput("no blocks") }
         var assignment = distribute(blocks, fits: fits)
@@ -286,11 +291,16 @@ struct ComputeScheduler: Sendable {
                     datasetIds.set(dev, datasetId)
                 }
                 stageOnly(.queued)
+                let jobId = LockedValue<String?>(nil)
+                defer { if let j = jobId.get() { pause?.remove(job: j) } }
                 return try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
                                               datasetId: datasetId, progress: { js in
-                    let stage: BlockStage = js.state == .queued ? .queued : js.state == .loading ? .loading
+                    pause?.jobUpdated(js.jobId, state: js.state)
+                    let stage: BlockStage = js.state == .paused ? .paused : js.state == .queued ? .queued : js.state == .loading ? .loading
                         : js.state == .completed ? .downloading : .training
                     report(TrainingProgressSnapshot(js), stage)
+                }, onJobCreated: { jid, _ in
+                    jobId.set(jid); pause?.add(job: jid, on: client)
                 }, onOffline: { stageOnly(.offline($0)) })
             }
             throw PipelineError.unsupported("device \(dev) unavailable")
@@ -415,6 +425,15 @@ final class DatasetIdCache: @unchecked Sendable {
     private var ids: [String: String] = [:]
     func get(_ d: String) -> String? { lock.lock(); defer { lock.unlock() }; return ids[d] }
     func set(_ d: String, _ id: String?) { lock.lock(); ids[d] = id; lock.unlock() }
+}
+
+/// A value shared with a @Sendable callback.
+final class LockedValue<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+    init(_ v: T) { value = v }
+    func set(_ v: T) { lock.lock(); value = v; lock.unlock() }
+    func get() -> T { lock.lock(); defer { lock.unlock() }; return value }
 }
 
 /// Latest snapshot of one block, so stage-only updates (upload, queued, done) keep its numbers.

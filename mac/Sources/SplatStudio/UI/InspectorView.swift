@@ -406,6 +406,7 @@ struct BlockRowsView: View {
         case .done: return "checkmark.circle.fill"
         case .failed: return "xmark.octagon.fill"
         case .leftOut: return "minus.circle"
+        case .paused: return "pause.circle"
         case .offline: return "wifi.exclamationmark"
         case .uploading: return "arrow.up.circle"
         case .downloading: return "arrow.down.circle"
