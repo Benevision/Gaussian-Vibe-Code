@@ -204,7 +204,8 @@ def test_detect_problems(tmp_path):
     info = detect(nvml=fake_nvml(fail_init=True), run=no_smi, smi=None, proc_file=tmp_path / "version",
                   dev_glob=str(tmp_path / "nvidia[0-9]*"), flatpak=True)
     title, text = info.problem()
-    assert "sandbox" in title and "nvidia-550-54-14" in text and "flatpak update" in text
+    assert "sandbox" in title
+    assert "flatpak install flathub org.freedesktop.Platform.GL.nvidia-550-54-14//1.4" in text
     assert info.error and "Driver Not Loaded" in info.error
     info.in_flatpak = False
     assert "not usable" in info.problem()[0]

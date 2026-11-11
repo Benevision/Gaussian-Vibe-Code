@@ -59,12 +59,11 @@ class DriverInfo:
                     "computer for dataset processing jobs (feature matching and SfM run on the CPU, "
                     "slowly).")
         if self.kernel_driver_version and self.in_flatpak:
-            ext = flatpak_gl_extension_name(self.kernel_driver_version)
             return ("NVIDIA driver libraries are missing in the sandbox",
                     f"Your system runs NVIDIA driver {self.kernel_driver_version}, but the matching "
-                    f"Flatpak driver extension ({ext}) is not installed. Run \"flatpak update\" in a "
-                    "terminal (it installs the matching extension automatically) and restart Splat "
-                    "Worker.")
+                    f"Flatpak driver extension is not installed. Install it in a terminal with:\n\n"
+                    f"{flatpak_gl_install_command(self.kernel_driver_version)}\n\n"
+                    "then restart SplatWork Node. (\"flatpak update\" does not always add it.)")
         if self.kernel_driver_version:
             return ("The NVIDIA driver is loaded but not usable",
                     f"Driver {self.kernel_driver_version} is loaded, but its libraries could not be "
@@ -116,6 +115,15 @@ def kernel_driver_version(proc_file: Path = Path("/proc/driver/nvidia/version"))
 def flatpak_gl_extension_name(driver_version: str) -> str:
     """'550.54.14' -> 'org.freedesktop.Platform.GL.nvidia-550-54-14'."""
     return "org.freedesktop.Platform.GL.nvidia-" + driver_version.replace(".", "-")
+
+
+def flatpak_gl_install_command(driver_version: str) -> str:
+    """The command that installs the driver extension from Flathub (branch 1.4 holds all NVIDIA versions).
+
+    No --user/--system: Flatpak picks the installation that has the flathub remote, and the app can use
+    an extension from either installation.
+    """
+    return f"flatpak install flathub {flatpak_gl_extension_name(driver_version)}//1.4"
 
 
 def _decode(v: Any) -> str:

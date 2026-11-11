@@ -520,7 +520,9 @@ def verify_problems(result: dict, plan: Plan) -> List[str]:
         elif not result.get("cudaAvailable"):
             problems.append("PyTorch was installed but cannot see the GPU (CUDA is not available). "
                             "Usually the Flatpak NVIDIA driver extension does not match the host driver: "
-                            "run \"flatpak update\" and restart.")
+                            "run \"flatpak update\" and restart. If that doesn't add it, install it with "
+                            "\"flatpak install flathub org.freedesktop.Platform.GL.nvidia-<driver version "
+                            "with dashes>//1.4\" (e.g. nvidia-620-70-06).")
         if not result.get("gsplat"):
             problems.append("gsplat could not be imported.")
         elif not result.get("gsplatPrebuilt"):

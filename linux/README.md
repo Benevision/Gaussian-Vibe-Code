@@ -140,7 +140,10 @@ shared through the file chooser portal.
 
 * **Setup says "NVIDIA driver libraries are missing in the sandbox"**, or **"CUDA is not available"**
   after a driver update: the Flatpak NVIDIA extension does not match the host driver. Run
-  `flatpak update`, then restart the app. Compare `cat /proc/driver/nvidia/version` with
+  `flatpak update`, then restart the app. If that doesn't add it (it doesn't always, for example when
+  the flathub remote is in a different installation from the app), install it by name, with the driver
+  version's dots turned into dashes: `flatpak install flathub org.freedesktop.Platform.GL.nvidia-620-70-06//1.4`.
+  The setup screen shows the exact command for your driver. Compare `cat /proc/driver/nvidia/version` with
   `flatpak list --runtime | grep -i nvidia`; the versions must be identical
   (e.g. `550.54.14` ↔ `GL.nvidia-550-54-14`). Reboot if you updated the driver without rebooting.
 * **The Mac doesn't find the worker**: open **TCP 7878** (or your port) and **UDP 5353** (mDNS) to
