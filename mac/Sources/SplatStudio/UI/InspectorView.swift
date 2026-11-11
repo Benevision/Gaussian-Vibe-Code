@@ -452,13 +452,13 @@ struct TrainingDashboard: View {
             TrainingCharts(history: session.history, evalHistory: session.evalHistory)
             if session.isActive {
                 HStack {
-                    if session.state == .paused { Button("Resume") { session.resume() } } else { Button("Pause") { session.pause() }.disabled(session.state != .training) }
+                    if session.state == .paused { Button("Resume") { session.resume() }.disabled(session.stopping) } else { Button("Pause") { session.pause() }.disabled(session.state != .training || session.stopping) }
                     Button("Save checkpoint…") {
                         let p = NSSavePanel(); p.allowedContentTypes = [UTType(filenameExtension: "ply")!]; p.nameFieldStringValue = "checkpoint-\(session.status.step).ply"
                         if p.runModal() == .OK, let u = p.url { try? session.saveCheckpoint(to: u) }
                     }
                     Spacer()
-                    Button("Stop", role: .destructive) { session.cancel() }
+                    Button(session.stopping ? "Stopping…" : "Stop", role: .destructive) { session.cancel() }.disabled(session.stopping)
                 }
                 Toggle("Live preview in viewer", isOn: Binding(get: { session.livePreview }, set: { session.livePreview = $0 })).font(.callout)
             }
@@ -469,6 +469,7 @@ struct TrainingDashboard: View {
         }
     }
     private var stateText: String {
+        if session.stopping, session.isActive { return "Stopping…" }
         switch session.state {
         case .idle: return "Idle"
         case .preparing(let m): return m

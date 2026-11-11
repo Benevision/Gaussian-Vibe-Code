@@ -100,6 +100,7 @@ final class TrainingSession {
         app?.remoteWatch.stop()   // training this project replaces whatever was being watched
         history.removeAll(); evalHistory.removeAll(); blockRows.removeAll(); retryDevices.removeAll(); retryGate = nil
         pauseControl = PauseController()
+        stopping = false
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config
         if !dataset.hasDepth { cfg.depthWeight = 0 }
@@ -473,7 +474,13 @@ final class TrainingSession {
         guard state == .paused else { return }
         trainer?.setPaused(false); pauseControl?.set(paused: false); state = .training
     }
-    func cancel() { trainer?.cancel(); task?.cancel(); if !isActive { state = .idle } }
+    /// Stop was pressed and the run is winding down (worker jobs being cancelled, trainers reaching a safe point).
+    var stopping = false
+    func cancel() {
+        if isActive { stopping = true }
+        trainer?.cancel(); task?.cancel()     // a paused trainer or worker job is cancelled as it is
+        if !isActive { state = .idle }
+    }
 
     /// Save a checkpoint of the current parameters without stopping.
     func saveCheckpoint(to url: URL) throws {
