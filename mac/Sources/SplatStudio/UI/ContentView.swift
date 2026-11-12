@@ -22,10 +22,6 @@ struct ContentView: View {
         .navigationSubtitle(subtitle)
         .sheet(isPresented: $model.showNewProject) { NewProjectSheet(model: model).environment(\.experienceMode, model.mode) }
         .alert(item: $model.alert) { a in Alert(title: Text(a.title), message: Text(a.message)) }
-        .confirmationDialog("Training is still running", isPresented: $model.confirmHome) {
-            Button("Stop training and go home", role: .destructive) { model.goHome(force: true) }
-            Button("Keep training", role: .cancel) {}
-        } message: { Text("Going home stops the current training run. Checkpoints already saved are kept.") }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             for p in providers {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
@@ -64,12 +60,12 @@ struct ContentView: View {
             ViewerView(model: model, tool: tool, brushRadius: brushRadius)
                 .frame(minWidth: 380, minHeight: 300)   // never let the layout squeeze the inspector shut
                 .clipped()
-            if model.scene == nil && !model.isLoading && !model.training.isActive {
+            if model.scene == nil && !model.isLoading && !(model.training.isActive && model.followingTraining) {
                 WelcomeView(model: model).transition(.opacity)
             }
             if model.isLoading { ProgressView("Loading…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if model.scene != nil { ViewerHUD(model: model, tool: tool).padding(10) }
-            if model.training.isActive { TrainingBanner(session: model.training).padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom) }
+            if model.training.isActive || model.training.finishedUnseen { TrainingBanner(model: model).padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom) }
             else if let w = model.remoteWatch.watched { RemoteWatchBanner(watch: w) { model.remoteWatch.stop() }.padding(10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom) }
             if model.showShortcuts { ShortcutsOverlay { model.showShortcuts = false } }
         }
@@ -105,6 +101,22 @@ struct ContentView: View {
                     .font(.caption)
                 }
                 .help("Show the project being prepared")
+            }
+            // Training another project while you look at something else: one click back to its live view.
+            if model.trainingElsewhere || (model.training.isActive && model.sidebar != .viewer) {
+                Button { model.showLiveTraining() } label: {
+                    HStack(spacing: 6) {
+                        if model.training.isActive {
+                            ProgressView(value: min(max(model.training.fraction, 0), 1)).progressViewStyle(.circular).controlSize(.small)
+                            Text("Training \(model.training.projectName) · \(Int(model.training.fraction * 100)) %").lineLimit(1)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            Text("\(model.training.projectName) finished training").lineLimit(1)
+                        }
+                    }
+                    .font(.caption)
+                }
+                .help(model.training.isActive ? "Show the live training view" : "Open the result")
             }
         }
         ToolbarItemGroup(placement: .principal) {
@@ -320,9 +332,19 @@ struct ViewerHUD: View {
 }
 
 struct TrainingBanner: View {
-    let session: TrainingSession
+    let model: AppModel
+    private var session: TrainingSession { model.training }
     var body: some View {
         HStack(spacing: 12) {
+            if !session.isActive && session.finishedUnseen {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("“\(session.projectName)” finished training")
+                Button("Show Result") { model.showLiveTraining() }.buttonStyle(.borderedProminent)
+                Button("Later") { session.finishedUnseen = false }
+            } else {
+            if !model.followingTraining {
+                Text(session.projectName).bold().lineLimit(1)
+            }
             ProgressView(value: session.fraction).frame(width: 180)
             switch session.state {
             case .preparing(let m): Text(m)
@@ -338,6 +360,10 @@ struct TrainingBanner: View {
                 Button("Pause") { session.pause() }.disabled(session.state != .training)
             }
             Button("Stop", role: .destructive) { session.cancel() }
+            if !model.followingTraining {
+                Button("Show Live View") { model.showLiveTraining() }.buttonStyle(.borderedProminent)
+            }
+            }
         }
         .font(.callout)
         .padding(.horizontal, 14).padding(.vertical, 8)

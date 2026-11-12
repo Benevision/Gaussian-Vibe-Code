@@ -428,6 +428,14 @@ struct BlockRowsView: View {
 struct TrainingDashboard: View {
     let session: TrainingSession
     var body: some View {
+        if let app = session.app, !app.followingTraining, session.isActive {
+            HStack {
+                Label("Training “\(session.projectName)” — the viewer shows something else", systemImage: "eye.slash")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Show Live View") { app.showLiveTraining() }.buttonStyle(.borderedProminent)
+            }
+        }
         PanelSection(title: "Progress", systemImage: "chart.xyaxis.line") {
             ProgressView(value: session.fraction)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {

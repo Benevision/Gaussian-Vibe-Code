@@ -74,7 +74,6 @@ final class AppModel {
     /// World "up" used by the viewer. 3DGS / COLMAP convention is −Y; SplatWork datasets are
     /// normalised to it. Changed with the Orientation controls and remembered per file.
     var worldUp = SIMD3<Float>(0, -1, 0)
-    var confirmHome = false
     /// Open mask editor (sheet), if any.
     var maskEditor: MaskEditorModel? = nil
     /// Step the New Project sheet opens on (snapshot harness / deep links).
@@ -101,6 +100,42 @@ final class AppModel {
 
     // MARK: sessions
     let training = TrainingSession()
+    /// The viewer shows the running training (its live preview). Off once you open something else meanwhile;
+    /// `showLiveTraining()` turns it back on.
+    var followingTraining = true
+    /// Training runs while the viewer shows something else.
+    var trainingElsewhere: Bool { (training.isActive && !followingTraining) || training.finishedUnseen }
+
+    /// Back to the running training: its dataset, its latest preview, the Train panel. After it finished
+    /// unseen: opens the result.
+    func showLiveTraining() {
+        sidebar = .viewer
+        if !training.isActive, training.finishedUnseen, let out = training.outputURL {
+            training.finishedUnseen = false
+            followingTraining = true
+            open(out)
+            return
+        }
+        guard training.isActive else { return }
+        followingTraining = true
+        if let ds = training.dataset, dataset?.root.standardizedFileURL != ds.root.standardizedFileURL || documentURL != nil {
+            remoteWatch.stop()
+            dataset = ds
+            documentURL = nil
+            updateCameraLines()
+            frameDataset()
+        }
+        if let sc = training.liveScene ?? training.trainerScene() { setScene(cloud: nil, scene: sc, frame: false) }
+        inspectorTab = .train
+        showInspector = true
+    }
+
+    /// Opening something that isn't the running training stops following it (the run keeps going).
+    private func leaveTraining(for root: URL?) {
+        guard training.isActive else { return }
+        if let root, let ds = training.dataset, root.standardizedFileURL == ds.root.standardizedFileURL { return }
+        followingTraining = false
+    }
     let prep = PrepSession()
 
     init() {
@@ -135,6 +170,7 @@ final class AppModel {
     }
 
     func loadSplat(_ url: URL) {
+        leaveTraining(for: nil)
         remoteWatch.stop()
         isLoading = true
         Task.detached(priority: .userInitiated) {
@@ -175,7 +211,7 @@ final class AppModel {
             coverageInfo = "Coverage needs the project's camera positions: open the project (not just the splat file)."
             return
         }
-        if training.isActive {
+        if training.isActive && followingTraining {
             coverageInfo = "Coverage is shown once training finishes (the live preview changes every few seconds)."
             return
         }
@@ -214,6 +250,11 @@ final class AppModel {
     }
 
     func openDataset(_ root: URL) {
+        // The project that is training: just go back to its live view.
+        if training.isActive, let ds = training.dataset, ds.root.standardizedFileURL == root.standardizedFileURL {
+            showLiveTraining(); return
+        }
+        leaveTraining(for: root)
         do {
             let ds = try PreparedDataset.load(root)
             remoteWatch.stop()   // the viewer now shows this project; a watched job's cameras would be another scene
@@ -253,7 +294,7 @@ final class AppModel {
 
     /// Current cloud with deletions and crop applied.
     func editedCloud(onlyKept: Bool = true) -> GaussianCloud? {
-        guard var g = cloud ?? training.trainerSnapshot() else { return nil }
+        guard var g = cloud ?? (followingTraining ? training.trainerSnapshot() : nil) else { return nil }
         guard onlyKept, let sc = scene, sc.count == g.count else { return g }
         let f = sc.flagsPointer
         var keep = [Bool](repeating: true, count: g.count)
@@ -360,9 +401,9 @@ final class AppModel {
     // MARK: home
 
     /// Returns to the start page and frees the scene's GPU and CPU memory.
+    /// Training keeps running: Home only stops showing it (Show Live View brings it back).
     func goHome(force: Bool = false) {
-        if training.isActive && !force { confirmHome = true; return }
-        if training.isActive { training.cancel() }
+        if training.isActive { followingTraining = false }
         renderer.releaseBuffers()
         scene = nil
         cloud = nil

@@ -208,7 +208,7 @@ struct ProjectPage: View {
                 Button("Open Dataset") { openDataset(p) }
             }
         case .training:
-            Button("Show Training") { model.sidebar = .viewer }.buttonStyle(.borderedProminent)
+            Button("Show Live View") { model.showLiveTraining() }.buttonStyle(.borderedProminent)
         case .trainingStopped:
             if let t = p.record?.training {
                 Button(resumeLabel(t, p)) { resumeTraining(p, t) }.buttonStyle(.borderedProminent).disabled(model.training.isActive)

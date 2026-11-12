@@ -50,6 +50,21 @@ final class TrainingSession {
     }
     /// The project being trained (`project.json` keeps this run's settings and progress for Resume).
     private(set) var projectDir: URL? = nil
+    /// The dataset being trained, and its latest live preview: what Show Live View brings back after you looked at
+    /// another project meanwhile.
+    private(set) var dataset: PreparedDataset? = nil
+    private(set) var liveScene: SplatScene? = nil
+    /// The run finished while the viewer showed something else (Show Result opens it).
+    var finishedUnseen = false
+    var projectName: String { projectDir?.lastPathComponent ?? dataset?.root.deletingLastPathComponent().lastPathComponent ?? "" }
+
+    /// A new live preview: shown only while the viewer follows this run.
+    private func present(_ scene: SplatScene, light: Bool = false) {
+        liveScene = scene
+        guard let app, app.followingTraining else { return }
+        if light { app.scene = scene; app.renderer.scene = scene; app.refreshCounts() }
+        else { app.setScene(cloud: nil, scene: scene, frame: false) }
+    }
     private var lastRecorded = Date.distantPast
     /// Block count of the run being resumed (a resumed block run splits the scene the same way).
     private var resumeBlockCount: Int? = nil
@@ -127,11 +142,14 @@ final class TrainingSession {
     var fraction: Double { status.totalSteps > 0 ? Double(status.step) / Double(status.totalSteps) : 0 }
 
     func trainerSnapshot() -> GaussianCloud? { trainer?.snapshot() }
+    func trainerScene() -> SplatScene? { trainer?.makeScene() }
 
     /// - Parameter resume: an interrupted run of this project: same settings, devices and result file; continues
     ///   from this Mac's checkpoint, reuses finished blocks, or (a single worker job) starts that job again.
     func start(dataset: PreparedDataset, resume: ProjectRecord.Training? = nil) {
         guard !isActive else { return }
+        self.dataset = dataset; liveScene = nil; finishedUnseen = false
+        app?.followingTraining = true
         if let r = resume {
             config = r.config; customised = true
             placement = r.placement; deviceIds = r.deviceIds.map(Set.init); workerId = r.workerId
@@ -197,7 +215,7 @@ final class TrainingSession {
                     t.resume(from: g, step: step)
                     await MainActor.run { self?.remoteMessage = "Continuing from the checkpoint at step \(step.formatted())." }
                 }
-                await MainActor.run { self?.state = .training; if let s = self { s.app?.setScene(cloud: nil, scene: t.makeScene(), frame: false) } }
+                await MainActor.run { self?.state = .training; self?.present(t.makeScene()) }
                 // Checkpoint every 10 minutes (and on Stop, below), so quitting or a crash costs at most that much.
                 let saver = Task.detached(priority: .utility) {
                     while !Task.isCancelled {
@@ -210,10 +228,7 @@ final class TrainingSession {
                 let result = try t.run(previewEvery: preview, onStatus: { s in
                     Task { @MainActor in self?.update(s) }
                 }, onPreview: { scene in
-                    Task { @MainActor in
-                        guard let self, let app = self.app else { return }
-                        app.scene = scene; app.renderer.scene = scene; app.refreshCounts()
-                    }
+                    Task { @MainActor in self?.present(scene, light: true) }
                 })
                 try PLYCodec.writeGaussians(result, to: output, up: dataset.upVectorSIMD)
                 let scene = SplatScene(cloud: result)
@@ -290,9 +305,7 @@ final class TrainingSession {
                         let g = try? await client.previewSplat(jobId)
                         await MainActor.run {
                             fetching = false
-                            if let g, self.livePreview, self.state == .training {
-                                self.app?.setScene(cloud: nil, scene: SplatScene(cloud: g), frame: false)
-                            }
+                            if let g, self.livePreview, self.state == .training { self.present(SplatScene(cloud: g)) }
                         }
                     }
                 }
@@ -366,6 +379,8 @@ final class TrainingSession {
         workerId = p.workerId
         projectDir = dataset.root.deletingLastPathComponent()
         outputURL = output
+        self.dataset = dataset; liveScene = nil; finishedUnseen = false
+        app?.followingTraining = true
         state = .preparing("Re-attaching to “\(p.name)” on \(host)")
         remoteMessage = "Picked up a job that was running on \(host) when this project was last open."
         task = Task { [weak self] in
@@ -572,10 +587,13 @@ final class TrainingSession {
         }
         ProjectLibrary.shared.note(output)
         trainer = nil
-        if let app {
+        liveScene = nil
+        if let app, app.followingTraining {
             app.setScene(cloud: result, scene: scene, frame: false)
             app.documentURL = output
             app.frameDataset()
+        } else {
+            finishedUnseen = true       // the viewer shows another project: offer the result instead of replacing it
         }
         NSSound(named: "Glass")?.play()
     }
