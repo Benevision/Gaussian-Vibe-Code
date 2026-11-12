@@ -217,39 +217,3 @@ struct FrameSourceStamp: Codable, Equatable, Sendable {
     }
 }
 
-/// Earlier results a new run of a project could reuse, offered to the user before the run starts
-/// (they may have replaced the video or changed something on purpose).
-struct ReuseOffer: Identifiable {
-    var id: String { root.path }
-    var root: URL
-    var frames: String?       // description, nil when there is nothing to reuse
-    var masks: String?
-    var poses: String?
-
-    static func find(projectDir: URL) -> ReuseOffer? {
-        let root = projectDir.appendingPathComponent("dataset", isDirectory: true)
-        let l = RemoteJobLedger.load(root)
-        func describe(_ step: String, _ what: String) -> String? {
-            guard let e = l.entries.first(where: { $0.key.hasPrefix(step + "/") })?.value else { return nil }
-            let host = URL(string: e.worker)?.host ?? e.worker
-            return "\(what) on \(host), \(e.createdAt.formatted(date: .abbreviated, time: .shortened))"
-        }
-        let fs = (try? FrameSet.load(root))?.frames.count
-        var frames = describe("frames", "Frames split")
-        if frames == nil, FileManager.default.fileExists(atPath: root.appendingPathComponent(FrameSourceStamp.fileName).path), let n = fs {
-            frames = "\(n) frames on this Mac"
-        }
-        let o = ReuseOffer(root: root, frames: frames, masks: describe("masks", "Masks"), poses: describe("sfm", "Camera positions"))
-        return (o.frames ?? o.masks ?? o.poses) == nil ? nil : o
-    }
-
-    /// Applies the choice: forgets what is not reused. Masks and camera positions only fit the frames they were
-    /// computed from, so they are dropped when the frames are not reused.
-    func apply(frames f: Bool, masks m: Bool, poses p: Bool) {
-        var drop: [String] = []
-        if !f { drop += ["frames", "masks", "sfm"]; FrameSourceStamp.forget(root) }
-        if !(f && m) { drop.append("masks") }
-        if !(f && p) { drop.append("sfm") }
-        RemoteJobLedger.forget(root, steps: drop)
-    }
-}

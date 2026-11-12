@@ -243,6 +243,7 @@ struct ComputeScheduler: Sendable {
                             fits: ((String, SceneBlock) -> Bool)? = nil,
                             retryGate: BlockRetryGate? = nil,
                             pause: PauseController? = nil,
+                            blockStore: URL? = nil,
                             progress: (@Sendable (BlockProgress) -> Void)? = nil) async throws -> GaussianCloud {
         guard !blocks.isEmpty else { throw PipelineError.noInput("no blocks") }
         var assignment = distribute(blocks, fits: fits)
@@ -312,11 +313,29 @@ struct ComputeScheduler: Sendable {
                     var results: [(SceneBlock, GaussianCloud)] = []
                     for b in bs {
                         try Task.checkCancellation()
+                        // Finished in an earlier, interrupted run of the same settings: reuse it.
+                        if let file = blockStore.map({ Self.blockFile($0, block: b, config: Self.blockConfig(config, block: b, blocks: blocks)) }),
+                           FileManager.default.fileExists(atPath: file.path), let cloud = try? SplatFileFormat.load(url: file) {
+                            let snap = TrainingProgressSnapshot(step: config.iterations, totalSteps: config.iterations, numGaussians: cloud.count)
+                            progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: snap, overall: tracker.update(b.index, 1), stage: .done))
+                            results.append((b, cloud))
+                            continue
+                        }
                         var device = dev
                         attempts: while true {
                             let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
                             do {
                                 let cloud = try await run(b, on: device, last: last)
+                                if let store = blockStore {
+                                    // Kept until the whole run is merged, so an interruption never loses a finished block.
+                                    try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+                                    let file = Self.blockFile(store, block: b, config: Self.blockConfig(config, block: b, blocks: blocks))
+                                    let tmp = file.deletingLastPathComponent().appendingPathComponent(".tmp-" + file.lastPathComponent)
+                                    if (try? PLYCodec.writeGaussians(cloud, to: tmp)) != nil {
+                                        try? FileManager.default.removeItem(at: file)
+                                        try? FileManager.default.moveItem(at: tmp, to: file)
+                                    }
+                                }
                                 _ = tracker.update(b.index, 1)
                                 var done = last.get(); done.step = max(done.step, done.totalSteps)
                                 progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: done, overall: tracker.update(b.index, 1), stage: .done))
@@ -352,6 +371,15 @@ struct ComputeScheduler: Sendable {
             all.sort { $0.block.index < $1.block.index }
             return BlockMerger.merge(all)
         }
+    }
+}
+
+extension ComputeScheduler {
+    /// A finished block's splats in `store`, named by its index and everything that defines it (its cameras,
+    /// region and settings), so a block is only reused for exactly the same job.
+    static func blockFile(_ store: URL, block b: SceneBlock, config cfg: TrainingConfig) -> URL {
+        let key = sha256Hex(Data((canonicalJSON(cfg) + "|" + b.cameraIds.map(String.init).joined(separator: ",")).utf8)).prefix(16)
+        return store.appendingPathComponent("block-\(b.index)-\(key).ply")
     }
 }
 

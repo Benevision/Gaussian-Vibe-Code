@@ -9,11 +9,8 @@ struct NewProjectSheet: View {
     @Environment(\.experienceMode) private var mode
     @Environment(\.dismiss) private var dismiss
     @State private var source: SourceDescription?
-    @State private var reuseOffer: ReuseOffer? = nil
-    @State private var pendingRun: (PrepOptions, URL)? = nil
-    @State private var reuseFrames = true
-    @State private var reuseMasks = true
-    @State private var reusePoses = true
+    /// Reuse the stages an earlier run in the same project folder finished (when their settings match).
+    @State private var reuseEarlier = true
     @State private var options = PrepOptions()
     @State private var step = 0
     @State private var projectName = ""
@@ -62,7 +59,6 @@ struct NewProjectSheet: View {
             footer
         }
         .frame(width: 680, height: 620)
-        .sheet(item: $reuseOffer) { offer in reuseSheet(offer) }
         .onAppear {
             // Reopened while preparing (or after a run that failed while hidden): show that run, don't reset it.
             if prep.running || prep.error != nil { return }
@@ -72,6 +68,8 @@ struct NewProjectSheet: View {
             if let s = source { projectName = defaultName(s) }
             if mode == .advanced { holdout = true }
             if case .captureBundle = source { solverKind = .fromCapture }
+            ProcessingDevicePicker.applyRemembered(to: &options)
+            if let dir = model.newProjectPrefill { prefill(from: dir); model.newProjectPrefill = nil }
             Task { await python.refresh() }
         }
     }
@@ -113,6 +111,8 @@ struct NewProjectSheet: View {
             Spacer()
             if prep.error != nil {
                 Button("Back to settings") { prep.error = nil }
+                Button("Try Again") { prep.retry() }.keyboardShortcut(.defaultAction)
+                    .help("Run it again. Every stage that finished is reused, so it continues where it failed.")
             } else if !prep.running {
                 if step > 0 { Button("Back") { step -= 1 } }
                 if step < steps.count - 1 {
@@ -343,8 +343,7 @@ struct NewProjectSheet: View {
     /// When the PC will do the preparation but lacks a model it needs, offer to install it from here.
     @ViewBuilder private var missingWorkerModelsNotice: some View {
         let browser = WorkerBrowser.shared
-        if model.training.placement != .thisMac,
-           let id = model.training.workerId ?? browser.workers.first?.id,
+        if options.compute != .thisMac, let id = options.remoteWorkerId,
            let info = browser.health[id]?.info, (info.capabilities ?? []).contains("process") {
             let have = Set(info.models ?? [])
             let missing = neededWorkerModels.filter { !have.contains($0.id) }
@@ -362,10 +361,13 @@ struct NewProjectSheet: View {
     @ViewBuilder private var trainingPage: some View {
         Text("Training").font(.title2.bold())
         Text("You can change all of this later and retrain from the same dataset.").foregroundStyle(.secondary)
+        PanelSection(title: "Dataset processing", systemImage: "cpu") {
+            ProcessingDevicePicker(options: $options)
+        }
         Toggle("Start training as soon as the dataset is ready", isOn: $trainAfter)
         if trainAfter {
             TrainingPresetPicker(session: model.training)
-            ComputePicker(session: model.training, prepPlacement: $options.compute)
+            ComputePicker(session: model.training, prepPlacement: .constant(.thisMac))
             missingWorkerModelsNotice
             if options.compute != .thisMac, isVideoSource {
                 SettingRow(id: "net.videoOnWorker") { Toggle("", isOn: $options.videoOnWorker).labelsHidden() }
@@ -394,6 +396,16 @@ struct NewProjectSheet: View {
             .font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        let earlier = PrepCheckpoints(root: projectParent.appendingPathComponent(projectName).appendingPathComponent("dataset")).saved
+        if !projectName.isEmpty, !earlier.isEmpty {
+            Toggle(isOn: $reuseEarlier) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Reuse what the last run in this folder finished")
+                    Text(earlier.map { "\($0.stage.title): \($0.entry.summary)" }.joined(separator: " · ") + ". A stage is only reused when its settings and source files haven't changed.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private var solverDescription: String {
@@ -420,7 +432,7 @@ struct NewProjectSheet: View {
                 // Redraw once a second so elapsed time / ETA / heartbeat stay live even during long silent steps.
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Preparing \(projectName)").font(.title2.bold())
+                        Text("Preparing \(projectName.isEmpty ? prep.projectDir?.lastPathComponent ?? "" : projectName)").font(.title2.bold())
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text("Overall").font(.headline)
@@ -527,53 +539,37 @@ struct NewProjectSheet: View {
         case .sam2: o.masking.model = .splatprep(maskModelId: "sam2_auto")
         case .sky: o.masking.model = .splatprep(maskModelId: "sky")
         }
-        if model.training.placement != .thisMac { o.remoteWorkerId = model.training.workerId ?? WorkerBrowser.shared.workers.first?.id }
         let dir = projectParent.appendingPathComponent(projectName, isDirectory: true)
         if case .captureBundle(let capture) = source { CaptureProjects.record(capture: capture, project: dir) }
-        if let offer = ReuseOffer.find(projectDir: dir) {
-            pendingRun = (o, dir); reuseFrames = offer.frames != nil; reuseMasks = offer.masks != nil; reusePoses = offer.poses != nil
-            reuseOffer = offer
-            return
-        }
+        if !reuseEarlier { PrepCheckpoints(root: dir.appendingPathComponent("dataset")).invalidate(from: .frames) }
         prep.run(source: source, options: o, projectDir: dir, thenTrain: trainAfter)
     }
 
-    private func reuseSheet(_ offer: ReuseOffer) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Reuse earlier results?").font(.title2.bold())
-            Text("This project has results from an earlier run. Reusing them skips that work (and the upload). Untick anything you changed on purpose — a replaced video, different frame or mask settings.")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let f = offer.frames {
-                Toggle(isOn: $reuseFrames) { VStack(alignment: .leading) { Text("Frames"); Text(f).font(.caption).foregroundStyle(.secondary) } }
-            }
-            if let m = offer.masks {
-                Toggle(isOn: $reuseMasks) { VStack(alignment: .leading) { Text("Masks"); Text(m).font(.caption).foregroundStyle(.secondary) } }
-                    .disabled(!reuseFrames)
-            }
-            if let p = offer.poses {
-                Toggle(isOn: $reusePoses) { VStack(alignment: .leading) { Text("Camera positions"); Text(p).font(.caption).foregroundStyle(.secondary) } }
-                    .disabled(!reuseFrames)
-            }
-            if !reuseFrames && (offer.masks != nil || offer.poses != nil) {
-                Text("Masks and camera positions belong to the earlier frames, so they are redone when the frames are.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            HStack {
-                Button("Cancel") { reuseOffer = nil; pendingRun = nil }.keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Start fresh") { startAfterReuseChoice(fresh: true) }
-                Button("Start") { startAfterReuseChoice(fresh: false) }.keyboardShortcut(.defaultAction)
-            }
+    /// Fills the sheet from a project's saved settings (Change Settings on the project page).
+    private func prefill(from dir: URL) {
+        guard let rec = ProjectRecord.load(dir), let src = rec.source else { return }
+        source = src
+        projectName = dir.lastPathComponent; projectParent = dir.deletingLastPathComponent()
+        trainAfter = rec.trainAfter
+        guard let o = rec.options else { return }
+        options = o
+        holdout = o.holdoutInterval != nil
+        switch o.poseSolver {
+        case .automatic: solverKind = .automatic
+        case .objectCapture: solverKind = .objectCapture
+        case .fromCapture: solverKind = .fromCapture
+        case .splatprep(let f, let m, let mp): solverKind = .learned; featureModel = f; matching = m; mapper = mp
         }
-        .padding(20).frame(width: 460)
-    }
-
-    private func startAfterReuseChoice(fresh: Bool) {
-        guard let offer = reuseOffer, let (o, dir) = pendingRun else { return }
-        if fresh { offer.apply(frames: false, masks: false, poses: false) }
-        else { offer.apply(frames: reuseFrames, masks: reuseMasks, poses: reusePoses) }
-        reuseOffer = nil; pendingRun = nil
-        prep.run(source: source!, options: o, projectDir: dir, thenTrain: trainAfter)
+        switch o.masking.model {
+        case .none: maskKind = .none
+        case .appleVisionDynamic: maskKind = .moving
+        case .appleVisionForeground: maskKind = .subject
+        case .appleVisionPerson: maskKind = .people
+        case .splatprep(let id): maskKind = id == "dynamic" ? .movingAI : id == "sam2_auto" ? .sam2 : id == "sky" ? .sky : .none
+        default: break
+        }
+        if let cls = o.masking.dynamicClasses { dynamicClasses = cls.joined(separator: ", ") }
+        step = 1
     }
 
     private func choose(dir: Bool, files: Bool = false, make: @escaping (URL) -> SourceDescription) {
@@ -639,6 +635,53 @@ struct TrainingPresetPicker: View {
                 }
             }
             if session.customised { Text("Custom settings (edited in the Train panel)").font(.caption).foregroundStyle(.orange) }
+        }
+    }
+}
+
+/// Which device prepares the dataset (splits videos, masks, solves cameras): this Mac or a worker that processes.
+/// Remembered for the next project.
+struct ProcessingDevicePicker: View {
+    @Binding var options: PrepOptions
+    private var browser = WorkerBrowser.shared
+    init(options: Binding<PrepOptions>) { self._options = options }
+
+    static let defaultsKey = "prep.device"
+    /// The device chosen last time ("local" or a worker id), applied to new options.
+    static func applyRemembered(to o: inout PrepOptions) {
+        guard let d = UserDefaults.standard.string(forKey: defaultsKey) else { return }
+        o.remoteWorkerId = d == "local" ? nil : d
+        o.compute = d == "local" ? .thisMac : .remote
+    }
+
+    private var choice: Binding<String> {
+        Binding(get: { options.compute == .thisMac ? "local" : (options.remoteWorkerId ?? "local") },
+                set: { v in
+                    options.remoteWorkerId = v == "local" ? nil : v
+                    options.compute = v == "local" ? .thisMac : .remote
+                    UserDefaults.standard.set(v, forKey: Self.defaultsKey)
+                })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+            Text("Process on")
+            Picker("Process on", selection: choice) {
+                Text("This Mac").tag("local")
+                ForEach(browser.workers) { w in
+                    let info = browser.health[w.id]?.info
+                    let online: Bool = { if case .online = browser.health[w.id]?.status { return true }; return false }()
+                    Text(w.name + (online ? (info.map { $0.canProcess ? "" : " (can't process)" } ?? "") : " (offline)"))
+                        .tag(w.id)
+                }
+            }
+            .labelsHidden().fixedSize()
+            }
+            Text(options.compute == .thisMac
+                 ? "Frames, masks and camera solving run on this Mac."
+                 : "Video splitting, masks and camera solving run on the worker; only what changed is sent back and forth. Steps it can't do run on this Mac.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

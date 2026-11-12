@@ -38,7 +38,40 @@ final class TrainingSession {
     weak var app: AppModel?
 
     enum State: Equatable { case idle, preparing(String), training, paused, finishing, finished, failed(String), cancelled }
-    var state: State = .idle
+    var state: State = .idle {
+        didSet {
+            guard state != oldValue else { return }
+            switch state {
+            case .cancelled: recordTraining { $0.state = .stopped; $0.message = "Stopped" }
+            case .failed(let m): recordTraining { $0.state = .failed; $0.message = m }
+            default: break
+            }
+        }
+    }
+    /// The project being trained (`project.json` keeps this run's settings and progress for Resume).
+    private(set) var projectDir: URL? = nil
+    private var lastRecorded = Date.distantPast
+    /// Block count of the run being resumed (a resumed block run splits the scene the same way).
+    private var resumeBlockCount: Int? = nil
+
+    private func recordTraining(_ change: @escaping (inout ProjectRecord.Training) -> Void) {
+        guard let p = projectDir else { return }
+        ProjectLibrary.shared.update(p) { r in
+            guard var t = r.training else { return }
+            change(&t); t.updated = Date(); r.training = t
+        }
+    }
+
+    /// `outputs/.resume/<result name>.ply`: this Mac's periodic checkpoint of a single-piece run.
+    nonisolated static func checkpointURL(for output: URL) -> URL {
+        output.deletingLastPathComponent().appendingPathComponent(".resume", isDirectory: true).appendingPathComponent(output.lastPathComponent)
+    }
+    /// `outputs/.blocks/<settings>/`: finished blocks of a block-parallel run, until it is merged.
+    nonisolated static func blockStore(project: URL, dataset: PreparedDataset, config: TrainingConfig) -> URL {
+        let manifest = (try? Data(contentsOf: dataset.root.appendingPathComponent(PreparedDataset.fileName))) ?? Data()
+        let key = sha256Hex(manifest + Data(canonicalJSON(config).utf8)).prefix(16)
+        return project.appendingPathComponent("outputs/.blocks/\(key)", isDirectory: true)
+    }
     var preset: TrainingConfig.Preset = .balanced { didSet { if !customised { config = preset.config.withDepth(config.depthWeight) } } }
     var config = TrainingConfig.Preset.balanced.config
     var customised = false
@@ -95,8 +128,14 @@ final class TrainingSession {
 
     func trainerSnapshot() -> GaussianCloud? { trainer?.snapshot() }
 
-    func start(dataset: PreparedDataset) {
+    /// - Parameter resume: an interrupted run of this project: same settings, devices and result file; continues
+    ///   from this Mac's checkpoint, reuses finished blocks, or (a single worker job) starts that job again.
+    func start(dataset: PreparedDataset, resume: ProjectRecord.Training? = nil) {
         guard !isActive else { return }
+        if let r = resume {
+            config = r.config; customised = true
+            placement = r.placement; deviceIds = r.deviceIds.map(Set.init); workerId = r.workerId
+        }
         app?.remoteWatch.stop()   // training this project replaces whatever was being watched
         history.removeAll(); evalHistory.removeAll(); blockRows.removeAll(); retryDevices.removeAll(); retryGate = nil
         pauseControl = PauseController()
@@ -108,16 +147,33 @@ final class TrainingSession {
         let outDir = dataset.root.deletingLastPathComponent().appendingPathComponent("outputs", isDirectory: true)
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let out = outDir.appendingPathComponent("\(name)-\(stamp).ply")
+        let project = dataset.root.deletingLastPathComponent()
+        let out = resume.map { project.appendingPathComponent($0.output) } ?? outDir.appendingPathComponent("\(name)-\(stamp).ply")
         outputURL = out
+        projectDir = project
+        resumeBlockCount = resume?.blockCount
+        lastRecorded = Date()
+        let rel = String(out.path.dropFirst(project.path.count + 1))
+        let (pl, devs, wid) = (placement, deviceIds.map { Array($0).sorted() }, workerId)
+        ProjectLibrary.shared.update(project) { r in
+            var t = ProjectRecord.Training(state: .running, config: cfg, placement: pl, deviceIds: devs, workerId: wid, output: rel,
+                                           totalSteps: cfg.iterations)
+            if let resume { t.started = resume.started; t.step = resume.checkpointStep ?? 0; t.checkpoint = resume.checkpoint
+                t.checkpointStep = resume.checkpointStep; t.blockCount = resume.blockCount; t.blocksDone = resume.blocksDone }
+            r.training = t
+        }
+        var resumeFrom: (URL, Int)? = nil
+        if let r = resume, let ck = r.checkpoint, let st = r.checkpointStep, FileManager.default.fileExists(atPath: project.appendingPathComponent(ck).path) {
+            resumeFrom = (project.appendingPathComponent(ck), st)
+        }
         switch placement {
-        case .thisMac: startLocal(dataset: dataset, config: cfg, output: out)
+        case .thisMac: startLocal(dataset: dataset, config: cfg, output: out, resumeFrom: resumeFrom)
         case .remote: startRemote(dataset: dataset, config: cfg, output: out, name: name)
-        case .both: startBoth(dataset: dataset, config: cfg, output: out, name: name)
+        case .both: startBoth(dataset: dataset, config: cfg, output: out, name: name, forceBlocks: resumeBlockCount != nil)
         }
     }
 
-    private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL) {
+    private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, resumeFrom: (URL, Int)? = nil) {
         // Fail fast with what to change, instead of running out of GPU memory partway through loading.
         if MemoryForecast.macProblem(dataset: dataset, config: cfg) != nil {
             // Too big for this Mac in one piece: train it here as blocks that each fit, then merge.
@@ -137,7 +193,20 @@ final class TrainingSession {
                     try await RemoteImageFetch.shared.ensure(dataset.root)
                 }
                 try t.prepare { msg in Task { @MainActor in self?.state = .preparing(msg) } }
+                if let (url, step) = resumeFrom, let g = try? SplatFileFormat.load(url: url) {
+                    t.resume(from: g, step: step)
+                    await MainActor.run { self?.remoteMessage = "Continuing from the checkpoint at step \(step.formatted())." }
+                }
                 await MainActor.run { self?.state = .training; if let s = self { s.app?.setScene(cloud: nil, scene: t.makeScene(), frame: false) } }
+                // Checkpoint every 10 minutes (and on Stop, below), so quitting or a crash costs at most that much.
+                let saver = Task.detached(priority: .utility) {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
+                        if Task.isCancelled { break }
+                        await Self.saveCheckpoint(t, output: output, session: self)
+                    }
+                }
+                defer { saver.cancel() }
                 let result = try t.run(previewEvery: preview, onStatus: { s in
                     Task { @MainActor in self?.update(s) }
                 }, onPreview: { scene in
@@ -150,10 +219,35 @@ final class TrainingSession {
                 let scene = SplatScene(cloud: result)
                 await MainActor.run { self?.finish(result: result, scene: scene, output: output) }
             } catch TrainerError.cancelled {
+                // Stop keeps the progress: Resume on the project page continues from here.
+                if t.checkpoint().step > 0 { await Self.saveCheckpoint(t, output: output, session: self) }
                 await MainActor.run { self?.state = .cancelled }
             } catch {
                 await MainActor.run { self?.state = .failed(error.localizedDescription) }
             }
+        }
+    }
+
+    /// Writes the trainer's splats and step to `checkpointURL(for: output)` (atomically) and notes it in the project.
+    nonisolated private static func saveCheckpoint(_ t: MetalTrainer, output: URL, session: TrainingSession?) async {
+        let (g, step) = t.checkpoint()
+        guard step > 0 else { return }
+        let url = checkpointURL(for: output)
+        let tmp = url.deletingLastPathComponent().appendingPathComponent(".tmp-" + url.lastPathComponent)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try PLYCodec.writeGaussians(g, to: tmp)
+            try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: tmp, to: url)
+            for ext in ["sky.png", "sky.json"] {      // the skybox sidecars travel with it
+                let a = tmp.deletingPathExtension().appendingPathExtension(ext), b = url.deletingPathExtension().appendingPathExtension(ext)
+                if FileManager.default.fileExists(atPath: a.path) { try? FileManager.default.removeItem(at: b); try? FileManager.default.moveItem(at: a, to: b) }
+            }
+        } catch { return }
+        await MainActor.run {
+            guard let session, let project = session.projectDir else { return }
+            let rel = String(url.path.dropFirst(project.path.count + 1))
+            session.recordTraining { $0.checkpoint = rel; $0.checkpointStep = step; $0.step = step }
         }
     }
 
@@ -270,6 +364,8 @@ final class TrainingSession {
         let output = URL(fileURLWithPath: p.output)
         let host = URL(string: p.baseURL)?.host ?? "the worker"
         workerId = p.workerId
+        projectDir = dataset.root.deletingLastPathComponent()
+        outputURL = output
         state = .preparing("Re-attaching to “\(p.name)” on \(host)")
         remoteMessage = "Picked up a job that was running on \(host) when this project was last open."
         task = Task { [weak self] in
@@ -347,7 +443,9 @@ final class TrainingSession {
             guard let info = infos[dev] else { return true }
             return MemoryForecast.workerProblem(info: info, dataset: sub, config: c) == nil
         }
-        let initialCount = max(2, devices.count * 2, Int((Double(dataset.manifest.cameras.count) / 2000).rounded(.up)))
+        let initialCount = resumeBlockCount ?? max(2, devices.count * 2, Int((Double(dataset.manifest.cameras.count) / 2000).rounded(.up)))
+        let resuming = resumeBlockCount != nil
+        let store = projectDir.map { Self.blockStore(project: $0, dataset: dataset, config: cfg) }
         state = .preparing("Partitioning scene into blocks")
         task = Task { [weak self] in
             do {
@@ -357,12 +455,14 @@ final class TrainingSession {
                 // More blocks only while that actually shrinks them: when every camera sees most of the scene
                 // (gardens, rooms), splitting further keeps nearly all photos in every block.
                 func widest(_ bs: [SceneBlock]) -> Int { bs.map(\.cameraIds.count).max() ?? 0 }
-                while blockCount < 32, !blocks.allSatisfy({ b in devices.contains { fits($0.id, b, blocks) } }) {
+                while !resuming, blockCount < 32, !blocks.allSatisfy({ b in devices.contains { fits($0.id, b, blocks) } }) {
                     let next = BlockPartitioner(blockCount: blockCount + max(1, blockCount / 2)).partition(dataset: dataset, points: pc)
                     if Double(widest(next)) > 0.85 * Double(widest(blocks)) { break }
                     blockCount += max(1, blockCount / 2); blocks = next
                 }
                 self?.remoteMessage = "Training \(blocks.count) blocks on \(devices.count) devices."
+                let bc = blocks.count
+                self?.recordTraining { $0.placement = .both; $0.blockCount = bc }
                 let scheduler = ComputeScheduler(devices: devices, placement: .both)
                 let start = Date()
                 let total = cfg.iterations * blocks.count
@@ -379,7 +479,8 @@ final class TrainingSession {
                     .map { RetryDevice(id: $0.id, name: $0.isLocal ? "This Mac" : $0.name) }
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
                                                                    local: useLocal ? MetalTrainingRunner(pause: pause) : nil, clients: clients,
-                                                                   fits: { fits($0, $1, finalBlocks) }, retryGate: gate, pause: pause) { bp in
+                                                                   fits: { fits($0, $1, finalBlocks) }, retryGate: gate, pause: pause,
+                                                                   blockStore: store) { bp in
                     Task { @MainActor in
                         guard let self else { return }
                         if case .preparing = self.state, bp.stage != .waiting { self.state = .training }
@@ -430,10 +531,12 @@ final class TrainingSession {
                         let order = ["training", "uploading", "queued", "loading", "downloading", "waiting", "paused", "offline", "failed", "left out", "done"]
                         let parts = order.compactMap { k in counts[k].map { "\($0) \(k)" } }
                         s.phase = "\(finalBlocks.count) blocks on \(nDevices) device\(nDevices == 1 ? "" : "s"): " + parts.joined(separator: ", ")
+                        if bp.stage == .done { let n = counts["done"] ?? 0; self.recordTraining { $0.blocksDone = n } }
                         self.update(s)
                     }
                 }
                 try PLYCodec.writeGaussians(cloud, to: output, up: dataset.upVectorSIMD)
+                if let store { try? FileManager.default.removeItem(at: store) }     // merged: the blocks aren't needed any more
                 self?.finish(result: cloud, scene: SplatScene(cloud: cloud), output: output)
             } catch is CancellationError {
                 self?.state = .cancelled
@@ -445,6 +548,11 @@ final class TrainingSession {
 
     private func update(_ s: TrainerStatus) {
         status = s
+        if Date().timeIntervalSince(lastRecorded) > 30 {
+            lastRecorded = Date()
+            let (st, tot) = (s.step, s.totalSteps)
+            recordTraining { $0.step = st; $0.totalSteps = tot }
+        }
         if state == .preparing("") || { if case .preparing = state { return true }; return false }() { state = .training }
         if history.last?.step != s.step {
             history.append(Sample(id: history.count, step: s.step, loss: Double(s.loss), psnr: Double(s.psnr), gaussians: s.numGaussians))
@@ -457,6 +565,12 @@ final class TrainingSession {
 
     private func finish(result: GaussianCloud, scene: SplatScene, output: URL) {
         state = .finished
+        recordTraining { $0.state = .finished; $0.step = $0.totalSteps; $0.checkpoint = nil; $0.checkpointStep = nil; $0.message = nil }
+        let ck = Self.checkpointURL(for: output)
+        for u in [ck, ck.deletingPathExtension().appendingPathExtension("sky.png"), ck.deletingPathExtension().appendingPathExtension("sky.json")] {
+            try? FileManager.default.removeItem(at: u)
+        }
+        ProjectLibrary.shared.note(output)
         trainer = nil
         if let app {
             app.setScene(cloud: result, scene: scene, frame: false)
@@ -577,6 +691,12 @@ final class PrepSession {
         var q = p
         if q.fraction < 0 { q.fraction = overall }
         progress = q
+        // The project page shows which stage was running if the app quits now.
+        let st = Self.stage(of: ph)
+        if st != recordedStage, let dir = projectDir, running {
+            recordedStage = st
+            ProjectLibrary.shared.update(dir) { $0.prep = .init(state: .running, stage: st) }
+        }
     }
 
     /// `<project>/prep.log`: every progress line is also appended here, so a run that dies overnight
@@ -596,9 +716,40 @@ final class PrepSession {
     private static let dayClock: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
     private static let clock: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
 
+    /// The project being prepared (or last prepared) and how, for Try Again / Resume.
+    private(set) var projectDir: URL? = nil
+    private(set) var lastRun: (source: SourceDescription, options: PrepOptions, thenTrain: Bool)? = nil
+    private var recordedStage: PrepStage? = nil
+
+    private static func stage(of ph: Phase) -> PrepStage {
+        switch ph { case .images: return .frames; case .masks: return .masks; case .poses: return .poses; case .finalising: return .done }
+    }
+
+    /// Runs the last run again: every stage that finished is reused from its checkpoint.
+    func retry() {
+        guard let r = lastRun, let dir = projectDir else { return }
+        run(source: r.source, options: r.options, projectDir: dir, thenTrain: r.thenTrain)
+    }
+
+    /// Continues (or redoes from `redo`) a project's processing from its saved settings. `workerId`: the device
+    /// that processes (nil = this Mac).
+    func resume(project dir: URL, redo: PrepStage? = nil, workerId: String?, thenTrain: Bool? = nil) {
+        guard !running, let rec = ProjectRecord.load(dir), let src = rec.source, var o = rec.options else { return }
+        if let redo { PrepCheckpoints(root: dir.appendingPathComponent("dataset")).invalidate(from: redo) }
+        o.remoteWorkerId = workerId
+        o.compute = workerId == nil ? .thisMac : .remote
+        run(source: src, options: o, projectDir: dir, thenTrain: thenTrain ?? rec.trainAfter)
+    }
+
     func run(source: SourceDescription, options: PrepOptions, projectDir: URL, thenTrain: Bool) {
         guard !running else { return }
         running = true; error = nil; log.removeAll(); cancelRequested = false
+        self.projectDir = projectDir; lastRun = (source, options, thenTrain); recordedStage = nil
+        try? FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        ProjectLibrary.shared.update(projectDir) { r in
+            r.source = source; r.options = options; r.trainAfter = thenTrain
+            r.prep = .init(state: .running, stage: .frames)
+        }
         logFile = projectDir.appendingPathComponent("prep.log")
         self.thenTrain = thenTrain
         startedAt = Date(); lastUpdate = startedAt; overall = 0; samples.removeAll(); stageStarts.removeAll(); stageEnds.removeAll(); stageETA = nil
@@ -625,18 +776,29 @@ final class PrepSession {
                     }
                 }
                 try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
-                let ds = try await DatasetBuilder.build(source: source, options: options, into: dsDir, worker: worker) { p in
-                    Task { @MainActor in self?.ingest(p) }
+                let cp = PrepCheckpoints(root: dsDir)
+                let doneFP = PrepCheckpoints.fingerprints(source, options)[.done]!
+                var leveled: PreparedDataset
+                if cp.isDone(fingerprint: doneFP), let ready = try? PreparedDataset.load(dsDir) {
+                    // Finished earlier with these settings (e.g. the app quit before training started).
+                    leveled = ready
+                    self?.ingest(PipelineProgress(stage: "Finalising dataset", fraction: 0.98, message: "the dataset is already prepared — reusing it"))
+                } else {
+                    let ds = try await DatasetBuilder.build(source: source, options: options, into: dsDir, worker: worker) { p in
+                        Task { @MainActor in self?.ingest(p) }
+                    }
+                    self?.ingest(PipelineProgress(stage: "Finalising dataset", fraction: 0.98, message: "levelling and centring"))
+                    leveled = ds
+                    do { try leveled.normalizeOrientation(); self?.appendLog("Levelled scene: up = −Y, centred at origin") }
+                    catch { self?.appendLog("Could not level scene: \(error.localizedDescription)") }
+                    try? cp.markDone(fingerprint: doneFP, summary: "\(leveled.manifest.cameras.count) cameras, levelled")
                 }
                 guard let self else { return }
-                self.ingest(PipelineProgress(stage: "Finalising dataset", fraction: 0.98, message: "levelling and centring"))
-                var leveled = ds
-                do { try leveled.normalizeOrientation(); self.appendLog("Levelled scene: up = −Y, centred at origin") }
-                catch { self.appendLog("Could not level scene: \(error.localizedDescription)") }
                 for ph in Phase.allCases where self.stageEnds[ph] == nil && self.stageStarts[ph] != nil { self.stageEnds[ph] = Date() }
                 self.overall = 1
                 self.running = false
                 self.appendLog("Dataset ready: \(leveled.manifest.cameras.count) cameras in \(formatDuration(self.elapsed))")
+                ProjectLibrary.shared.update(projectDir) { $0.prep = .init(state: .finished, stage: .done) }
                 self.app?.openDataset(leveled.root)
                 self.app?.showNewProject = false
                 if thenTrain { self.app?.training.start(dataset: leveled) }
@@ -644,10 +806,15 @@ final class PrepSession {
                 guard let self else { return }
                 self.running = false
                 // A cancel is not a failure: don't show "Preparation failed … CancellationError".
-                if self.cancelRequested || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+                let stage = Self.stage(of: self.phase)
+                if self.cancelRequested || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    ProjectLibrary.shared.update(projectDir) { $0.prep = .init(state: .stopped, stage: stage, message: "Stopped") }
+                    return
+                }
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 self.appendLog("FAILED: \(message)")
                 self.error = message
+                ProjectLibrary.shared.update(projectDir) { $0.prep = .init(state: .failed, stage: stage, message: message) }
             }
         }
     }

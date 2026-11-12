@@ -7,7 +7,7 @@ struct ContentView: View {
     @State private var brushRadius: CGFloat = 20
     @State private var dropTargeted = false
 
-    enum SidebarItem: Hashable { case viewer, recent(URL), inbox, workers, models, reference }
+    enum SidebarItem: Hashable { case viewer, project(URL), file(URL), inbox, workers, models, reference }
 
     var body: some View {
         NavigationSplitView {
@@ -51,6 +51,7 @@ struct ContentView: View {
         case .workers: WorkersView(model: model)
         case .models: ModelsView()
         case .reference: SettingsReferenceView()
+        case .project(let url): ProjectPage(model: model, url: url)
         default: viewerWithInspector
         }
     }
@@ -164,6 +165,7 @@ struct SidebarView: View {
     @Binding var selection: ContentView.SidebarItem?
     @State private var receiver = CaptureReceiverHolder.shared.receiver
     @State private var workers = WorkerBrowser.shared
+    private var library: ProjectLibrary { ProjectLibrary.shared }
 
     var body: some View {
         List(selection: $selection) {
@@ -180,16 +182,31 @@ struct SidebarView: View {
                 Label("Models & Benchmarks", systemImage: "chart.bar.doc.horizontal").tag(ContentView.SidebarItem.models)
                 Label("Settings Reference", systemImage: "book").tag(ContentView.SidebarItem.reference)
             }
-            Section("Recent") {
-                ForEach(model.recents.prefix(12), id: \.self) { url in
-                    Label(url.deletingPathExtension().lastPathComponent, systemImage: icon(for: url))
-                        .tag(ContentView.SidebarItem.recent(url))
-                        .help(url.path)
+            Section("Projects") {
+                ForEach(library.projects.prefix(15), id: \.path) { item in
+                    let url = URL(fileURLWithPath: item.path)
+                    ProjectSidebarRow(model: model, url: url)
+                        .tag(ContentView.SidebarItem.project(url))
+                        .contextMenu {
+                            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                            Button("Remove from List") { library.remove(item.path) }
+                        }
+                }
+            }
+            if !library.files.isEmpty {
+                Section("Files") {
+                    ForEach(library.files.prefix(8), id: \.path) { item in
+                        let url = URL(fileURLWithPath: item.path)
+                        Label(url.deletingPathExtension().lastPathComponent, systemImage: icon(for: url))
+                            .tag(ContentView.SidebarItem.file(url))
+                            .help(url.path)
+                            .contextMenu { Button("Remove from List") { library.remove(item.path) } }
+                    }
                 }
             }
         }
         .onChange(of: selection) { _, new in
-            if case .recent(let url) = new { model.open(url); selection = .viewer }
+            if case .file(let url) = new { model.open(url); selection = .viewer }
         }
     }
 
@@ -224,6 +241,7 @@ struct WelcomeView: View {
                     Text("SplatWork").font(.largeTitle.bold())
                     Text("View, create and edit 3D Gaussian splats — accelerated by Metal on Apple silicon.").foregroundStyle(.secondary)
                 }
+                ContinueProjectsView(model: model)
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Create").font(.headline).foregroundStyle(.secondary)
                     HStack(spacing: 12) {

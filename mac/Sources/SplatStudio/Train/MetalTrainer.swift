@@ -280,6 +280,20 @@ final class MetalTrainer: @unchecked Sendable {
         return g
     }
 
+    /// Continues an interrupted run: its checkpoint's splats at the step it was saved. Call after `prepare`.
+    /// Learning-rate, SH and densification schedules all follow `step`; only the optimiser's moments start afresh.
+    func resume(from cloud: GaussianCloud, step s: Int) {
+        paramLock.lock(); defer { paramLock.unlock() }
+        load(cloud)
+        step = min(max(0, s), config.iterations)
+    }
+
+    /// The current splats and the step they belong to, for a resumable checkpoint.
+    func checkpoint() -> (cloud: GaussianCloud, step: Int) {
+        paramLock.lock(); let s = step; paramLock.unlock()
+        return (snapshot(), s)
+    }
+
     /// Replaces all parameters (also used to resume from a checkpoint).
     func load(_ cloud: GaussianCloud) {
         n = cloud.count

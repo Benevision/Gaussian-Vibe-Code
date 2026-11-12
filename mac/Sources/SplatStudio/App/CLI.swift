@@ -254,14 +254,24 @@ enum CLI {
                 sem.wait()
                 exit(exitCode)
             }
+            // project.json, as the app writes it: the project then shows its state and can be resumed in the app.
+            try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            var rec = ProjectRecord.load(out) ?? ProjectRecord(name: out.lastPathComponent)
+            rec.source = source; rec.options = o; rec.prep = .init(state: .running, stage: .frames)
+            rec.save(out)
+            let opts = o
             Task.detached {
+                var rec = rec
                 do {
                     var last = ""
-                    var ds = try await DatasetBuilder.build(source: source, options: o, into: out.appendingPathComponent("dataset"), worker: worker) { p in
+                    var ds = try await DatasetBuilder.build(source: source, options: opts, into: out.appendingPathComponent("dataset"), worker: worker) { p in
                         let line = "\(p.stage) \(p.fraction >= 0 ? String(format: "%3.0f%%", p.fraction * 100) : "  …") \(p.message)"
                         if line != last { print("  " + line); fflush(stdout); last = line }
                     }
                     try ds.normalizeOrientation()
+                    let cp = PrepCheckpoints(root: ds.root)
+                    try? cp.markDone(fingerprint: PrepCheckpoints.fingerprints(source, opts)[.done]!, summary: "\(ds.manifest.cameras.count) cameras, levelled")
+                    rec.prep = .init(state: .finished, stage: .done); rec.save(out)
                     print(String(format: "Dataset ready: %d cameras in %.0f s → %@", ds.manifest.cameras.count, Date().timeIntervalSince(start), ds.root.path))
                     if RemoteStore.load(ds.root) != nil {
                         // frames left on the worker: wait for the background download (the app keeps running; the CLI must not exit)
@@ -274,7 +284,10 @@ enum CLI {
                             print(String(format: "Training dataset on the worker: %@ (%.1f s)", id, Date().timeIntervalSince(t0)))
                         }
                     }
-                } catch { fputs("error: \(error.localizedDescription)\n", stderr); exitCode = 1 }
+                } catch {
+                    fputs("error: \(error.localizedDescription)\n", stderr); exitCode = 1
+                    rec.prep = .init(state: .failed, message: error.localizedDescription); rec.save(out)
+                }
                 sem.signal()
             }
             sem.wait()

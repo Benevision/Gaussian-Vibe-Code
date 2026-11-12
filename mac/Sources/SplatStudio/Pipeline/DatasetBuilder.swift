@@ -187,11 +187,39 @@ enum DatasetBuilder {
         let maskP = PipelineProgress.scaled(progress, 0.35...0.45)
         let poseP = PipelineProgress.scaled(progress, 0.45...0.97)
 
+        // Checkpoints (dataset/.prep): every stage whose inputs and settings are unchanged since a run that got
+        // past it is skipped. A camera solve that already finished is simply reused.
+        let cp = PrepCheckpoints(root: dir)
+        let fp = PrepCheckpoints.fingerprints(source, options)
+        func reused(_ stage: String, _ fraction: Double, _ what: String) {
+            progress?(PipelineProgress(stage: stage, fraction: fraction, message: "reusing \(what) from the last run"))
+        }
+        if let ds = cp.dataset(.poses, fingerprint: fp[.poses]!) {
+            reused("Camera solving", 0.97, "the camera positions (\(ds.manifest.cameras.count) cameras)")
+            return finish(ds, progress)
+        }
+
+        /// Posed sources: imported dataset → masks, each checkpointed as a copy of the dataset.
+        func importedAndMasked(_ maskRange: ClosedRange<Double>, _ load: () async throws -> PreparedDataset) async throws -> PreparedDataset {
+            if let m = cp.dataset(.masks, fingerprint: fp[.masks]!) { reused("Masks", maskRange.upperBound, "the masks"); return m }
+            var ds: PreparedDataset
+            if let i = cp.dataset(.frames, fingerprint: fp[.frames]!) {
+                reused("Importing", maskRange.lowerBound, "the imported frames (\(i.manifest.cameras.count))"); ds = i
+            } else {
+                ds = try await load()
+                try cp.save(ds, as: .frames, fingerprint: fp[.frames]!, summary: "\(ds.manifest.cameras.count) frames imported")
+            }
+            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, maskRange))
+            try cp.save(ds, as: .masks, fingerprint: fp[.masks]!, summary: maskSummary(o))
+            return ds
+        }
+
         // 1. Sources that already carry poses.
         switch source {
         case .captureBundle(let u):
-            var ds = try await CaptureImporter.importBundle(u, options: o.capture, into: dir, progress: PipelineProgress.scaled(progress, 0...0.6))
-            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, 0.6...0.7))
+            var ds = try await importedAndMasked(0.6...0.7) {
+                try await CaptureImporter.importBundle(u, options: o.capture, into: dir, progress: PipelineProgress.scaled(progress, 0...0.6))
+            }
             let refine: Bool = {
                 switch o.poseSolver {
                 case .splatprep: return true
@@ -245,20 +273,33 @@ enum DatasetBuilder {
                         message: "SfM placed only \(sol.poses.count) of \(frames.frames.count) photos — keeping the capture's own (ARKit) camera poses"))
                 }
             }
+            try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) cameras" + (refine ? " (refined)" : ""))
             return finish(ds, progress)
         case .colmap(let p, let images):
-            var ds = try await COLMAPImporter.importProject(at: p, imagesDir: images, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
-            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, 0.85...0.97))
+            let ds = try await importedAndMasked(0.85...0.97) {
+                try await COLMAPImporter.importProject(at: p, imagesDir: images, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
+            }
+            try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) cameras (from COLMAP)")
             return finish(ds, progress)
         case .nerfstudio(let t):
-            var ds = try await NerfstudioImporter.importDataset(transforms: t, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
-            ds = try await maskDataset(ds, o, worker: worker, progress: PipelineProgress.scaled(progress, 0.85...0.97))
+            let ds = try await importedAndMasked(0.85...0.97) {
+                try await NerfstudioImporter.importDataset(transforms: t, options: o.importing, into: dir, progress: PipelineProgress.scaled(progress, 0...0.85))
+            }
+            try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) cameras (from Nerfstudio)")
             return finish(ds, progress)
         default: break
         }
 
-        // 2. Ingest frames.
+        // 2. Ingest frames (3. masks), unless a checkpoint has them.
         var frames: FrameSet
+        if let m = cp.frames(.masks, fingerprint: fp[.masks]!) {
+            reused("Masks", 0.45, "the frames and masks (\(m.frames.count) frames)")
+            frames = m
+        } else {
+        if let f = cp.frames(.frames, fingerprint: fp[.frames]!) {
+            reused("Preparing images", 0.35, "the \(f.frames.count) frames")
+            frames = f
+        } else {
         switch source {
         case .photos(let folder):
             frames = try await PhotoIngest.ingest(folder: folder, options: o.photos, into: dir, progress: ingestP)
@@ -293,6 +334,9 @@ enum DatasetBuilder {
         default:
             fatalError("handled above")
         }
+        try cp.save(frames, as: .frames, fingerprint: fp[.frames]!,
+                    summary: "\(frames.frames.count) frames" + (frames.rejected.isEmpty ? "" : ", \(frames.rejected.count) left out"))
+        }
 
         // 3. Masks. Circular fisheye footage always gets them: the black lens border is fixed in every frame, and
         // its edge would otherwise "match" perfectly between all frames and break camera solving.
@@ -312,6 +356,8 @@ enum DatasetBuilder {
             try await FrameMasker.applySky(to: &frames, runner: SplatPrepRunner(),
                                            worker: o.compute != .thisMac ? worker : nil, progress: maskP)
         }
+        try cp.save(frames, as: .masks, fingerprint: fp[.masks]!, summary: maskSummary(o))
+        }
 
         // 4. Poses (+ rig constraints / metric scale).
         let sequential: Bool = { switch source { case .video, .video360, .stereoVideo: return true; default: return false } }()
@@ -328,7 +374,20 @@ enum DatasetBuilder {
         }
         ds.recomputeSceneBounds()
         try ds.save()
+        try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) of \(frames.frames.count) frames placed")
         return finish(ds, progress)
+    }
+
+    /// "no masks" / "people, sky" for the project page.
+    static func maskSummary(_ o: PrepOptions) -> String {
+        var parts: [String] = []
+        if o.maskStaticRegions { parts.append("fixed parts of the frame") }
+        switch o.masking.model {
+        case .none: break
+        default: parts.append("objects")
+        }
+        if o.masking.sky { parts.append("sky") }
+        return parts.isEmpty ? "no masks" : "masks: " + parts.joined(separator: ", ")
     }
 
     private static func finish(_ ds: PreparedDataset, _ progress: PipelineProgressHandler?) -> PreparedDataset {

@@ -57,6 +57,9 @@ enum UISnapshots {
         }
         p += [Page(name: "wizard-cameras", apply: { $0.newProjectSource = .video(URL(fileURLWithPath: "/tmp/example.mov")); $0.newProjectStartStep = 1; $0.showNewProject = true }, undo: { $0.showNewProject = false }),
               Page(name: "wizard-training", apply: { $0.newProjectSource = .video(URL(fileURLWithPath: "/tmp/example.mov")); $0.newProjectStartStep = 2; $0.showNewProject = true }, undo: { $0.showNewProject = false })]
+        if let proj = ProcessInfo.processInfo.environment["SPLAT_UI_PROJECT"] {
+            p += [Page(name: "project") { $0.sidebar = .project(URL(fileURLWithPath: proj)) }]
+        }
         p += [Page(name: "inbox") { $0.sidebar = .inbox }, Page(name: "compute") { $0.sidebar = .workers },
               Page(name: "models") { $0.sidebar = .models }, Page(name: "reference") { $0.sidebar = .reference },
               Page(name: "newproject", apply: { $0.sidebar = .viewer; $0.showNewProject = true }, undo: { $0.showNewProject = false })]

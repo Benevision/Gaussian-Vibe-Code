@@ -20,6 +20,8 @@ final class AppModel {
     var showInspector = true
     var showNewProject = false
     var newProjectSource: SourceDescription? = nil
+    /// A project whose saved settings the New Project sheet opens with (Change Settings on the project page).
+    var newProjectPrefill: URL? = nil
     var showShortcuts = false
     var alert: AlertInfo? = nil
     struct AlertInfo: Identifiable { let id = UUID(); var title: String; var message: String }
@@ -72,7 +74,6 @@ final class AppModel {
     /// World "up" used by the viewer. 3DGS / COLMAP convention is −Y; SplatWork datasets are
     /// normalised to it. Changed with the Orientation controls and remembered per file.
     var worldUp = SIMD3<Float>(0, -1, 0)
-    var recents: [URL] = NSDocumentController.shared.recentDocumentURLs
     var confirmHome = false
     /// Open mask editor (sheet), if any.
     var maskEditor: MaskEditorModel? = nil
@@ -130,7 +131,7 @@ final class AppModel {
             alert = AlertInfo(title: "Can't open \(url.lastPathComponent)", message: "Drop a splat (.ply, .spz, .splat), a folder of photos, a video, an iPhone capture, a COLMAP project or a Nerfstudio transforms.json.")
         }
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
-        recents = NSDocumentController.shared.recentDocumentURLs
+        ProjectLibrary.shared.note(url)
     }
 
     func loadSplat(_ url: URL) {
@@ -217,6 +218,7 @@ final class AppModel {
             let ds = try PreparedDataset.load(root)
             remoteWatch.stop()   // the viewer now shows this project; a watched job's cameras would be another scene
             dataset = ds
+            ProjectLibrary.shared.note(root)
             Task { await RemoteImageFetch.shared.resumeIfNeeded(ds.root) }   // frames left on a worker
             // A worker job that was still running when this project was last open: pick it back up.
             training.resumePendingRemote(dataset: ds, outputsDir: ds.root.deletingLastPathComponent().appendingPathComponent("outputs", isDirectory: true))
