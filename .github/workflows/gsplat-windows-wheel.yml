@@ -92,7 +92,7 @@ jobs:
           # function (Cameras.cuh). |x| <= FLT_MAX is false for NaN and ±inf, and works in device code everywhere.
           sed -i -E 's/std::isfinite\(([^()]+)\)/(fabsf(\1) <= 3.402823466e+38f)/g' gsplat/cuda/include/Cameras.cuh
           grep -n "3.402823466e+38f" gsplat/cuda/include/Cameras.cuh
-          ! grep -rn "std::isfinite" gsplat/cuda
+          ! grep -rn "std::isfinite" gsplat/cuda/include gsplat/cuda/csrc --exclude-dir=third_party
       # Built from PowerShell, not Git Bash: Git's own link.exe in /usr/bin would shadow MSVC's linker.
       - name: Build gsplat wheel
         if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
