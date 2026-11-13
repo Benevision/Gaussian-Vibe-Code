@@ -212,7 +212,7 @@ struct PrepCheckpoints: Sendable {
             return base + "/[" + files.sorted().joined(separator: ",") + "]"
         }
         switch source {
-        case .photos(let u), .video(let u), .video360(let u), .photos360(let u), .captureBundle(let u), .nerfstudio(let u):
+        case .photos(let u), .video(let u), .video360(let u), .homeVideo(let u), .photos360(let u), .captureBundle(let u), .nerfstudio(let u):
             return id(u)
         case .photoFiles(let us): return us.map { id($0) }.joined(separator: ";")
         case .stereoVideo(let l, let r): return id(l) + ";" + id(r)
@@ -229,6 +229,7 @@ struct PrepCheckpoints: Sendable {
         switch source {
         case .photos, .photoFiles: parts.append(canonicalJSON(o.photos))
         case .video: parts.append(canonicalJSON(o.video))
+        case .homeVideo: parts.append(canonicalJSON(o.homeVideo))
         case .video360: parts += [canonicalJSON(o.video), canonicalJSON(o.equirect)]
         case .photos360: parts += [canonicalJSON(o.equirect), canonicalJSON(o.photos.encoding)]
         case .stereoVideo: parts += [canonicalJSON(o.video), canonicalJSON(o.stereo)]

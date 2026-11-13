@@ -474,6 +474,11 @@ def write_database(
                 eye_of[Path(str(pair[0])).name] = 0
                 eye_of[Path(str(pair[1])).name] = 1
     cam_for_eye: Dict[Tuple[int, int, int], int] = {}
+    # cameraGroups {image name: group}: one camera per group (old home video: one per clip, or per frame when it zooms)
+    groups = {Path(str(k)).name: v for k, v in (ctx.request.get("cameraGroups") or {}).items()}
+    if groups:
+        single = False
+        eye_of = {n: g for n, g in groups.items()}
     db = COLMAPDatabase.create(db_path)
     cam_for_size: Dict[Tuple[int, int], int] = {}
     cam_for_sensor: Dict[int, int] = {}
@@ -497,6 +502,8 @@ def write_database(
             ids.append(iid)
             continue
         eye = eye_of.get(Path(name).name)
+        if groups and eye is None:
+            eye = -1 - i          # not in any group: a camera of its own
         if single and (w, h) in cam_for_size:
             cid = cam_for_size[(w, h)]
         elif eye is not None and (w, h, eye) in cam_for_eye:

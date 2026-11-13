@@ -127,6 +127,11 @@ enum CLI {
                 }
                 if let it = value("--iterations").flatMap(Int.init) { cfg.iterations = it; cfg.densifyStop = min(cfg.densifyStop, Int(Double(it) * 0.8)) }
                 if !dataset.hasDepth { cfg.depthWeight = 0 }
+                // home video datasets get the tape settings (as in the app) unless --config / --no-home-video-preset
+                if HomeVideoIngest.isHomeVideoDataset(dataset.root), value("--config") == nil, !a.contains("--no-home-video-preset") {
+                    cfg = HomeVideoIngest.adjustTraining(cfg)
+                    print("home video: SH degree \(cfg.shDegree), transient masking on")
+                }
                 let out = URL(fileURLWithPath: value("--out") ?? "trained.ply")
                 if let k = value("--blocks").flatMap(Int.init) {
                     // Block-parallel run (the app's Both mode): this Mac (unless --no-local) and --worker URL.
@@ -211,8 +216,16 @@ enum CLI {
             // Headless dataset preparation: SplatStudio --prepare <photos dir | video | capture> --out <project dir>
             //   [--solver auto|objectcapture|capture|<splatprep feature id>] [--mask none|people|dynamic]
             let out = URL(fileURLWithPath: value("--out") ?? "project")
-            guard let source = SourceDescription.guess(URL(fileURLWithPath: src)) else { fputs("error: unrecognised source\n", stderr); exit(1) }
+            guard var source = SourceDescription.guess(URL(fileURLWithPath: src)) else { fputs("error: unrecognised source\n", stderr); exit(1) }
             var o = PrepOptions()
+            // [--home-video] old tape footage (also when the name says VHS / Hi8 / …); [--plain-video] forces the ordinary
+            // video path; [--clips 1,4,5] picks clips (ids from vhs.json); [--frames N] frames over all clips.
+            if a.contains("--home-video"), case .video(let u) = source { source = .homeVideo(u) }
+            if a.contains("--plain-video"), case .homeVideo(let u) = source { source = .video(u) }
+            if let c = value("--clips") { o.homeVideo.clips = c.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) } }
+            if let n = value("--frames").flatMap(Int.init) { o.homeVideo.frameCount = n; o.video.targetFrameCount = n }
+            if let fps = value("--fps").flatMap(Double.init) { o.video.targetFPS = fps }
+            if let s = value("--start").flatMap(Double.init) { o.video.startTime = s }
             switch value("--solver") ?? "auto" {
             case "auto": o.poseSolver = .automatic
             case "objectcapture": o.poseSolver = .objectCapture

@@ -118,6 +118,9 @@ struct IngestedFrame: Codable, Hashable, Sendable {
     var mask: String? = nil
     /// Optional sky mask (8-bit PNG, 255 = sky) relative to the frame-set root.
     var sky: String? = nil
+    /// Home video: the clip this frame came from, and its camera group (frames of a group share one lens setting).
+    var clip: Int? = nil
+    var cameraGroup: Int? = nil
 }
 
 /// Description of a stereo camera rig (two horizontally separated, rectified pinhole cameras).

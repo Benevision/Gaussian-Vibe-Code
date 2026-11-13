@@ -266,6 +266,11 @@ struct WelcomeView: View {
                         ActionCard(title: "iPhone LiDAR", subtitle: "A SplatWork Capture recording: posed frames + depth. Fastest, metric scale.", systemImage: "iphone.gen3", tint: .green) { pick(.capture) }
                         ActionCard(title: "Stereo footage", subtitle: "Side-by-side, top-bottom, spatial video or Arcturus Vision recordings.", systemImage: "eyeglasses", tint: .purple) { pick(.stereo) }
                     }
+                    HStack(spacing: 12) {
+                        ActionCard(title: "Home video", subtitle: "Old VHS or camcorder tapes saved as a video file. Cleaned up and split into clips.", systemImage: "film.stack", tint: .brown) { pick(.homeVideo) }
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                    }
                 }
                 .frame(width: 624, alignment: .leading)
                 VStack(alignment: .leading, spacing: 10) {
@@ -285,7 +290,7 @@ struct WelcomeView: View {
         .background(.background)
     }
 
-    enum Kind { case photos, video, video360, capture, stereo, posed, splat, dataset, drone }
+    enum Kind { case photos, video, video360, capture, stereo, posed, splat, dataset, drone, homeVideo }
 
     private func pick(_ k: Kind) {
         let p = NSOpenPanel()
@@ -293,7 +298,7 @@ struct WelcomeView: View {
         p.canChooseFiles = k != .photos && k != .dataset
         p.allowsMultipleSelection = k == .stereo
         switch k {
-        case .video, .video360, .stereo: p.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        case .video, .video360, .stereo, .homeVideo: p.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .avi, .mpeg2Video]
         case .splat: p.allowedContentTypes = AppModel.openableTypes
         default: break
         }
@@ -305,6 +310,7 @@ struct WelcomeView: View {
         case .photos: model.newProjectSource = .photos(folder: u); model.showNewProject = true
         case .video: model.newProjectSource = .video(u); model.showNewProject = true
         case .video360: model.newProjectSource = .video360(u); model.showNewProject = true
+        case .homeVideo: model.newProjectSource = .homeVideo(u); model.showNewProject = true
         case .capture: model.newProjectSource = .captureBundle(u); model.showNewProject = true
         case .stereo: model.newProjectSource = .stereoVideo(left: p.urls[0], right: p.urls.count > 1 ? p.urls[1] : nil); model.showNewProject = true
         case .posed: model.newProjectSource = SourceDescription.guess(u) ?? .colmap(project: u, images: nil); model.showNewProject = true

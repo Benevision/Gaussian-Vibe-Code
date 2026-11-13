@@ -5,7 +5,7 @@ import Foundation
 /// file layout as `VideoFrameExtractor` / `Equirect360` here — and sends back `masks/`, `frames.json` (and `images/`,
 /// in the background on workers ≥ 1.3.8, which keep them for the next steps: see `RemoteStore`).
 enum RemoteFrameExtraction {
-    static func extract(video url: URL, options vo: VideoExtractionOptions, equirect: Equirect360Options?, into dir: URL,
+    static func extract(video url: URL, options vo: VideoExtractionOptions, equirect: Equirect360Options?, vhs: ProcessingRequest.VHS? = nil, into dir: URL,
                         worker: WorkerClient, progress: PipelineProgressHandler?) async throws -> FrameSet {
         let fm = FileManager.default
         try fm.ensureDirectory(dir)
@@ -15,6 +15,7 @@ enum RemoteFrameExtraction {
         req.video = "video." + (url.pathExtension.isEmpty ? "mp4" : url.pathExtension.lowercased())
         req.videoOptions = vo
         req.equirect = equirect
+        req.vhs = vhs
         let unpack = dir.appendingPathComponent(".remote-output")
         try? fm.removeItem(at: unpack)
         defer { try? fm.removeItem(at: unpack) }

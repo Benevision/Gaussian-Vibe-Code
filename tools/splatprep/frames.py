@@ -202,6 +202,37 @@ def _rotation(frame) -> int:
     return int(round(r / 90.0)) % 4
 
 
+def pixel_aspect(stream) -> float:
+    """Sample (pixel) aspect ratio of a PyAV video stream; 1.0 when absent, invalid or within 0.5 % of square."""
+    sar = None
+    for obj in (stream, getattr(stream, "codec_context", None)):
+        v = getattr(obj, "sample_aspect_ratio", None) if obj is not None else None
+        if v:
+            sar = v
+            break
+    try:
+        r = float(sar) if sar else 1.0
+    except (TypeError, ZeroDivisionError, ValueError):
+        return 1.0
+    if not (0.2 < r < 5.0) or abs(r - 1.0) < 0.005:
+        return 1.0
+    return r
+
+
+def square_pixels(rgb: np.ndarray, par: float) -> np.ndarray:
+    """Resample an image stored with pixel aspect ``par`` (width / height of one pixel) to square pixels.
+
+    The height (the number of scan lines) is kept and only the width changes, so no line is ever interpolated.
+    """
+    import cv2
+
+    h, w = rgb.shape[:2]
+    nw = max(1, int(round(w * par)))
+    if nw == w:
+        return rgb
+    return cv2.resize(rgb, (nw, h), interpolation=cv2.INTER_AREA if nw < w else cv2.INTER_CUBIC)
+
+
 def _write_image(path: Path, rgb: np.ndarray, encoding: str) -> None:
     import cv2
 
@@ -357,6 +388,9 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
             view_masks.append(p)
         log(f"{len(views)} views per frame, resampling on {remap.backend}")
     progress(0.0, f"{W}×{H} {stream.codec_context.name}, {len(views or [1])} images per frame")
+    if views is None and st_layout is None and pixel_aspect(stream) != 1.0:
+        log(f"non-square pixels (aspect {pixel_aspect(stream):.4f}): frames are resampled to "
+            f"{int(round(W * pixel_aspect(stream)))}×{H}")
 
     frames: List[Dict[str, Any]] = []
     rejected: List[Dict[str, str]] = []
@@ -365,11 +399,18 @@ def extract_frames(video: Path, out_dir: Path, vo: Dict[str, Any], eq: Optional[
     tw = min(THUMB_MAX_WIDTH, W)
     th = max(8, int(round(H * tw / W)))
 
+    # Non-square pixels (PAL / NTSC captures, anamorphic SD: e.g. 720×576 at 16:15, or an upscaled VHS capture
+    # stored 1890×1068 at 712:945): resample to square pixels, or every camera model's fx = fy is wrong.
+    # Stereo layouts handle their own anamorphic squeeze; 360° footage is always square.
+    par = pixel_aspect(stream) if (views is None and st_layout is None) else 1.0
+
     def to_rgb(frame) -> np.ndarray:
         if hdr_curve:
             rgb = _tone_map(frame.to_ndarray(format="rgb48le"), hdr_curve)
         else:
             rgb = frame.to_ndarray(format="rgb24")
+        if par != 1.0:
+            rgb = square_pixels(rgb, par)
         k = _rotation(frame)
         if k:
             rgb = np.ascontiguousarray(np.rot90(rgb, k))

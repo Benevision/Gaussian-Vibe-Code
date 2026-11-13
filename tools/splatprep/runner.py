@@ -12,6 +12,9 @@ Extra (optional) request keys understood here, beyond §6:
 * ``allowMatchingOnly`` — sfm without a mapper returns matching stats + ``matches.npz``
   instead of failing (used by the benchmark).
 * ``device``          — "auto" | "cuda" | "mps" | "cpu".
+* ``vhs``             — task = frames: old home video (VHS …) restoration and clips instead of plain frame
+  extraction (see vhs.py); ``{"analyseOnly": true}`` only finds the clips.
+* ``cameraGroups``    — sfm: {image name: group}; images of one group share a camera (VHS clips).
 * ``datasets`` / ``models`` — task = benchmark (see benchmark.py).
 * mask keys (task = masks / maskpreview) — ``maskPrompts``, ``maskClasses``, ``maskThreshold``,
   ``dilatePixels``, ``replaceMasks``, ... (see masks/prompts.py and README).
@@ -257,6 +260,15 @@ def run_frames_task(req: dict, workdir: Path, progress: ProgressFn) -> dict:
             right = _resolve(workdir, stereo["rightVideo"])
             if not right.is_file():
                 raise RequestError(f"right-eye video not found: {stereo['rightVideo']}")
+    if req.get("vhs") is not None:
+        if not isinstance(req["vhs"], dict):
+            raise RequestError("vhs must be an object")
+        from .vhs import prepare
+
+        stage = "analysing old home video" if req["vhs"].get("analyseOnly") else "restoring old home video"
+        sp = StagedProgress(progress, [(stage, 1.0)])
+        info = prepare(video, out_dir, req.get("videoOptions") or {}, req["vhs"], sp.sub(stage), lambda m: sp.message(stage, m))
+        return {"task": "frames", "device": "cpu", "status": "ok", **info}
     stage = ("splitting 360° video" if req.get("equirect") else
              "extracting stereo frames" if stereo is not None else "extracting frames")
     sp = StagedProgress(progress, [(stage, 1.0)])

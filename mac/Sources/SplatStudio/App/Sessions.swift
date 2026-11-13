@@ -197,6 +197,10 @@ final class TrainingSession {
         status = TrainerStatus(totalSteps: config.iterations)
         var cfg = config
         if !dataset.hasDepth { cfg.depthWeight = 0 }
+        if resume == nil, !customised, HomeVideoIngest.isHomeVideoDataset(dataset.root) {
+            cfg = HomeVideoIngest.adjustTraining(cfg)
+            remoteMessage = "Home video: colour detail limited to SH degree \(cfg.shDegree), and moving people and pets are left out while training."
+        }
         let name = dataset.root.deletingLastPathComponent().lastPathComponent
         let outDir = dataset.root.deletingLastPathComponent().appendingPathComponent("outputs", isDirectory: true)
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)

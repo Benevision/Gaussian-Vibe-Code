@@ -50,6 +50,20 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var video: String? = nil
     var videoOptions: VideoExtractionOptions? = nil
     var equirect: Equirect360Options? = nil
+    /// task = frames: old home video restoration and clips instead of plain extraction (splatprep `vhs.py`).
+    var vhs: VHS? = nil
+    /// task = sfm: {image basename: group}; the images of a group share one camera (home-video clips / zoom settings).
+    var cameraGroups: [String: Int]? = nil
+
+    struct VHS: Codable, Hashable, Sendable {
+        var analyseOnly: Bool? = nil
+        var clips: [Int]? = nil
+        var maxHeight: Int? = nil
+        var denoise: Bool? = nil
+        var colour: Bool? = nil
+        var repairDropouts: Bool? = nil
+        var totalFrames: Int? = nil
+    }
 
     struct MaskPrompt: Codable, Hashable, Sendable {
         var points: [[Float]]? = nil   // [x, y, label]
@@ -235,6 +249,12 @@ struct SplatPrepPoseSolver: PoseSolver {
         r.maxKeypoints = maxKeypoints; r.resizeMax = resizeMax; r.priorPoses = priorPoses
         let sizes = Set(frames.frames.map { "\($0.width)x\($0.height)" })
         r.singleCamera = sizes.count == 1 && frames.rig == nil
+        if frames.rig == nil, !frames.isMultiViewRig, frames.frames.contains(where: { $0.cameraGroup != nil }) {
+            // home video: a camera per clip (or per zoom setting within one)
+            r.singleCamera = false
+            r.cameraGroups = Dictionary(frames.frames.compactMap { f in f.cameraGroup.map { ((f.image as NSString).lastPathComponent, $0) } },
+                                        uniquingKeysWith: { a, _ in a })
+        }
         if useMasks, frames.frames.contains(where: { $0.mask != nil }) { r.masksDir = "masks" }
         if frames.frames.contains(where: { $0.sky != nil }) { r.skyMasksDir = "splatprep-sky/masks" }
         if let rig = frames.rig {

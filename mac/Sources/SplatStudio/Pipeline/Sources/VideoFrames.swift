@@ -70,6 +70,9 @@ final class VideoFrameReader {
     let formatDescription: CMFormatDescription?
     /// 35 mm-equivalent focal length from QuickTime metadata if present (iPhone / many cameras).
     let focal35mm: Double?
+    /// Width / height of one stored pixel (1 = square). SD captures (PAL 720×576 at 16:15, NTSC 720×480 at 8:9) and
+    /// re-encoded VHS transfers (e.g. 1890×1068 at 712:945 for a 4:3 picture) store non-square pixels.
+    let pixelAspect: Double
 
     private var reader: AVAssetReader?
     private var output: AVAssetReaderTrackOutput?
@@ -101,6 +104,7 @@ final class VideoFrameReader {
             hdr = hdr || tf == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String) || tf == (kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String)
         }
         isHDR = hdr
+        pixelAspect = Self.pixelAspect(fds.first)
         var f35: Double? = nil
         if let md = try? await asset.load(.metadata) {
             for item in md {
@@ -193,6 +197,15 @@ final class VideoFrameReader {
 
     func cancel() { reader?.cancelReading() }
 
+    /// The format description's pixel aspect ratio (1 when absent, invalid or within 0.5 % of square).
+    static func pixelAspect(_ fd: CMFormatDescription?) -> Double {
+        guard let fd, let d = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_PixelAspectRatio) as? [String: Any],
+              let h = (d[kCMFormatDescriptionKey_PixelAspectRatioHorizontalSpacing as String] as? NSNumber)?.doubleValue,
+              let v = (d[kCMFormatDescriptionKey_PixelAspectRatioVerticalSpacing as String] as? NSNumber)?.doubleValue, h > 0, v > 0 else { return 1 }
+        let r = h / v
+        return (r > 0.2 && r < 5 && abs(r - 1) >= 0.005) ? r : 1
+    }
+
     static func orientation(from t: CGAffineTransform) -> CGImagePropertyOrientation {
         let angle = atan2(t.b, t.a) * 180 / .pi
         switch Int(angle.rounded()) {
@@ -236,9 +249,18 @@ final class VideoFrameReader {
 
     /// Converts a decoded buffer to an oriented, SDR, optionally cropped and downscaled CGImage.
     /// `crop` is in *oriented* pixel coordinates with top-left origin.
+    /// `pixelAspect` ≠ 1 resamples the stored width to square pixels first (scan lines are kept).
     static func render(_ pb: CVPixelBuffer, orientation: CGImagePropertyOrientation, hdr: Bool, crop: CGRect? = nil,
-                       maxSize: Int? = nil) throws -> CGImage {
-        var img = CIImage(cvPixelBuffer: pb, options: hdr ? [.toneMapHDRtoSDR: true] : nil).oriented(orientation)
+                       maxSize: Int? = nil, pixelAspect: Double = 1) throws -> CGImage {
+        var img = CIImage(cvPixelBuffer: pb, options: hdr ? [.toneMapHDRtoSDR: true] : nil)
+        if pixelAspect != 1 {
+            let f = CIFilter(name: "CILanczosScaleTransform")!
+            f.setValue(img, forKey: kCIInputImageKey); f.setValue(1.0, forKey: kCIInputScaleKey); f.setValue(pixelAspect, forKey: kCIInputAspectRatioKey)
+            if let o = f.outputImage {
+                img = o.cropped(to: CGRect(x: 0, y: 0, width: (o.extent.width).rounded(), height: o.extent.height.rounded()))
+            }
+        }
+        img = img.oriented(orientation)
         img = img.transformed(by: CGAffineTransform(translationX: -img.extent.minX, y: -img.extent.minY))
         if let crop {
             // CI origin is bottom-left.
@@ -369,7 +391,8 @@ enum VideoFrameExtractor {
         let ext = options.encoding == .jpeg ? "jpg" : "png"
         let hdr = reader.isHDR && options.toneMapHDR
         let (frames, rejected) = try await VideoFrameSelector.run(reader: reader, options: options, stage: stage, progress: progress) { s, idx, sharp in
-            let img = try VideoFrameReader.render(s.buffers[0], orientation: reader.orientation, hdr: hdr, maxSize: options.maxImageSize)
+            let img = try VideoFrameReader.render(s.buffers[0], orientation: reader.orientation, hdr: hdr, maxSize: options.maxImageSize,
+                                                 pixelAspect: reader.pixelAspect)
             let name = String(format: "%06d.%@", idx, ext)
             try ImageUtil.write(img, to: imagesDir.appendingPathComponent(name), encoding: options.encoding)
             var f = IngestedFrame(image: "images/\(name)", width: img.width, height: img.height, sharpness: sharp, source: url.path, timestamp: s.time)
