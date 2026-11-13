@@ -1,7 +1,8 @@
 # SplatWork for Windows: plan
 
-*Developer notes for the roadmap item "a Windows app with the Mac and Linux feature set". Status: **plan, waiting
-for the user's choice of UI route** (2026-11-13). Nothing below is built yet.*
+*Developer notes for the roadmap item "a Windows app with the Mac and Linux feature set". Status: **plan approved**
+(2026-11-13): GTK 4 shared with Linux; no Windows test PC yet, so Stages A–C are tested on the `windows-latest` CI
+runner only (no GPU) and everything that needs real hardware ships marked untested.*
 
 ## Summary
 
@@ -155,8 +156,8 @@ The CUDA profile is chosen from NVML's driver version and compute capability, as
   drivers, firewall prompts and Mac discovery over a real LAN, HiDPI, OneDrive-redirected Documents. Without a test
   PC these are shipped as untested and said so in the release notes.
 
-## Questions for the user
+## Decisions (2026-11-13)
 
-1. Which UI route: **A (GTK 4, recommended)**, B (Qt / PySide6) or C (native .NET)?
-2. Is there a Windows PC to test on (for example the RTX 4080 PC dual-booted into Windows), or should Stages A–C
-   rely on CI only until one is available?
+1. UI route: **A, GTK 4** shared with Linux.
+2. Test hardware: **CI only for now** — no Windows PC. GPU training, the viewer on real drivers, firewall prompts and
+   Mac discovery over a real LAN stay untested until a Windows PC is available.
