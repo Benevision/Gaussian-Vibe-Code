@@ -41,9 +41,26 @@ echo "gsplat $VERSION+$TAG from $REPO@$REF for $ARCH in $IMAGE"
   cd /src && git log -1 --format="gsplat source commit %H"
   ( cd gsplat/cuda/csrc/third_party/glm && cmake -DGLM_BUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF -B build . \
       -DCMAKE_INSTALL_PREFIX:PATH=$HOME/.local && cmake --build build -- all && cmake --build build -- install )
-  sed -i "s/^__version__ = .*/__version__ = \"$VERSION+$TAG\"/" gsplat/version.py
-  tail -1 gsplat/version.py
-  PYTORCH_ROCM_ARCH="$ARCH" python3 -m pip wheel --no-deps --no-build-isolation -w /out .
+  sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" gsplat/version.py
+  # AMD'"'"'s setup.py (1) always appends +<git hash> to the version, and (2) compiles for the one gfx target
+  # rocminfo reports (gfx942 when there is no GPU, as here) and ignores PYTORCH_ROCM_ARCH. Make both explicit.
+  python3 - <<'"'"'PY'"'"'
+import os, re
+p = "setup.py"
+s = open(p).read()
+n1 = len(re.findall(r"__version__ \+= f\"\+\{git_rev\}\"", s))
+s = re.sub(r"__version__ \+= f\"\+\{git_rev\}\"", "__version__ += \"+\" + os.environ[\"GSPLAT_LOCAL_TAG\"]", s)
+n2 = s.count("f\"--offload-arch={gpu_arch}\"")
+s = s.replace("f\"--offload-arch={gpu_arch}\"",
+              "*[f\"--offload-arch={a}\" for a in os.environ.get(\"PYTORCH_ROCM_ARCH\", gpu_arch).split(\";\") if a]")
+assert n1 == 1 and n2 >= 1, f"setup.py changed upstream: version hooks {n1}, offload-arch {n2}"
+if "\nimport os" not in s and not s.startswith("import os"):
+    s = "import os\n" + s
+open(p, "w").write(s)
+print("patched setup.py: version tag + offload archs", os.environ.get("PYTORCH_ROCM_ARCH"))
+PY
+  grep -n "offload-arch\|GSPLAT_LOCAL_TAG" setup.py
+  GSPLAT_LOCAL_TAG="$TAG" PYTORCH_ROCM_ARCH="$ARCH" python3 -m pip wheel --no-deps --no-build-isolation -w /out .
   ls -la /out
 '
 ls -la "$OUT"
