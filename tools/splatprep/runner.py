@@ -71,7 +71,7 @@ def normalize_request(request: dict) -> dict:
         raise RequestError(f"unknown task: {task!r} (expected sfm | masks | benchmark | maskpreview | frames)")
     if task == "frames" and not req.get("video"):
         raise RequestError("task frames needs 'video'")
-    if task == "sfm" and req["matching"] not in ("sequential", "exhaustive", "retrieval", "auto"):
+    if task == "sfm" and req["matching"] not in ("sequential", "exhaustive", "retrieval", "spatial", "auto"):
         raise RequestError(f"unknown matching: {req['matching']!r}")
     if task == "sfm" and req["mapper"] not in ("glomap", "colmap", "pycolmap", "auto"):
         raise RequestError(f"unknown mapper: {req['mapper']!r}")

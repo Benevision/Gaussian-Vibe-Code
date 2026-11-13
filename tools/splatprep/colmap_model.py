@@ -9,7 +9,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Sequence
 
 import numpy as np
 
@@ -364,6 +364,29 @@ def find_models(sparse_root: Path) -> List[Path]:
     for p in [sparse_root] + sorted(sparse_root.glob("*")):
         if p.is_dir() and ((p / "cameras.bin").exists() or (p / "cameras.txt").exists()):
             out.append(p)
+    return out
+
+
+def merge_reconstructions(recs: Sequence[Reconstruction]) -> Reconstruction:
+    """Combine reconstructions that already share one world frame (e.g. each held to the same GPS priors).
+    Image and camera ids come from one database, so they don't clash; point ids are renumbered."""
+    out = Reconstruction()
+    next_pid, next_cid = 1, 1
+    for rec in recs:
+        # each model refined its own copy of the intrinsics under the same camera id: keep them apart
+        cam_map = {}
+        for cid, cam in rec.cameras.items():
+            cam_map[cid] = next_cid
+            out.cameras[next_cid] = Camera(next_cid, cam.model, cam.width, cam.height, cam.params)
+            next_cid += 1
+        remap = {}
+        for pid, pt in rec.points3D.items():
+            remap[pid] = next_pid
+            out.points3D[next_pid] = Point3D(next_pid, pt.xyz, pt.rgb, pt.error, pt.image_ids, pt.point2D_idxs)
+            next_pid += 1
+        for iid, im in rec.images.items():
+            ids = np.array([remap.get(int(q), -1) if q >= 0 else -1 for q in im.point3D_ids], np.int64)
+            out.images[iid] = Image(im.id, im.qvec, im.tvec, cam_map[im.camera_id], im.name, im.xys, ids)
     return out
 
 

@@ -6,6 +6,13 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **Drone surveys no longer fold or double the scene:** photos with GPS are now matched with their GPS
+  neighbours (DJI's numbered file names made them look like video, so neighbouring flight lines were only linked
+  by look-alike guesses — identical sheds matched to each other). If the solve still disagrees with GPS, it is
+  solved again held to the GPS positions, and the parts of that solve (e.g. two flights at different heights)
+  are combined. On a 1,227-photo property survey the cameras went from a median 48 m off GPS (scene doubled) to
+  0.96 m. If a solve still doesn't match GPS, preparation stops with a clear message instead of training on it
+  (turn off *Use photo locations* to keep it anyway).
 - **SplatWork for Windows (new, untested on real hardware):** the Linux worker and studio, with the same GTK 4
   interface, packaged for Windows 10 / 11 as an `.msi` installer and a portable `.zip`.
   - It includes the Projects list, the new project flow, the viewer and editor, Compute devices and the setup

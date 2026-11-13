@@ -75,6 +75,26 @@ def proximity_pairs(c2ws: Dict[int, np.ndarray], k: int, max_angle_deg: float = 
     return sorted(out)
 
 
+def spatial_pairs(positions: np.ndarray, k: int = 20, max_distance: float = 200.0) -> List[Pair]:
+    """Each image with its ``k`` nearest neighbours by position (GPS east/north/up metres), within
+    ``max_distance``. For surveys (drone photos) this links neighbouring flight lines, which sequential
+    numbering doesn't, and never pairs two far-apart look-alikes (twin roofs), which retrieval can."""
+    P = np.asarray(positions, np.float64)
+    n = len(P)
+    if n < 2:
+        return []
+    D = np.linalg.norm(P[:, None] - P[None], axis=2)
+    np.fill_diagonal(D, np.inf)
+    D[D > max_distance] = np.inf
+    kk = min(k, n - 1)
+    out = set()
+    for a in range(n):
+        for b in np.argpartition(D[a], kk - 1)[:kk]:
+            if np.isfinite(D[a, b]):
+                out.add(_norm(a, int(b)))
+    return sorted(out)
+
+
 # ---------------------------------------------------------------------------
 # global descriptors
 

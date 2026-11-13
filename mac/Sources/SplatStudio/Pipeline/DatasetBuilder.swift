@@ -368,6 +368,7 @@ enum DatasetBuilder {
                 + (o.masking.model != .none ? "Masks may be hiding most of each photo — try without masks. " : "")
                 + "Try another camera solver, or capture with more overlap between photos.")
         }
+        try checkAgainstGPS(sol)
         var ds = try PoseAssembly.makeDataset(frames: frames, solution: sol, holdoutInterval: o.holdoutInterval)
         if !o.keepIntermediates {
             try? fm.removeItem(at: dir.appendingPathComponent(".oc-input"))
@@ -377,6 +378,20 @@ enum DatasetBuilder {
         try ds.save()
         try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) of \(frames.frames.count) frames placed")
         return finish(ds, progress)
+    }
+
+    /// splatprep compares the solved cameras with the photos' GPS. When many are far off, the solve has folded or
+    /// doubled the scene (look-alike buildings matched to each other): training on it wastes hours and gives a
+    /// ghosted result, so stop here and say what to do. Photos without GPS (or with "Use photo locations" off)
+    /// have no check and are unaffected.
+    static func checkAgainstGPS(_ sol: PoseSolution) throws {
+        guard let chk = sol.stats["gpsCheck"]?.object, chk["ok"]?.bool == false else { return }
+        let bad = Int(((chk["badFraction"]?.double ?? 0) * 100).rounded())
+        let median = Int((chk["medianM"]?.double ?? 0).rounded()), extent = Int((chk["extentM"]?.double ?? 0).rounded())
+        throw PipelineError.processFailed(
+            "The solved cameras don't match the photos' GPS: \(bad) % of them are far from their GPS position "
+            + "(typically \(median) m off, over a \(extent) m flight), so the scene would come out folded or doubled. "
+            + "Redo from Cameras to solve again, or turn off Use photo locations to keep this solve anyway.")
     }
 
     /// Finding the sky needs the Models pack or a worker. Without either it is skipped with a note instead of

@@ -36,6 +36,18 @@ from ..progress import StagedProgress
 from ..verification import verify_pair, verify_pairs  # noqa: F401
 
 
+def _survey_positions(ctx, prior_c2w) -> Optional[np.ndarray]:
+    """GPS positions to match by, for an "auto" / "spatial" set of photos without prior poses (None otherwise)."""
+    strategy = (ctx.opt("matching", "auto") or "auto").lower()
+    if strategy not in ("auto", "spatial") or prior_c2w or not ctx.opt("useGps", True):
+        return None
+    if strategy == "auto" and len(ctx.names) <= 60:
+        return None
+    from ..gps import gps_positions
+
+    return gps_positions(ctx.paths)
+
+
 @dataclass
 class Availability:
     available: bool  # can at least extract + match (or run end-to-end for dense models)
@@ -231,6 +243,7 @@ class FeatureMatchBackend(Backend):
             pairs = lookat_pairs(prior_c2w, k=int(ctx.opt("refineNeighbors", 10)), window=int(ctx.opt("refineWindow", 4)))
             pinfo = {"strategy": "lookat", "resolved": "lookat", "numPairs": len(pairs)}
         rig = None
+        gps_enu = None
         if not refine:
             from ..rig import parse_rig
 
@@ -242,6 +255,16 @@ class FeatureMatchBackend(Backend):
             ctx.progress.update("pairs", 0.3, f"rig: {rig.num_frames} frames × {rig.num_sensors} views")
             D = global_descriptors(ctx.paths, ctx.work_dir)[0] if int(ctx.opt("rigLoopPairs", 2)) > 0 else None
             pairs, pinfo = rig_pairs(rig, D, window=int(ctx.opt("rigWindow", 3)), loop_k=int(ctx.opt("rigLoopPairs", 2)))
+        elif not refine and (gps_enu := _survey_positions(ctx, prior_c2w)) is not None:
+            # Photos with GPS (drone surveys): match each with its spatial neighbours. File numbering makes
+            # DJI photos look like video, and sequential matching then misses the neighbouring flight lines;
+            # retrieval can pair look-alike roofs far apart. Either folds the scene.
+            from ..pairs import spatial_pairs
+
+            k, dmax = int(ctx.opt("spatialNeighbors", 20)), float(ctx.opt("spatialMaxDistance", 200))
+            pairs = spatial_pairs(gps_enu, k, dmax)
+            pinfo = {"strategy": ctx.opt("matching", "auto"), "resolved": "spatial", "numPairs": len(pairs),
+                     "spatialNeighbors": k, "spatialMaxDistance": dmax}
         elif not refine:
             pairs, pinfo = select_pairs(
                 ctx.names,
@@ -336,7 +359,39 @@ class FeatureMatchBackend(Backend):
             len(ctx.names),
         )
         info["mapper"] = mapper
+        if gps_enu is not None:
+            rec, info = _hold_to_gps(rec, info, db_path, ctx, gps_enu)
         return SfMOutput(rec, matching, info)
+
+
+def _hold_to_gps(rec, info, db_path, ctx, gps_enu):
+    """A survey whose solve disagrees with its GPS (look-alike places matched to each other fold the scene; the
+    global mapper can also leave flight segments in mutually inconsistent frames) is solved again with
+    incremental mapping held to the GPS positions. The result that agrees better with GPS is kept."""
+    from ..gps import check_against_gps
+    from ..mapper import gps_prior_mapper_available, run_gps_prior_mapper, write_position_priors
+
+    first = check_against_gps(rec, ctx.image_dir, ctx.names)
+    if first is None or first["ok"] or not ctx.opt("gpsHeldMapping", True) or not gps_prior_mapper_available():
+        return rec, info
+    ctx.progress.message("mapping", f"{first['badFraction']:.0%} of cameras are far from their GPS position "
+                                    f"(median {first['medianM']} m) — solving again held to GPS")
+    write_position_priors(db_path, {n: gps_enu[i] for i, n in enumerate(ctx.names)})
+    try:
+        rec2 = run_gps_prior_mapper(db_path, ctx.image_dir, ctx.work_dir / "sparse_gps", ctx.log_path,
+                                    ctx.progress.sub("mapping"), len(ctx.names))
+    except Exception as e:  # noqa: BLE001 — keep the first solve; the GPS check will flag it
+        ctx.progress.message("mapping", f"GPS-held mapping failed: {e}")
+        return rec, info
+    second = check_against_gps(rec2, ctx.image_dir, ctx.names)
+    strip = lambda c: {k: v for k, v in (c or {}).items() if not k.startswith("_") and k not in ("outliers", "worst")}
+    info["gpsHeld"] = {"first": {"mapper": info.get("mapper"), **strip(first)}, "second": strip(second)}
+    # the GPS-held solve wins when it passes the check, or is better and keeps most of the cameras
+    if second is not None and (second["ok"] or (second["badFraction"] < first["badFraction"]
+                                                and len(rec2.images) >= 0.8 * len(rec.images))):
+        info["mapper"] = "pose_prior_mapper"
+        return rec2, info
+    return rec, info
 
 
 def camera_model_name(request: dict) -> str:

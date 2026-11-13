@@ -66,6 +66,24 @@ def to_enu(gps: np.ndarray) -> np.ndarray:
                      (gps[:, 0] - lat0) * 110540.0, gps[:, 2] - gps[:, 2].mean()], 1)
 
 
+def gps_positions(paths: Sequence[Path], min_fraction: float = 0.9, min_extent_m: float = 5.0) -> Optional[np.ndarray]:
+    """East/north/up metres for every image when nearly all of them carry GPS and the positions spread out
+    (a survey, not a handheld spot); images without GPS get the mean position. None otherwise."""
+    paths = list(paths)
+    if len(paths) < 2:
+        return None
+    gps = [read_gps(Path(p)) for p in paths]
+    have = [g is not None for g in gps]
+    if sum(have) < min_fraction * len(paths):
+        return None
+    enu = to_enu(np.array([g for g in gps if g is not None]))
+    if float(np.linalg.norm(np.ptp(enu, 0))) < min_extent_m:
+        return None
+    out = np.repeat(enu.mean(0, keepdims=True), len(paths), 0)
+    out[np.array(have)] = enu
+    return out
+
+
 def check_against_gps(rec, image_dir: Path, names: Sequence[str]) -> Optional[Dict]:
     """Fit solved centres to GPS. Returns stats (and the Sim3 when trustworthy) or None without enough GPS."""
     from .geometry import robust_umeyama
