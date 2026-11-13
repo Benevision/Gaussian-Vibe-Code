@@ -234,13 +234,174 @@ def test_region_trims_the_result(build_dir, dataset, tmp_path):
         assert all(lo[k] - 1e-6 <= r[k] <= hi[k] + 1e-6 for k in range(3))
 
 
-def test_invalid_config_and_unsupported_features(build_dir, dataset, tmp_path):
+def test_invalid_config_and_feature_notes(build_dir, dataset, tmp_path):
     rc, msgs = run(build_dir, dataset, tmp_path, {"strategy": "bogus"})
     assert rc == 2
     assert "strategy must be one of" in of(msgs, "error")[0]["message"]
+    # stage 2b: every TrainingConfig feature is implemented; depth priors without a cache are reported
     rc, msgs = run(build_dir, dataset, tmp_path, {**BASE, "iterations": 5, "appearanceCorrection": True,
-                                                  "transientMasking": True})
-    assert rc == 0
-    notes = [m["message"] for m in of(msgs, "log") if "not supported by the Vulkan trainer yet" in m["message"]]
-    assert any(n.startswith("appearanceCorrection") for n in notes)
-    assert any(n.startswith("transientMasking") for n in notes)
+                                                  "transientMasking": True, "normalWeight": 0.05, "depthPriors": "auto"})
+    assert rc == 0, of(msgs, "error")
+    logs = [m["message"] for m in of(msgs, "log")]
+    assert not [n for n in logs if "not supported by the Vulkan trainer" in n]
+    assert any("can't predict depth maps" in n for n in logs)
+
+
+# ---------------------------------------------------------------- stage 2b features (end to end)
+
+FEAT = {**BASE, "iterations": 600, "densifyStop": 500, "shDegreeInterval": 200, "evalInterval": 600, "previewInterval": 0}
+
+
+@pytest.fixture(scope="module")
+def feature_dataset(tmp_path_factory):
+    """make_synthetic.py with feature options, generated once per module and name."""
+    made = {}
+
+    def make(name, *options):
+        if name not in made:
+            out = tmp_path_factory.mktemp(f"vktrain-{name}")
+            r = subprocess.run([sys.executable, str(VKTRAIN / "tools" / "make_synthetic.py"), str(out), *options],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
+            made[name] = out
+        return made[name]
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    return make
+
+
+def done_of(msgs):
+    d = of(msgs, "done")
+    assert d, of(msgs, "error")
+    return d[-1]
+
+
+def test_skybox(build_dir, feature_dataset, tmp_path):
+    """Photos with sky masks: the panorama at infinity learns the sky (sky.png / sky.json next to the result, as the
+    CUDA trainer writes them) and the holdout photos are explained better than with the splats alone."""
+    from PIL import Image
+
+    ds = feature_dataset("sky", "--sky")
+    rc, on = run(build_dir, ds, tmp_path, {**FEAT, "skyboxResolution": 32}, name="on")
+    assert rc == 0, of(on, "error")
+    rc, off = run(build_dir, ds, tmp_path, {**FEAT, "skybox": "off"}, name="off")
+    assert rc == 0, of(off, "error")
+    a, b = done_of(on)["evalPsnr"], done_of(off)["evalPsnr"]
+    print(f"skybox: holdout PSNR {a:.2f} dB with, {b:.2f} dB without")
+    assert any("learned skybox 64×32 at infinity; 14 photos have a sky mask" in m["message"] for m in of(on, "log"))
+    assert a > b + 0.5
+    meta = json.loads((tmp_path / "on.sky.json").read_text())
+    assert meta["format"] == "equirectangular" and meta["image"] == "on.sky.png"
+    assert meta["up"] == pytest.approx([0, -1, 0], abs=1e-6) and meta["forward"] == pytest.approx([0, 0, 1], abs=1e-6)
+    img = Image.open(tmp_path / "on.sky.png")
+    assert img.size == (64, 32) and img.mode == "RGB"
+    px = list(img.getdata())
+    top = px[:64]                       # straight up: never seen, stays at the initial colour
+    assert all(p == (153, 166, 178) for p in top)
+    near = [p for p in px[13 * 64:15 * 64] if p != (153, 166, 178)]   # just above the horizon: the blue sky
+    assert len(near) > 64 and sum(p[2] - p[0] for p in near) / len(near) > 60
+    assert not (tmp_path / "off.sky.png").exists()
+
+
+def test_colour_correction(build_dir, feature_dataset, tmp_path):
+    """Training photos with their own exposure / tint (holdouts with the scene's colours): per-photo colour
+    correction (affine, and the bilateral grid with decoupled SSIM) keeps the splats at the true colours."""
+    ds = feature_dataset("shift", "--color-shift")
+    res = {}
+    for name, extra in (("off", {}), ("affine", {"appearanceCorrection": True}),
+                        ("grid", {"bilateralGrid": True, "decoupledSSIM": True})):
+        rc, msgs = run(build_dir, ds, tmp_path, {**FEAT, **extra}, name=name)
+        assert rc == 0, of(msgs, "error")
+        res[name] = done_of(msgs)["evalPsnr"]
+    print(f"colour correction: holdout PSNR {res}")
+    assert res["affine"] > res["off"] + 1.0
+    assert res["grid"] > res["off"] + 0.5
+
+
+def test_depth_supervision(build_dir, feature_dataset, tmp_path):
+    """Sensor depth maps (float16, half resolution): the depth loss (and the depth-normal loss) pull the rendered
+    depth onto the maps — the holdout depth error drops well below an RGB-only run's."""
+    ds = feature_dataset("depth", "--depth")
+    rc, off = run(build_dir, ds, tmp_path, {**FEAT, "depthWeight": 0}, name="off")
+    assert rc == 0, of(off, "error")
+    rc, on = run(build_dir, ds, tmp_path, {**FEAT, "normalWeight": 0.05, "normalStart": 200}, name="on")
+    assert rc == 0, of(on, "error")
+    e0, e1 = done_of(off)["features"]["evalDepthError"], done_of(on)["features"]["evalDepthError"]
+    print(f"depth: holdout depth error {e1:.3f} with depth supervision, {e0:.3f} without")
+    assert any("depth supervision weight 0.1" in m["message"] for m in of(on, "log"))
+    assert e1 < 0.5 * e0
+
+
+def test_transient_masking(build_dir, feature_dataset, tmp_path):
+    """Unmasked moving objects in 6 training photos: the masker drops their pixels (and few elsewhere)."""
+    ds = feature_dataset("trans", "--transients", "6")
+    cfg = {**FEAT, "transientMasking": True, "transientStart": 100, "transientMaxViewGap": 90}
+    rc, msgs = run(build_dir, ds, tmp_path, cfg, "--trace-every", "1")
+    assert rc == 0, of(msgs, "error")
+    train = [i for i in range(16) if i % 8 != 7]
+    with_obj = set(train[2::max(1, len(train) // 6)][:6])
+    tr = [m for m in of(msgs, "trace") if "outliers" in m and m["step"] > 300]
+    a = [m["outliers"] for m in tr if m["camera"] in with_obj]
+    b = [m["outliers"] for m in tr if m["camera"] not in with_obj]
+    fa, fb = sum(a) / len(a), sum(b) / len(b)
+    print(f"transient masking: {100 * fa:.1f} % of the pixels dropped in photos with a moving object, {100 * fb:.2f} % "
+          f"in the others (the object covers 8.3 %)")
+    assert fa > 0.04 and fb < 0.01
+    assert done_of(msgs)["features"]["transientFraction"] > 0
+
+
+def test_pose_refinement(build_dir, feature_dataset, tmp_path):
+    """Training poses perturbed by ~1 cm / 0.6°: per-photo pose corrections recover a sharper scene (the holdouts
+    have exact poses)."""
+    ds = feature_dataset("pose", "--pose-noise", "0.01")
+    rc, off = run(build_dir, ds, tmp_path, FEAT, name="off")
+    assert rc == 0, of(off, "error")
+    rc, on = run(build_dir, ds, tmp_path, {**FEAT, "poseRefinement": True, "poseRefinementStart": 100,
+                                           "poseRefinementLR": 0.001}, name="on")
+    assert rc == 0, of(on, "error")
+    a, b = done_of(on), done_of(off)
+    print(f"pose refinement: holdout PSNR {a['evalPsnr']:.2f} dB with, {b['evalPsnr']:.2f} dB without; mean correction "
+          f"{a['features']['poseTranslation']:.4f} / {a['features']['poseRotationDeg']:.2f}°")
+    assert a["evalPsnr"] > b["evalPsnr"] + 1.0
+    assert 0.002 < a["features"]["poseTranslation"] < 0.2
+
+
+def test_compact_optimizer(build_dir, dataset, tmp_path):
+    """optimizerPrecision "compact" (bf16 / 8-bit Adam moments on the GPU, carried losslessly through the host-side
+    densification) trains as well as fp32 Adam."""
+    cfg = {**FEAT, "strategy": "adaptive"}
+    rc, a = run(build_dir, dataset, tmp_path, cfg, name="fp32")
+    assert rc == 0, of(a, "error")
+    rc, b = run(build_dir, dataset, tmp_path, {**cfg, "optimizerPrecision": "compact"}, name="compact")
+    assert rc == 0, of(b, "error")
+    pa, pb = done_of(a)["evalPsnr"], done_of(b)["evalPsnr"]
+    print(f"compact Adam: holdout PSNR {pb:.2f} dB (fp32 {pa:.2f} dB), {done_of(b)['numGaussians']} splats")
+    assert any("optimizerPrecision=compact" in m["message"] and "state 152 B" in m["message"] for m in of(b, "log"))
+    assert abs(pb - pa) < 0.5
+    assert done_of(b)["numGaussians"] > 2 * 3000   # densification ran on the carried moments
+
+
+def test_pause_resume_with_features(build_dir, feature_dataset, tmp_path):
+    """The saved state includes the skybox, per-photo colour models, pose corrections, the transient threshold and
+    compact Adam moments: a run resumed at step 250 follows the uninterrupted one."""
+    ds = feature_dataset("sky", "--sky")
+    cfg = {**BASE, "iterations": 320, "evalInterval": 0, "previewInterval": 0, "skyboxResolution": 32,
+           "appearanceCorrection": True, "transientMasking": True, "transientStart": 50, "transientMaxViewGap": 90,
+           "poseRefinement": True, "poseRefinementStart": 100, "optimizerPrecision": "compact"}
+    rc, ref = run(build_dir, ds, tmp_path, cfg, "--trace-every", "1", "--snapshot-at", "250", name="ref")
+    assert rc == 0, of(ref, "error")
+    snap = tmp_path / "snapshot-copy.vkstate"   # a finished resumed run deletes the state it continued from
+    shutil.copy(tmp_path / "ref-job" / "snapshot.vkstate", snap)
+    rc, cont = run(build_dir, ds, tmp_path, cfg, "--trace-every", "1", "--resume",
+                   str(tmp_path / "ref-job" / "snapshot.vkstate"), name="cont")
+    assert rc == 0, of(cont, "error")
+    a = {m["step"]: m for m in of(ref, "trace")}
+    c = {m["step"]: m for m in of(cont, "trace")}
+    rel = [abs(c[s]["loss"] - a[s]["loss"]) / a[s]["loss"] for s in range(251, 321)]
+    print(f"features: resumed vs uninterrupted, max relative loss difference steps 251-260: {max(rel[:10]):.2e}, "
+          f"251-320: {max(rel):.2e}")
+    assert max(rel[:10]) < 1e-3
+    assert max(rel) < 2e-2
+    # a state saved with other features does not load
+    rc, bad = run(build_dir, ds, tmp_path, {**cfg, "poseRefinement": False}, "--resume", str(snap), name="bad")
+    assert rc == 1 and "features" in of(bad, "error")[0]["message"]

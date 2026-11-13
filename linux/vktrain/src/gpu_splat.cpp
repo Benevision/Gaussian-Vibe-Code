@@ -1,5 +1,7 @@
 #include "gpu_splat.h"
 
+#include "compact.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -52,11 +54,21 @@ void GpuSplat::dispatch1D(const char* kernel, const std::vector<const Buffer*>& 
 }
 
 void GpuSplat::setParams(const Params& p) {
-    if (p.n != n || !params[0].buf) {
+    if (p.n != n || !params[0].buf || allocCompact_ != compactMoments) {
         n = p.n;
+        allocCompact_ = compactMoments;
         for (int k = 0; k < 5; k++) {
             size_t bytes = size_t(n) * Params::width(k) * sizeof(float);
-            for (Buffer* b : {&params[k], &grads[k], &m1[k], &m2[k]}) { ctx_.destroy(*b); *b = ctx_.createBuffer(bytes); }
+            for (Buffer* b : {&params[k], &grads[k], &m1[k], &m2[k]}) ctx_.destroy(*b);
+            params[k] = ctx_.createBuffer(bytes);
+            grads[k] = ctx_.createBuffer(bytes);
+            if (!compactMoments) {
+                m1[k] = ctx_.createBuffer(bytes);
+                m2[k] = ctx_.createBuffer(bytes);
+            } else {   // compact.h: one word per value (bf16 pair), SH rows of 27 words; m2 unused
+                m1[k] = ctx_.createBuffer(size_t(std::max(n, 1)) * (k == 4 ? compact::SH_WORDS : Params::width(k)) * 4);
+                m2[k] = ctx_.createBuffer(16);
+            }
         }
         for (Buffer* b : {&p2d, &conicO, &rgbd, &rects, &tilesTouched, &depthKeys, &sortVals, &offsets, &acc}) ctx_.destroy(*b);
         size_t nn = size_t(std::max(n, 1));
@@ -458,16 +470,34 @@ void GpuSplat::projectBackward() {
     ctx_.submitWait();
 }
 
+void GpuSplat::recordAdam(const std::array<AdamGroup, 5>& groups, float beta1, float beta2, float eps) {
+    float bc1 = 1.0f - std::pow(beta1, float(adamSteps)), bc2 = 1.0f - std::pow(beta2, float(adamSteps));
+    for (int k = 0; k < 5; k++) {
+        if (!compactMoments) {
+            struct { float lr, lr2; uint32_t period, split; float beta1, beta2, eps, bc1, bc2; uint32_t n; } pc{
+                groups[k].lr, groups[k].lr2, groups[k].period, groups[k].split, beta1, beta2, eps, bc1, bc2,
+                uint32_t(n * Params::width(k))};
+            dispatch1D("adam", {&params[k], &grads[k], &m1[k], &m2[k]}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
+            continue;
+        }
+        uint32_t seed = compactSeed ^ (0x9E3779B9u * uint32_t(k + 1));
+        if (k < 4) {
+            struct { float lr, beta1, beta2, eps, bc1, bc2; uint32_t n, seed, step, pad[3]; } pc{
+                groups[k].lr, beta1, beta2, eps, bc1, bc2, uint32_t(n * Params::width(k)), seed, uint32_t(adamSteps), {0, 0, 0}};
+            dispatch1D("adam_bf16", {&params[k], &grads[k], &m1[k]}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
+        } else {
+            struct { float lrDC, lrRest, beta1, beta2, eps, bc1, bc2; uint32_t n, seed, step; float bound; uint32_t pad; } pc{
+                groups[k].lr, groups[k].lr2, beta1, beta2, eps, bc1, bc2, uint32_t(n), seed, uint32_t(adamSteps),
+                float(compact::ratioBound(beta1, beta2)), 0};
+            dispatch1D("adam_sh8", {&params[k], &grads[k], &m1[k]}, &pc, sizeof(pc), ceilDiv(uint32_t(n), 64));
+        }
+    }
+}
+
 void GpuSplat::adamStep(const std::array<AdamGroup, 5>& groups, float beta1, float beta2, float eps) {
     adamSteps++;
-    float bc1 = 1.0f - std::pow(beta1, float(adamSteps)), bc2 = 1.0f - std::pow(beta2, float(adamSteps));
     ctx_.begin();
-    for (int k = 0; k < 5; k++) {
-        struct { float lr, lr2; uint32_t period, split; float beta1, beta2, eps, bc1, bc2; uint32_t n; } pc{
-            groups[k].lr, groups[k].lr2, groups[k].period, groups[k].split, beta1, beta2, eps, bc1, bc2,
-            uint32_t(n * Params::width(k))};
-        dispatch1D("adam", {&params[k], &grads[k], &m1[k], &m2[k]}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
-    }
+    recordAdam(groups, beta1, beta2, eps);
     ctx_.submitWait();
 }
 
@@ -475,7 +505,6 @@ void GpuSplat::backwardStep(const std::array<AdamGroup, 5>& groups, const StepEx
     uint32_t un = uint32_t(n);
     adamSteps++;
     const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
-    float bc1 = 1.0f - std::pow(beta1, float(adamSteps)), bc2 = 1.0f - std::pow(beta2, float(adamSteps));
     ctx_.begin();
     recordImageBackward();
     ctx_.fill(acc, 0);
@@ -493,12 +522,7 @@ void GpuSplat::backwardStep(const std::array<AdamGroup, 5>& groups, const StepEx
         struct { float hw, hh; uint32_t absGrad, n; } pc{0.5f * float(width), 0.5f * float(height), ex.absGrad ? 1u : 0u, un};
         dispatch1D("grad_stats", {&acc, &tilesTouched, ex.grad2d, ex.count}, &pc, sizeof(pc), ceilDiv(un, 256));
     }
-    for (int k = 0; k < 5; k++) {
-        struct { float lr, lr2; uint32_t period, split; float beta1, beta2, eps, bc1, bc2; uint32_t n; } pc{
-            groups[k].lr, groups[k].lr2, groups[k].period, groups[k].split, beta1, beta2, eps, bc1, bc2,
-            uint32_t(n * Params::width(k))};
-        dispatch1D("adam", {&params[k], &grads[k], &m1[k], &m2[k]}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
-    }
+    recordAdam(groups, beta1, beta2, eps);
     if (feat.sky && ex.skyLr > 0 && feat.skyM && feat.skyV && feat.skyGrad) {
         float sb1 = 1.0f - std::pow(beta1, float(ex.skySteps)), sb2 = 1.0f - std::pow(beta2, float(ex.skySteps));
         struct { float lr, lr2; uint32_t period, split; float beta1, beta2, eps, bc1, bc2; uint32_t n; } pc{
@@ -516,8 +540,22 @@ void GpuSplat::setState(const Params& p, const Params* mm1, const Params* mm2, i
     setParams(p);
     if (mm1 && mm2) {
         for (int k = 0; k < 5; k++) {
-            ctx_.upload(m1[k], mm1->group(k).data(), mm1->group(k).size() * sizeof(float));
-            ctx_.upload(m2[k], mm2->group(k).data(), mm2->group(k).size() * sizeof(float));
+            if (!compactMoments) {
+                ctx_.upload(m1[k], mm1->group(k).data(), mm1->group(k).size() * sizeof(float));
+                ctx_.upload(m2[k], mm2->group(k).data(), mm2->group(k).size() * sizeof(float));
+                continue;
+            }
+            // carriers (compact.h) → GPU words
+            std::vector<uint32_t> w;
+            if (k < 4) {
+                w.resize(mm1->group(k).size());
+                compact::encodeBf16(mm1->group(k).data(), mm2->group(k).data(), w.size(), w.data());
+            } else {
+                w.resize(size_t(n) * compact::SH_WORDS);
+                for (int i = 0; i < n; i++)
+                    compact::encodeSHRow(&mm1->sh[size_t(i) * 48], &mm2->sh[size_t(i) * 48], &w[size_t(i) * compact::SH_WORDS]);
+            }
+            if (!w.empty()) ctx_.upload(m1[k], w.data(), w.size() * 4);
         }
     }
     adamSteps = steps;
@@ -527,8 +565,20 @@ void GpuSplat::getMoments(Params& a, Params& b) const {
     a.resize(n);
     b.resize(n);
     for (int k = 0; k < 5; k++) {
-        ctx_.download(m1[k], a.group(k).data(), a.group(k).size() * sizeof(float));
-        ctx_.download(m2[k], b.group(k).data(), b.group(k).size() * sizeof(float));
+        if (!compactMoments) {
+            ctx_.download(m1[k], a.group(k).data(), a.group(k).size() * sizeof(float));
+            ctx_.download(m2[k], b.group(k).data(), b.group(k).size() * sizeof(float));
+            continue;
+        }
+        if (n == 0) continue;
+        if (k < 4) {
+            std::vector<uint32_t> w = read<uint32_t>(m1[k], a.group(k).size());
+            compact::decodeBf16(w.data(), w.size(), a.group(k).data(), b.group(k).data());
+        } else {
+            std::vector<uint32_t> w = read<uint32_t>(m1[k], size_t(n) * compact::SH_WORDS);
+            for (int i = 0; i < n; i++)
+                compact::decodeSHRow(&w[size_t(i) * compact::SH_WORDS], &a.sh[size_t(i) * 48], &b.sh[size_t(i) * 48]);
+        }
     }
 }
 

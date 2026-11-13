@@ -15,6 +15,7 @@
 
 #include "cpu_ref.h"
 #include "gpu_splat.h"
+#include "compact.h"
 #include "models.h"
 #include "strategy.h"
 
@@ -1355,6 +1356,124 @@ void testPose(Context& ctx, GpuSplat& gs, bool quick) {
     gs.feat = LossFeatures();
 }
 
+// optimizerPrecision "compact": the GPU kernels against the host reference (same hash random numbers, so the same
+// codes up to float rounding at a decision boundary), the carrier round trip through getMoments / setState, the
+// unbiasedness of the stochastic rounding, and the update against exact fp32 Adam.
+void testCompactAdam(Context& ctx, GpuSplat& gs) {
+    (void)ctx;
+    Rng r(73);
+    const int n = 64, steps = 5;
+    Params P;
+    P.resize(n);
+    for (int k = 0; k < 5; k++) for (float& v : P.group(k)) v = float(r.uni(-1, 1));
+    std::array<AdamGroup, 5> groups;
+    for (int k = 0; k < 4; k++) groups[size_t(k)] = {float(1e-3 * (k + 1)), float(1e-3 * (k + 1)), 1, 1};
+    groups[4] = {2.5e-3f, 1.25e-4f, 48, 3};
+    gs.compactMoments = true;
+    gs.compactSeed = 99;
+    gs.setParams(P);
+    Params hp = P;   // host reference
+    std::vector<std::vector<uint32_t>> hw(5);
+    for (int k = 0; k < 4; k++) hw[size_t(k)].assign(P.group(k).size(), 0u);
+    hw[4].assign(size_t(n) * compact::SH_WORDS, 0u);
+    std::vector<double> exactP[5], em[5], ev[5];   // exact fp32-moment Adam, for comparison
+    for (int k = 0; k < 5; k++) { exactP[k].assign(P.group(k).begin(), P.group(k).end()); em[k].assign(exactP[k].size(), 0); ev[k].assign(exactP[k].size(), 0); }
+    float bound = float(compact::ratioBound(0.9, 0.999));
+    for (int s = 1; s <= steps; s++) {
+        compact::StepParams sp;
+        sp.bc1 = 1.0f - std::pow(0.9f, float(s));
+        sp.bc2 = 1.0f - std::pow(0.999f, float(s));
+        sp.step = uint32_t(s);
+        for (int k = 0; k < 5; k++) {
+            std::vector<float> g(P.group(k).size());
+            for (size_t i = 0; i < g.size(); i++) g[i] = float(r.normal() * std::pow(10.0, -r.uni(0, 4)));   // many magnitudes
+            ctx.upload(gs.grads[k], g.data(), g.size() * 4);
+            sp.seed = 99u ^ (0x9E3779B9u * uint32_t(k + 1));
+            sp.lr = groups[size_t(k)].lr;
+            sp.lr2 = groups[size_t(k)].lr2;
+            if (k < 4) compact::refBf16(hp.group(k).data(), g.data(), hw[size_t(k)].data(), g.size(), sp);
+            else for (int i = 0; i < n; i++)
+                compact::refSHRow(&hp.sh[size_t(i) * 48], &g[size_t(i) * 48], &hw[4][size_t(i) * compact::SH_WORDS], uint32_t(i), sp, bound);
+            double bc1 = 1 - std::pow(0.9, s), bc2 = 1 - std::pow(0.999, s);
+            for (size_t i = 0; i < g.size(); i++) {
+                em[k][i] = 0.9 * em[k][i] + 0.1 * g[i];
+                ev[k][i] = 0.999 * ev[k][i] + 0.001 * double(g[i]) * g[i];
+                double lr = k == 4 ? (i % 48 < 3 ? groups[4].lr : groups[4].lr2) : groups[size_t(k)].lr;
+                exactP[k][i] -= lr * (em[k][i] / bc1) / (std::sqrt(ev[k][i] / bc2) + 1e-15);
+            }
+        }
+        gs.adamStep(groups);
+    }
+    Params gp, c1, c2;
+    gs.getParams(gp);
+    std::vector<double> ga, ha, ea;
+    for (int k = 0; k < 5; k++)
+        for (size_t i = 0; i < gp.group(k).size(); i++) {
+            ga.push_back(double(gp.group(k)[i]) - P.group(k)[i]);
+            ha.push_back(double(hp.group(k)[i]) - P.group(k)[i]);
+            ea.push_back(exactP[k][i] - P.group(k)[i]);
+        }
+    // The GPU's exp2 / log2 / FMA differ from the host's in the last bits, so a stochastic rounding decision right at
+    // its threshold can go the other way (one code level, then a slightly different trajectory for that value).
+    {
+        double mx = 0;
+        for (double v : ha) mx = std::max(mx, std::abs(v));
+        std::vector<double> e;
+        for (size_t i = 0; i < ga.size(); i++) e.push_back(std::abs(ga[i] - ha[i]) / std::max(std::abs(ha[i]), 1e-2 * mx));
+        std::vector<double> s = e;
+        std::sort(s.begin(), s.end());
+        double above = double(std::count_if(e.begin(), e.end(), [](double v) { return v > 1e-3; })) / double(e.size());
+        addRow("compact adam", "param change vs host: median rel. error", "64 splats, 5 steps", s[s.size() / 2], 1e-5);
+        addRow("compact adam", "param change vs host: fraction > 1e-3", "64 splats, 5 steps", above, 0.01);
+        addRow("compact adam", "param change vs host: max (info)", "64 splats, 5 steps", s.back(), 0, true);
+    }
+    addRow("compact adam", "param change vs fp32 Adam: max (info)", "64 splats, 5 steps", relErr(ga, ea), 0, true);
+    size_t words = 0, diff = 0;
+    for (int k = 0; k < 5; k++) {
+        size_t cnt = k < 4 ? P.group(k).size() : size_t(n) * compact::SH_WORDS;
+        std::vector<uint32_t> w = gs.read<uint32_t>(gs.m1[k], cnt);
+        for (size_t i = 0; i < cnt; i++) {
+            if (k == 4 && i % compact::SH_WORDS == 26) continue;   // the fp32 row scale: compared by its codes' effect
+            words++;
+            diff += w[i] != hw[size_t(k)][i];
+        }
+    }
+    addRow("compact adam", "code words differing from host", "64 splats, 5 steps", double(diff) / double(words), 0.005);
+    // carriers: GPU → host → GPU → host is exact
+    gs.getMoments(c1, c2);
+    gs.setState(gp, &c1, &c2, gs.adamSteps);
+    Params d1, d2;
+    gs.getMoments(d1, d2);
+    double rt = 0;
+    for (int k = 0; k < 5; k++)
+        for (size_t i = 0; i < c1.group(k).size(); i++) rt += (c1.group(k)[i] != d1.group(k)[i]) + (c2.group(k)[i] != d2.group(k)[i]);
+    addRow("compact adam", "carrier round trip mismatches", "64 splats", rt, 0);
+    // stochastic rounding is unbiased: mean decoded v and m over many seeds of one quantisation
+    {
+        double sumV = 0, sumM = 0;
+        const int trials = 4000;
+        float pr[48], g[48];
+        for (int j = 0; j < 48; j++) { g[j] = 0; }
+        g[3 + 7] = 3e-3f; g[3 + 8] = -2e-5f; g[3 + 9] = 1.0f;   // one row: very different magnitudes
+        for (int t = 0; t < trials; t++) {
+            uint32_t w[compact::SH_WORDS] = {};
+            compact::StepParams sp;
+            sp.bc1 = 0.1f; sp.bc2 = 0.001f; sp.seed = uint32_t(t); sp.step = 1;
+            for (float& v : pr) v = 0;
+            compact::refSHRow(pr, g, w, 0, sp, bound);
+            double m[48], v[48];
+            compact::decodedSHMoments(w, bound, m, v);
+            sumV += v[3 + 8];
+            sumM += m[3 + 7];
+        }
+        double vTrue = 0.001 * 2e-5 * 2e-5, mTrue = 0.1 * 3e-3;
+        addRow("compact adam", "stochastic rounding bias, small v (relative)", "4000 trials", std::abs(sumV / trials / vTrue - 1), 0.03);
+        addRow("compact adam", "stochastic rounding bias, m (relative)", "4000 trials", std::abs(sumM / trials / mTrue - 1), 0.03);
+    }
+    gs.compactMoments = false;
+    gs.setParams(P);
+}
+
 // raster_bwd's extra dL/dT_final plane: a background b is the same as bg = 0 with plane 4 = b · dL/drgb.
 void testExtraTPlane(Context& ctx, GpuSplat& gs) {
     Rng r(17);
@@ -1542,6 +1661,7 @@ int main(int argc, char** argv) {
             testImagePipeline(ctx, gs, quick);
             testTransient(ctx, gs);
             testPose(ctx, gs, quick);
+            testCompactAdam(ctx, gs);
             testFit(gs, quick ? std::min(fitSteps, 150) : fitSteps);
             std::printf("  path %s took %.1f s\n", name.c_str(),
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - tp).count());

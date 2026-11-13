@@ -463,6 +463,11 @@ View loadView(const DatasetInfo& ds, const CameraInfo& cam, int maxSize) {
         v.mask = std::move(m.px);
         if (std::all_of(v.mask.begin(), v.mask.end(), [](uint8_t a) { return a == 255; })) v.mask.clear();
     }
+    if (!cam.sky.empty() && fs::is_regular_file(ds.resolve(cam.sky))) {
+        Decoded m = decode(ds.resolve(cam.sky), 1);
+        if (m.w != nw || m.h != nh) m.px = resample(m.px, m.w, m.h, 1, nw, nh, Filter::Bilinear);
+        v.sky = std::move(m.px);
+    }
     v.fx = cam.fx * nw / double(cam.width);
     v.fy = cam.fy * nh / double(cam.height);
     v.cx = cam.cx * nw / double(cam.width);

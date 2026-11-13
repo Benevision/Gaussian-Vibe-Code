@@ -5,6 +5,7 @@
 #
 #   bash compare_training.sh DATASET [--iterations N] [--strategy mcmc|adaptive|both] [--set key=value ...]
 #                            [--out DIR] [--holdout-every N] [--no-cuda] [--no-vulkan] [--vk-bin PATH]
+#                            [--core-only]
 #
 # Works from fish too (it is a bash script: call it with `bash`). On the RTX 4080 PC it runs both halves; on
 # an AMD / Intel PC (SteamOS) use --no-cuda (the CUDA half is also skipped by itself when there's no NVIDIA GPU).
@@ -17,14 +18,16 @@
 #     flatpak install --user flathub org.freedesktop.Sdk//25.08 once) — it then also runs inside that runtime,
 #     which gets the Vulkan drivers (Mesa RADV / ANV, or the NVIDIA GL extension) from Flatpak.
 #
-# Both trainers get the same config: the dataset's TrainingConfig defaults plus --set overrides, with the
-# features the Vulkan trainer does not have yet switched off for both (per-photo colour correction, depth /
-# normal losses and depth priors, transient masking, skybox, pose refinement, bilateral grid), so the numbers
-# compare the same algorithm. A dataset without holdout photos gets a hard-linked copy with every N-th photo
-# held out (--holdout-every, default 8) so both report a held-out PSNR.
+# Both trainers get the same config: the TrainingConfig defaults plus --set overrides — every feature as the
+# CUDA trainer has it (the Vulkan trainer implements them all since stage 2b: per-photo colour correction, depth /
+# normal losses, skybox, transient masking, pose refinement, bilateral grid, compact Adam). Depth priors: the CUDA
+# run predicts them and caches them in DATASET/depth-prior/, which the Vulkan run then reads (it can't predict them
+# itself; with --no-cuda and no cache it trains without). --core-only switches the stage-2b features off for both
+# (the stage-2a comparison of the core algorithm). A dataset without holdout photos gets a hard-linked copy with every
+# N-th photo held out (--holdout-every, default 8) so both report a held-out PSNR.
 set -euo pipefail
 
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATASET=""
@@ -34,6 +37,7 @@ OUT=""
 HOLDOUT_EVERY=8
 RUN_CUDA=1
 RUN_VK=1
+CORE_ONLY=0
 VK_BIN=""
 SETS=()
 FDO_BRANCH="${FDO_BRANCH:-25.08}"
@@ -49,6 +53,7 @@ while [ $# -gt 0 ]; do
         --holdout-every) HOLDOUT_EVERY="$2"; shift 2 ;;
         --no-cuda) RUN_CUDA=0; shift ;;
         --no-vulkan) RUN_VK=0; shift ;;
+        --core-only) CORE_ONLY=1; shift ;;
         --vk-bin) VK_BIN="$2"; shift 2 ;;
         -*) echo "unknown option $1" >&2; usage 2 ;;
         *) [ -z "$DATASET" ] && DATASET="$1" || { echo "one dataset only" >&2; exit 2; }; shift ;;
@@ -85,18 +90,15 @@ fi
 
 # ------------------------------------------------------------------ config (same for both trainers)
 make_config() {   # $1 strategy → $OUT/config-$1.json
-    python3 - "$OUT/config-$1.json" "$1" "$ITERS" "${SETS[@]+"${SETS[@]}"}" <<'PY'
+    python3 - "$OUT/config-$1.json" "$1" "$ITERS" "$CORE_ONLY" "${SETS[@]+"${SETS[@]}"}" <<'PY'
 import json, sys
-path, strategy, iters = sys.argv[1], sys.argv[2], int(sys.argv[3])
-cfg = {
-    "iterations": iters, "strategy": strategy,
-    # not in the Vulkan trainer yet (stage 2b): off for both
-    "appearanceCorrection": False, "bilateralGrid": False, "normalWeight": 0, "depthWeight": 0, "depthPriors": "off",
-    "monoDepthWeight": 0, "transientMasking": False, "skybox": "off", "poseRefinement": False, "decoupledSSIM": False,
-    "optimizerPrecision": "fp32",
-    "evalInterval": max(1, iters // 6), "previewInterval": 0,
-}
-for kv in sys.argv[4:]:
+path, strategy, iters, core = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "1"
+cfg = {"iterations": iters, "strategy": strategy, "evalInterval": max(1, iters // 6), "previewInterval": 0}
+if core:   # --core-only: the stage-2b features off for both (the core algorithm alone)
+    cfg.update({"appearanceCorrection": False, "bilateralGrid": False, "normalWeight": 0, "depthWeight": 0,
+                "depthPriors": "off", "monoDepthWeight": 0, "transientMasking": False, "skybox": "off",
+                "poseRefinement": False, "decoupledSSIM": False, "optimizerPrecision": "fp32"})
+for kv in sys.argv[5:]:
     k, _, v = kv.partition("=")
     try:
         cfg[k] = json.loads(v)

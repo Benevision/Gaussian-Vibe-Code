@@ -1,0 +1,29 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Adam with bfloat16 moments (trainer.py optimizerPrecision "compact" → compact_adam.py CompactAdam, "bf16" mode):
+// one uint per value, m in the low and v in the high 16 bits. The update runs in fp32 from the decoded moments
+// (same rule as adam.comp); the new moments are written with unbiased stochastic rounding (random low 16 bits added
+// before truncation), the random bits a counter hash of (seed, step, value index) — no generator state.
+#include "common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer ParamBuf { float param[]; };
+layout(std430, binding = 1) readonly buffer GradBuf { float grad[]; };
+layout(std430, binding = 2) buffer MomBuf { uint mom[]; };
+layout(push_constant) uniform PC {
+    float lr; float beta1; float beta2; float eps;
+    float bc1; float bc2; uint n; uint seed;
+    uint step; uint pad0; uint pad1; uint pad2;
+} pc;
+uint toBf16(float x, uint r) { return ((floatBitsToUint(x) + (r & 0xFFFFu)) >> 16u); }
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.n) return;
+    float g = grad[i];
+    if (isnan(g) || isinf(g)) g = 0.0;
+    uint w = mom[i];
+    float m = uintBitsToFloat(w << 16u), v = uintBitsToFloat(w & 0xFFFF0000u);
+    m = pc.beta1 * m + (1.0 - pc.beta1) * g;
+    v = pc.beta2 * v + (1.0 - pc.beta2) * g * g;
+    param[i] -= pc.lr * (m / pc.bc1) / (sqrt(v / pc.bc2) + pc.eps);
+    mom[i] = toBf16(m, rng_key(pc.seed, pc.step, i, 0u)) | (toBf16(v, rng_key(pc.seed, pc.step, i, 1u)) << 16u);
+}

@@ -121,6 +121,9 @@ public:
     }
 
     Context& ctx_;
+    // optimizerPrecision "compact" (compact.h): set before setParams / setState; moments then live in m1 as words.
+    bool compactMoments = false;
+    uint32_t compactSeed = 0;
     int n = 0, width = 0, height = 0, tilesX = 0, tilesY = 0;
     uint32_t tileCount = 0;
     Frame frameData{};
@@ -136,6 +139,8 @@ public:
 
 private:
     void ensureFeatureBuffers();
+    void recordAdam(const std::array<AdamGroup, 5>& groups, float beta1, float beta2, float eps);
+    bool allocCompact_ = false;
     void recordImageLoss();             // after raster_fwd: sky, correction, transient, SSIM, loss gradient, depth
     void recordImageBackward();         // correction backward, sky backward (before raster_bwd)
     void recordComposite();             // sky composite + correction apply

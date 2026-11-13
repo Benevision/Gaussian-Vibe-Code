@@ -1,0 +1,86 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Adam for the SH coefficients with compact moments (compact_adam.py, optimizerPrecision "compact"): the 3 DC values
+// of a splat with bf16 moments (as adam_bf16.comp), the 45 higher-band values with 8-bit codes and one fp32 scale
+// per splat. One invocation per splat (row), 27 uints per row:
+//   [0..2]  DC: bf16 m | bf16 v << 16
+//   [3..25] 45 code pairs, two per uint (low half first): int8 m code | uint8 v code << 8
+//   [26]    v scale (fp32 bits) = the row's max v
+// v ≥ 0: logarithmic grid below the scale, v = s · 2^(−(255 − c) / 4) (c ≥ 1), 0 for c = 0. m: relative to the decoded
+// sqrt(v), m = sign(c) · (c / 127)² · R · sqrt(v), R = the bound of |m| / sqrt(v) for Adam from zero state. Both
+// written with unbiased stochastic rounding (counter hash of seed, step, value index). The update runs in fp32 from the
+// decoded moments; then the new row max, v codes, decoded v, m codes.
+#include "common.glsl"
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer ParamBuf { float param[]; };
+layout(std430, binding = 1) readonly buffer GradBuf { float grad[]; };
+layout(std430, binding = 2) buffer MomBuf { uint mom[]; };
+layout(push_constant) uniform PC {
+    float lrDC; float lrRest; float beta1; float beta2;
+    float eps; float bc1; float bc2; uint n;
+    uint seed; uint step; float bound; uint pad0;
+} pc;
+uint toBf16(float x, uint r) { return ((floatBitsToUint(x) + (r & 0xFFFFu)) >> 16u); }
+float uni(uint h) { return float(h >> 8u) * (1.0 / 16777216.0); }
+float vLevel(float c) { return c > 0.0 ? exp2((c - 255.0) * 0.25) : 0.0; }
+
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 64u + gl_LocalInvocationID.x);
+    if (i >= pc.n) return;
+    uint P = i * 48u, M = i * 27u;
+    for (uint j = 0u; j < 3u; j++) {
+        float g = grad[P + j];
+        if (isnan(g) || isinf(g)) g = 0.0;
+        uint w = mom[M + j];
+        float m = uintBitsToFloat(w << 16u), v = uintBitsToFloat(w & 0xFFFF0000u);
+        m = pc.beta1 * m + (1.0 - pc.beta1) * g;
+        v = pc.beta2 * v + (1.0 - pc.beta2) * g * g;
+        param[P + j] -= pc.lrDC * (m / pc.bc1) / (sqrt(v / pc.bc2) + pc.eps);
+        mom[M + j] = toBf16(m, rng_key(pc.seed, pc.step, P + j, 0u)) | (toBf16(v, rng_key(pc.seed, pc.step, P + j, 1u)) << 16u);
+    }
+    float s = uintBitsToFloat(mom[M + 26u]);
+    float mv[45], vv[45];
+    float smax = 0.0;
+    for (uint j = 0u; j < 45u; j++) {
+        uint pr = (mom[M + 3u + j / 2u] >> (16u * (j & 1u))) & 0xFFFFu;
+        int cm = int(pr << 24u) >> 24;   // int8
+        float cv = float(pr >> 8u);
+        float v = vLevel(cv) * s;
+        float m = float(cm) * float(abs(cm)) * (pc.bound / (127.0 * 127.0)) * sqrt(v);
+        float g = grad[P + 3u + j];
+        if (isnan(g) || isinf(g)) g = 0.0;
+        m = pc.beta1 * m + (1.0 - pc.beta1) * g;
+        v = pc.beta2 * v + (1.0 - pc.beta2) * g * g;
+        param[P + 3u + j] -= pc.lrRest * (m / pc.bc1) / (sqrt(v / pc.bc2) + pc.eps);
+        mv[j] = m;
+        vv[j] = v;
+        smax = max(smax, v);
+    }
+    float safe = smax > 0.0 ? smax : 1.0;
+    uint words[23];
+    for (uint q = 0u; q < 23u; q++) words[q] = 0u;
+    for (uint j = 0u; j < 45u; j++) {
+        uint idx = P + 3u + j;
+        // v: log grid, stochastic between the neighbouring levels in the linear domain
+        float a = clamp(vv[j] / safe, 0.0, 1.0);
+        float t = log2(max(a, 1e-38)) * 4.0 + 255.0;
+        float lo = clamp(floor(t), 0.0, 254.0);
+        float vlo = vLevel(lo), vhi = vLevel(lo + 1.0);
+        float p = clamp((a - vlo) / (vhi - vlo), 0.0, 1.0);
+        float cv = lo + (uni(rng_key(pc.seed, pc.step, idx, 2u)) < p ? 1.0 : 0.0);
+        float vdec = vLevel(cv) * smax;
+        // m: square-law grid of m / (R · sqrt(v decoded))
+        float u = sqrt(vdec);
+        float r = u > 0.0 ? clamp(mv[j] / max(u * pc.bound, 1e-38), -1.0, 1.0) : 0.0;
+        float am = abs(r);
+        float mlo = clamp(floor(sqrt(am) * 127.0), 0.0, 126.0);
+        float mvlo = (mlo / 127.0) * (mlo / 127.0), mvhi = ((mlo + 1.0) / 127.0) * ((mlo + 1.0) / 127.0);
+        float pm = clamp((am - mvlo) / (mvhi - mvlo), 0.0, 1.0);
+        float cmag = mlo + (uni(rng_key(pc.seed, pc.step, idx, 3u)) < pm ? 1.0 : 0.0);
+        int cm = r < 0.0 ? -int(cmag) : (r > 0.0 ? int(cmag) : 0);
+        uint pr = (uint(cm) & 0xFFu) | (uint(cv) << 8u);
+        words[j / 2u] |= pr << (16u * (j & 1u));
+    }
+    for (uint q = 0u; q < 23u; q++) mom[M + 3u + q] = words[q];
+    mom[M + 26u] = floatBitsToUint(smax);
+}

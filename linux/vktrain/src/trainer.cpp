@@ -16,8 +16,13 @@
 #include <map>
 #include <numeric>
 
+#include <iterator>
+#include <sstream>
+
+#include "compact.h"
 #include "dataset.h"
 #include "gpu_splat.h"
+#include "models.h"
 #include "plyio.h"
 #include "strategy.h"
 
@@ -67,7 +72,22 @@ double progressiveScale(int64_t step, int64_t densifyStop) {
 
 // ------------------------------------------------------------------ resume file
 
-constexpr uint32_t RESUME_VERSION = 1;
+constexpr uint32_t RESUME_VERSION = 2;
+
+// The stage-2b models and optimiser states (trainer.py save_state's appearance / bilagrid / pose / skybox /
+// transient entries).
+struct Extras {
+    bool compact = false;   // optimizerPrecision "compact": the saved moments are compact.h carriers
+    bool appOn = false, gridOn = false, poseOn = false, skyOn = false;
+    AppearanceModel app;
+    BilateralGridModel grid;
+    PoseRefinerModel pose;
+    std::vector<float> skyTex, skyM, skyV;   // host copies (save / resume)
+    int64_t skySteps = 0;
+    float tThreshold = 0;
+    bool tHas = false;
+    double tFraction = 0;
+};
 
 struct Saved {
     uint32_t trainViews = 0, evalViews = 0;
@@ -79,6 +99,7 @@ struct Saved {
     double psnrEma = NAN, lossEma = NAN, evalPsnr = NAN, elapsed = 0;
     int64_t previewStep = -1;
     bool capLogged = false;
+    Extras x;
 };
 
 struct Out {
@@ -91,7 +112,7 @@ struct Out {
     void str(const std::string& s) { put(uint64_t(s.size())); f.write(s.data(), std::streamsize(s.size())); }
 };
 struct In {
-    std::ifstream f;
+    std::istream& f;
     template <class T> T get() {
         T v{};
         if (!f.read(reinterpret_cast<char*>(&v), sizeof(T))) throw Error("the saved training state is truncated");
@@ -101,7 +122,8 @@ struct In {
         uint64_t n = get<uint64_t>();
         if (n > (uint64_t(1) << 36)) throw Error("the saved training state is corrupt");
         v.resize(size_t(n));
-        if (!f.read(reinterpret_cast<char*>(v.data()), std::streamsize(n * sizeof(T)))) throw Error("the saved training state is truncated");
+        if (n && !f.read(reinterpret_cast<char*>(v.data()), std::streamsize(n * sizeof(T))))
+            throw Error("the saved training state is truncated");
     }
     std::string str() {
         std::vector<char> v;
@@ -123,6 +145,69 @@ void readParams(In& in, Params& p) {
     }
 }
 
+void writeExtras(Out& o, const Extras& x) {
+    o.put(uint8_t(x.compact));
+    o.put(uint8_t(x.appOn));
+    if (x.appOn) {
+        o.put(uint64_t(x.app.p.size()));
+        for (size_t i = 0; i < x.app.p.size(); i++) {
+            o.vec(x.app.p[i]); o.vec(x.app.opt[i].m); o.vec(x.app.opt[i].v); o.put(x.app.opt[i].steps);
+        }
+    }
+    o.put(uint8_t(x.gridOn));
+    if (x.gridOn) {
+        o.put(uint64_t(x.grid.grids.size()));
+        for (size_t i = 0; i < x.grid.grids.size(); i++) {
+            o.vec(x.grid.grids[i]); o.vec(x.grid.opt[i].m); o.vec(x.grid.opt[i].v); o.put(x.grid.opt[i].steps);
+        }
+    }
+    o.put(uint8_t(x.poseOn));
+    if (x.poseOn) { o.vec(x.pose.e); o.vec(x.pose.m); o.vec(x.pose.v); o.put(x.pose.steps); }
+    o.put(uint8_t(x.skyOn));
+    if (x.skyOn) { o.vec(x.skyTex); o.vec(x.skyM); o.vec(x.skyV); o.put(x.skySteps); }
+    o.put(x.tThreshold); o.put(uint8_t(x.tHas)); o.put(x.tFraction);
+}
+
+// Reads into x, whose models were set up from the config: the saved state must have the same shape.
+void readExtras(In& in, Extras& x) {
+    auto corrupt = []() { throw Error("the saved training state does not match this job's features; it can't be resumed"); };
+    if ((in.get<uint8_t>() != 0) != x.compact)
+        throw Error("the saved training state uses another optimizerPrecision; it can't be resumed");
+    bool app = in.get<uint8_t>() != 0;
+    if (app != x.appOn) corrupt();
+    if (app) {
+        if (in.get<uint64_t>() != x.app.p.size()) corrupt();
+        for (size_t i = 0; i < x.app.p.size(); i++) {
+            in.vec(x.app.p[i]); in.vec(x.app.opt[i].m); in.vec(x.app.opt[i].v); x.app.opt[i].steps = in.get<int64_t>();
+            if (x.app.p[i].size() != 12) corrupt();
+        }
+    }
+    bool grid = in.get<uint8_t>() != 0;
+    if (grid != x.gridOn) corrupt();
+    if (grid) {
+        if (in.get<uint64_t>() != x.grid.grids.size()) corrupt();
+        for (size_t i = 0; i < x.grid.grids.size(); i++) {
+            in.vec(x.grid.grids[i]); in.vec(x.grid.opt[i].m); in.vec(x.grid.opt[i].v); x.grid.opt[i].steps = in.get<int64_t>();
+            if (x.grid.grids[i].size() != size_t(BILAGRID_SIZE)) corrupt();
+        }
+    }
+    bool pose = in.get<uint8_t>() != 0;
+    if (pose != x.poseOn) corrupt();
+    if (pose) {
+        size_t n = x.pose.e.size();
+        in.vec(x.pose.e); in.vec(x.pose.m); in.vec(x.pose.v); x.pose.steps = in.get<int64_t>();
+        if (x.pose.e.size() != n || x.pose.m.size() != n || x.pose.v.size() != n) corrupt();
+    }
+    bool sky = in.get<uint8_t>() != 0;
+    if (sky != x.skyOn) corrupt();
+    if (sky) {
+        size_t n = x.skyTex.size();
+        in.vec(x.skyTex); in.vec(x.skyM); in.vec(x.skyV); x.skySteps = in.get<int64_t>();
+        if (x.skyTex.size() != n || x.skyM.size() != n || x.skyV.size() != n) corrupt();
+    }
+    x.tThreshold = in.get<float>(); x.tHas = in.get<uint8_t>() != 0; x.tFraction = in.get<double>();
+}
+
 void saveState(const std::string& path, const Saved& s) {
     std::string tmp = path + ".tmp";
     {
@@ -138,14 +223,16 @@ void saveState(const std::string& path, const Saved& s) {
         o.str(s.rng); o.str(s.strategy);
         o.put(s.psnrEma); o.put(s.lossEma); o.put(s.evalPsnr); o.put(s.elapsed);
         o.put(s.previewStep); o.put(uint8_t(s.capLogged));
+        writeExtras(o, s.x);
         if (!o.f) throw Error("writing " + tmp + " failed");
     }
     fs::rename(tmp, path);   // atomic: a crash mid-save leaves the previous state (or none), never half a file
 }
 
-Saved loadState(const std::string& path) {
-    In in;
-    in.f.open(path, std::ios::binary);
+// Everything but the stage-2b extras, which stay in `extrasBlob` until the models are set up (readExtras).
+Saved loadState(const std::string& path, std::string& extrasBlob) {
+    std::ifstream file(path, std::ios::binary);
+    In in{file};
     if (!in.f) throw Error("cannot read the saved training state " + path);
     char magic[4];
     in.f.read(magic, 4);
@@ -160,6 +247,7 @@ Saved loadState(const std::string& path) {
     s.rng = in.str(); s.strategy = in.str();
     s.psnrEma = in.get<double>(); s.lossEma = in.get<double>(); s.evalPsnr = in.get<double>(); s.elapsed = in.get<double>();
     s.previewStep = in.get<int64_t>(); s.capLogged = in.get<uint8_t>() != 0;
+    extrasBlob.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return s;
 }
 
@@ -274,30 +362,119 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         allCams.insert(allCams.end(), evalCams.begin(), evalCams.end());
         fc.exposureLocked = exposureLocked(allCams);
         for (const std::string& note : unsupportedNotes(cfg, fc)) em.log(note);
+        const double depthWeight = cfg.effectiveDepthWeight(fc.hasDepth);
+        const bool loadDepth = depthWeight > 0 || cfg.normalWeight > 0;
 
-        // Photos, decoded and resized once and kept in RAM (opaque ones packed, 4 bytes / pixel).
+        // Monocular depth priors (trainer.py: no sensor depth, normalWeight > 0, depthPriors auto / on). The depth
+        // model (Depth Anything V2, PyTorch) can't run here: the maps a CUDA run cached next to the dataset are used.
+        std::map<int64_t, std::vector<float>> priorMaps;
+        std::map<int64_t, std::pair<int, int>> priorSize;
+        if (!fc.hasDepth && cfg.normalWeight > 0 && (cfg.depthPriors == "auto" || cfg.depthPriors == "on")) {
+            std::string dir = (fs::path(ds.root) / "depth-prior").string();
+            if (priorCacheValid(dir)) {
+                for (auto* c : allCams) {
+                    std::vector<float> d;
+                    int w = 0, h = 0;
+                    if (readNpyFloat2D((fs::path(dir) / (priorCacheKey(*c) + ".npy")).string(), d, w, h)) {
+                        priorMaps[c->id] = std::move(d);
+                        priorSize[c->id] = {w, h};
+                    }
+                }
+            }
+            if (!priorMaps.empty())
+                em.log(fmt("depth priors: %zu of %zu photos have a predicted depth map (cached in depth-prior/)", priorMaps.size(),
+                           allCams.size()));
+            else
+                em.log("depth priors: the Vulkan trainer can't predict depth maps itself and the dataset has none cached "
+                       "(depth-prior/ from a CUDA run); training without them");
+        }
+
+        // Photos, decoded and resized once and kept in RAM (opaque ones packed, 4 bytes / pixel); depth maps at
+        // their own (sensor / prior) resolution.
+        struct ViewDepth { std::vector<float> d; int w = 0, h = 0; bool prior = false; };
         std::vector<View> views;
+        std::vector<ViewDepth> depths(allCams.size());
         views.reserve(allCams.size());
         for (size_t i = 0; i < allCams.size(); i++) {
             if (ctl.cancel) throw Cancelled{};
             views.push_back(loadView(ds, *allCams[i], int(cfg.maxImageSize)));
             views.back().compact();
+            const CameraInfo& c = *allCams[i];
+            if ((loadDepth || i >= trainCams.size()) && !c.depth.empty()) {   // holdouts: for the depth error log
+                depths[i].d = loadDepthF16(ds.resolve(c.depth), c.depthWidth, c.depthHeight);
+                depths[i].w = c.depthWidth; depths[i].h = c.depthHeight;
+            } else if (priorMaps.count(c.id)) {
+                depths[i].d = priorMaps[c.id];
+                depths[i].w = priorSize[c.id].first; depths[i].h = priorSize[c.id].second;
+                depths[i].prior = true;
+            }
             if (i % 20 == 0) em.status({{"message", fmt("loading images %zu/%zu", i + 1, allCams.size())}});
         }
         size_t nTrain = trainCams.size(), nEval = evalCams.size();
         double pixels = 0;
         for (auto& v : views) pixels += double(v.width) * v.height;
-        em.log(fmt("%zu train / %zu holdout images (max side %lld); pixels ≈ %.2f GB kept in RAM", nTrain, nEval,
-                   (long long)cfg.maxImageSize, pixels * 4 / 1073741824.0));
+        em.log(fmt("%zu train / %zu holdout images (max side %lld), depth supervision weight %g; pixels ≈ %.2f GB kept in RAM",
+                   nTrain, nEval, (long long)cfg.maxImageSize, depthWeight, pixels * 4 / 1073741824.0));
+
+        // ---------------------------------------------------------- stage-2b features (trainer.py)
+        Extras X;
+        X.compact = cfg.optimizerPrecision == "compact";
+        X.skyOn = cfg.skybox == "on" || (cfg.skybox == "auto" && fc.hasSky);
+        const int skyH = int(cfg.skyboxResolution), skyW = 2 * skyH;
+        const SkyBasis skyB = skyBasis(ds.up);
+        if (X.skyOn) {
+            size_t withMask = 0;
+            for (size_t i = 0; i < nTrain; i++) withMask += !views[i].sky.empty();
+            em.log(fmt("learned skybox %d×%d at infinity; %zu photos have a sky mask (splats kept out, weight %g)", skyW, skyH,
+                       withMask, cfg.skyAlphaWeight));
+            const double init[3] = {0.6, 0.65, 0.7};
+            X.skyTex.resize(size_t(skyW) * skyH * 3);
+            for (size_t i = 0; i < X.skyTex.size(); i++) {
+                double c = std::clamp(init[i % 3], 0.02, 0.98);
+                X.skyTex[i] = float(std::log(c / (1 - c)));
+            }
+            X.skyM.assign(X.skyTex.size(), 0.0f);
+            X.skyV.assign(X.skyTex.size(), 0.0f);
+        }
+        const double viewGap = medianNearestViewGap(trainCams, ds.extent);
+        const bool transientOn = cfg.transientMasking && viewGap <= cfg.transientMaxViewGap;
+        if (cfg.transientMasking && !transientOn)
+            em.log(fmt("sparse coverage (photos ~%.0f° apart): not ignoring moving objects — real scenery would be mistaken for them",
+                       viewGap));
+        const int64_t transientStart = std::max<int64_t>(cfg.transientStart, int64_t(double(cfg.iterations) * 0.3));
+        bool useAppearance = cfg.appearanceCorrection;
+        if (useAppearance && fc.exposureLocked) {
+            useAppearance = false;
+            em.log("exposure is the same in every photo: per-photo colour correction off");
+        }
+        if (cfg.bilateralGrid) {
+            useAppearance = false;
+            X.gridOn = true;
+            X.grid.setup(nTrain, cfg.bilateralGridLR, cfg.bilateralGridTV);
+            em.log(fmt("per-photo local colour correction: %zu grids of 16×16×8", nTrain));
+        }
+        if (useAppearance) {
+            X.appOn = true;
+            X.app.setup(allCams, cfg.appearanceLR, cfg.appearanceReg);
+        }
+        if (cfg.poseRefinement) {
+            X.poseOn = true;
+            X.pose.setup(nTrain, cfg.poseRefinementLR, cfg.poseRefinementReg);
+        }
+        const bool decoupled = cfg.decoupledSSIM && (X.appOn || X.gridOn);
 
         // ---------------------------------------------------------- state
         Saved resume;
         bool resuming = !opt.resumeFrom.empty();
         if (resuming) {
-            resume = loadState(opt.resumeFrom);
+            std::string blob;
+            resume = loadState(opt.resumeFrom, blob);
             if (resume.trainViews != nTrain || resume.evalViews != nEval)
                 throw Error("the dataset changed since this job was paused (different photos); it can't be resumed");
             if (resume.strategy != cfg.strategy) throw Error("the saved state is from another strategy; it can't be resumed");
+            std::istringstream xs(blob);
+            In xin{xs};
+            readExtras(xin, X);
             elapsedBefore = resume.elapsed;
             em.log(fmt("resuming from the state saved at step %lld", (long long)resume.step));
         }
@@ -308,6 +485,59 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             HostRng initRng(uint64_t(cfg.seed) ^ 0x5DEECE66DULL);
             std::vector<float> xyz, rgb;
             initPoints(ds, cfg, region ? lo : nullptr, region ? hi : nullptr, initRng, em, xyz, rgb);
+            if (!priorMaps.empty() && cfg.priorInitPoints > 0) {
+                // depthprior.py init_points: about priorInitPoints points back-projected (every 2nd pixel) from the
+                // training photos' prior maps, spread evenly over them; region filter; up to maxGaussians in total.
+                std::vector<size_t> have;
+                for (size_t i = 0; i < nTrain; i++) if (depths[i].prior) have.push_back(i);
+                size_t per = std::max<size_t>(1, size_t(cfg.priorInitPoints) / std::max<size_t>(have.size(), 1));
+                std::vector<float> px, pc;
+                for (size_t i : have) {
+                    const ViewDepth& vd = depths[i];
+                    const CameraInfo& c = *allCams[i];
+                    const View& v = views[i];
+                    double sx = vd.w / double(c.width), sy = vd.h / double(c.height);
+                    double fx = c.fx * sx, fy = c.fy * sy, cx = c.cx * sx, cy = c.cy * sy;
+                    std::vector<float> cp, cc;
+                    for (int y = 0; y < vd.h; y += 2)
+                        for (int x = 0; x < vd.w; x += 2) {
+                            float z = vd.d[size_t(y) * size_t(vd.w) + size_t(x)];
+                            if (!(z > 0)) continue;
+                            double Xc[3] = {(x + 0.5 - cx) / fx * z, (y + 0.5 - cy) / fy * z, z};
+                            for (int r = 0; r < 3; r++)
+                                cp.push_back(float(c.c2w[r][0] * Xc[0] + c.c2w[r][1] * Xc[1] + c.c2w[r][2] * Xc[2] + c.c2w[r][3]));
+                            int ix = std::min(v.width - 1, int((x + 0.5) / vd.w * v.width));
+                            int iy = std::min(v.height - 1, int((y + 0.5) / vd.h * v.height));
+                            float col[3], a, m;
+                            v.pixel(size_t(iy) * size_t(v.width) + size_t(ix), col, a, m);
+                            cc.insert(cc.end(), col, col + 3);
+                        }
+                    size_t cnt = cp.size() / 3;
+                    std::vector<size_t> idx(cnt);
+                    std::iota(idx.begin(), idx.end(), size_t(0));
+                    size_t take = std::min(per, cnt);
+                    for (size_t j = 0; j < take; j++) std::swap(idx[j], idx[j + size_t(initRng.uniform() * double(cnt - j)) % (cnt - j)]);
+                    for (size_t j = 0; j < take; j++) {
+                        size_t q = idx[j];
+                        bool in = true;
+                        if (region) for (int k = 0; k < 3; k++) in = in && cp[q * 3 + size_t(k)] >= lo[k] && cp[q * 3 + size_t(k)] <= hi[k];
+                        if (!in) continue;
+                        px.insert(px.end(), &cp[q * 3], &cp[q * 3] + 3);
+                        pc.insert(pc.end(), &cc[q * 3], &cc[q * 3] + 3);
+                    }
+                }
+                size_t room = size_t(std::max<int64_t>(0, cfg.maxGaussians - int64_t(xyz.size() / 3)));
+                size_t np = std::min(px.size() / 3, room);
+                std::vector<size_t> idx(px.size() / 3);
+                std::iota(idx.begin(), idx.end(), size_t(0));
+                for (size_t j = 0; j < np && np < idx.size(); j++)
+                    std::swap(idx[j], idx[j + size_t(initRng.uniform() * double(idx.size() - j)) % (idx.size() - j)]);
+                for (size_t j = 0; j < np; j++) {
+                    xyz.insert(xyz.end(), &px[idx[j] * 3], &px[idx[j] * 3] + 3);
+                    rgb.insert(rgb.end(), &pc[idx[j] * 3], &pc[idx[j] * 3] + 3);
+                }
+                if (np) em.log(fmt("depth priors: added %zu starting points back-projected from the predicted depth", np));
+            }
             st = initSplats(xyz, rgb, float(cfg.initialOpacity), initRng);
         } else {
             st = std::move(resume.s);
@@ -334,6 +564,15 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
 
         GpuSplat gs(ctx);
         int64_t startStep = 0;
+        gs.compactMoments = X.compact;
+        gs.compactSeed = uint32_t(cfg.seed);
+        {
+            // per splat on the GPU: fp32 params + grads (59 values each) + Adam state (compact.h)
+            int state = X.compact ? 11 * 4 + compact::SH_WORDS * 4 : 59 * 8;
+            em.log(fmt("optimizerPrecision=%s%s: ~%d B/splat for params+grads+Adam state (state %d B; fp32 Adam would be %d B)",
+                       cfg.optimizerPrecision.c_str(), X.compact ? " (8-bit SH-rest moments, bf16 others)" : "", 2 * 59 * 4 + state,
+                       state, 59 * 8));
+        }
         gs.setState(st.p, &st.m1, &st.m2, resuming ? int(resume.adamSteps) : 0);
         Buffer grad2dBuf, countBuf;
         auto resetStats = [&](const std::vector<float>* g, const std::vector<float>* c) {
@@ -353,6 +592,30 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         };
         if (!mcmc) resetStats(resuming ? &resume.grad2d : nullptr, resuming ? &resume.count : nullptr);
 
+        // skybox panorama, its gradient and Adam moments on the GPU (trainer.py Skybox: Adam lr 0.01, eps 1e-15)
+        Buffer skyTexB, skyGradB, skyMB, skyVB;
+        if (X.skyOn) {
+            size_t bytes = X.skyTex.size() * 4;
+            skyTexB = ctx.createBuffer(bytes); skyGradB = ctx.createBuffer(bytes);
+            skyMB = ctx.createBuffer(bytes); skyVB = ctx.createBuffer(bytes);
+            ctx.upload(skyTexB, X.skyTex.data(), bytes);
+            ctx.upload(skyMB, X.skyM.data(), bytes);
+            ctx.upload(skyVB, X.skyV.data(), bytes);
+        }
+        if (transientOn) gs.setTransientState(X.tThreshold, X.tHas);
+        auto syncSky = [&]() {   // GPU → host copies (save, result)
+            if (!X.skyOn) return;
+            X.skyTex = gs.read<float>(skyTexB, X.skyTex.size());
+            X.skyM = gs.read<float>(skyMB, X.skyM.size());
+            X.skyV = gs.read<float>(skyVB, X.skyV.size());
+        };
+        auto setSky = [&](const double w2c[4][4]) {
+            gs.feat.sky = true;
+            gs.feat.skyTex = &skyTexB; gs.feat.skyGrad = &skyGradB; gs.feat.skyM = &skyMB; gs.feat.skyV = &skyVB;
+            gs.feat.skyW = uint32_t(skyW); gs.feat.skyH = uint32_t(skyH);
+            skyRotation(skyB, w2c, gs.feat.skyRot);
+        };
+
         RenderOpts base;
         base.antialiased = cfg.antialiased;
         base.ssimWeight = float(cfg.ssimWeight);
@@ -370,20 +633,46 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         };
         auto upload = [&](const SplatState& s) { gs.setState(s.p, &s.m1, &s.m2, gs.adamSteps); };
 
-        // trainer.py evaluate(): holdout PSNR of the clamped render over the black (or fixed) background,
-        // masked pixels scored against the render itself, averaged over the holdout photos.
+        // trainer.py evaluate(): holdout PSNR of the clamped render over the black (or fixed) background — or the
+        // learned sky — with the photo's exposure-seeded colour correction (no bilateral grid), masked pixels scored
+        // against the render itself, averaged over the holdout photos.
+        double evalDepthErr = 0, evalDepthCnt = 0;
         auto evaluate = [&](int shDeg, bool dump = false) -> double {
             if (nEval == 0) return NAN;
             double sum = 0;
+            evalDepthErr = evalDepthCnt = 0;
             for (size_t k = nTrain; k < views.size(); k++) {
                 const View& v = views[k];
                 RenderOpts ro = base;
                 ro.shDegree = shDeg;
+                ro.hasDepth = false;
                 std::copy(evalBg, evalBg + 3, ro.bg);
+                gs.feat = LossFeatures();
+                if (X.skyOn) {
+                    setSky(v.w2c);
+                    ro.bg[0] = ro.bg[1] = ro.bg[2] = 0;
+                }
+                if (X.appOn) {
+                    gs.feat.corr = LossFeatures::Affine;
+                    gs.setCorrection(X.app.p[k].data(), 12);
+                }
                 gs.setCamera(v.camera(), ro);
-                gs.forward();
+                gs.forwardComposite();
+                gs.feat = LossFeatures();
                 std::vector<float> im = gs.image();
                 size_t hw = size_t(v.width) * v.height;
+                if (!depths[k].d.empty()) {   // not in trainer.py: how far the rendered depth is from the photo's map
+                    const ViewDepth& vd = depths[k];
+                    std::vector<float> D = gs.read<float>(gs.img, 4 * hw), T = gs.read<float>(gs.finalT, hw);
+                    for (int y = 0; y < v.height; y++)
+                        for (int x = 0; x < v.width; x++) {
+                            size_t p = size_t(y) * size_t(v.width) + size_t(x);
+                            float d = vd.d[size_t(((2 * y + 1) * vd.h) / (2 * v.height)) * size_t(vd.w) + size_t(((2 * x + 1) * vd.w) / (2 * v.width))];
+                            if (!(d > 0)) continue;
+                            evalDepthErr += std::abs(D[3 * hw + p] / std::max(1.0f - T[p], 1e-10f) - d);
+                            evalDepthCnt += 1;
+                        }
+                }
                 double se = 0;
                 for (size_t p = 0; p < hw; p++) {
                     float c[3], a, m;
@@ -467,7 +756,36 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             s.elapsed = elapsedBefore + seconds(tStart, Clock::now());
             s.previewStep = previewStep;
             s.capLogged = capLogged;
+            syncSky();
+            if (transientOn) {
+                GpuSplat::TransientState t = gs.transientState();
+                X.tThreshold = t.threshold;
+                X.tHas = t.hasThreshold;
+            }
+            s.x = X;
             saveState(path, s);
+        };
+        // valid depth pixels of view vi at a render size (trainer.py: (depth_gt > 0) & isfinite, the map resized
+        // nearest to the photo, then to the progressive scale), as depth_normal.comp samples it
+        std::map<std::tuple<size_t, int, int>, double> validCache;
+        auto validDepth = [&](size_t vi, int rw, int rh) -> double {
+            auto key = std::make_tuple(vi, rw, rh);
+            auto it = validCache.find(key);
+            if (it != validCache.end()) return it->second;
+            const ViewDepth& vd = depths[vi];
+            const View& v = views[vi];
+            float sx = float(v.width) / float(rw), sy = float(v.height) / float(rh);
+            double cnt = 0;
+            for (int y = 0; y < rh; y++) {
+                uint32_t yv = rh == v.height ? uint32_t(y) : std::min(uint32_t(std::floor(float(y) * sy)), uint32_t(v.height - 1));
+                uint32_t ys = ((2 * yv + 1) * uint32_t(vd.h)) / (2 * uint32_t(v.height));
+                for (int x = 0; x < rw; x++) {
+                    uint32_t xv = rw == v.width ? uint32_t(x) : std::min(uint32_t(std::floor(float(x) * sx)), uint32_t(v.width - 1));
+                    uint32_t xs = ((2 * xv + 1) * uint32_t(vd.w)) / (2 * uint32_t(v.width));
+                    cnt += vd.d[size_t(ys) * size_t(vd.w) + xs] > 0;
+                }
+            }
+            return validCache[key] = cnt;
         };
 
         for (int64_t step = startStep; step < cfg.iterations; step++) {
@@ -506,7 +824,8 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             shDeg = int(std::min<int64_t>(step / cfg.shDegreeInterval, cfg.shDegree));
 
             float bg[3];
-            if (randomBg) for (float& b : bg) b = float(rng.uniform());
+            if (X.skyOn) std::fill(bg, bg + 3, 0.0f);   // the backdrop is the sky (no random background drawn)
+            else if (randomBg) for (float& b : bg) b = float(rng.uniform());
             else std::copy(fixedBg, fixedBg + 3, bg);
             RenderOpts ro = base;
             ro.shDegree = shDeg;
@@ -536,9 +855,62 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                 target = &scaledTarget;
             }
 
+            // ---- the stage-2b parts of this step's loss
+            gs.feat = LossFeatures();
+            const int rw = cam.width, rh = cam.height;
+            if (X.poseOn && step >= cfg.poseRefinementStart) {   // trainer.py: w2c = pose_refiner.apply(view_idx, w2c)
+                refinedW2c(v.w2c, X.pose.row(vi), cam.w2c);
+                gs.feat.pose = true;
+            }
+            std::vector<uint32_t> aux;
+            if (X.skyOn) {
+                setSky(cam.w2c);
+                if (!v.sky.empty() && cfg.skyAlphaWeight > 0) {
+                    // sky mask at this step's resolution (area-averaged like trainer.py resized()); penalty normaliser Σ m
+                    std::vector<float> m(v.sky.size());
+                    for (size_t p = 0; p < m.size(); p++) m[p] = v.sky[p] / 255.0f;
+                    if (rw != v.width || rh != v.height) m = areaResize(m, v.width, v.height, 1, rw, rh);
+                    aux.resize(m.size());
+                    double ms = 0;
+                    for (size_t p = 0; p < m.size(); p++) {
+                        ms += m[p];
+                        aux[p] = uint32_t(std::clamp(std::lround(m[p] * 255.0f), 0L, 255L));
+                    }
+                    gs.feat.skyMask = true;
+                    gs.feat.skyPenalty = float(-cfg.skyAlphaWeight / std::max(ms, 1.0));
+                }
+            }
+            if (X.appOn) {
+                gs.feat.corr = LossFeatures::Affine;
+                gs.setCorrection(X.app.p[vi].data(), 12);
+            } else if (X.gridOn) {
+                gs.feat.corr = LossFeatures::Grid;
+                gs.setCorrection(X.grid.grids[vi].data(), size_t(BILAGRID_SIZE));
+            }
+            gs.feat.decoupledSSIM = decoupled;
+            if (transientOn) {
+                gs.feat.transient = true;
+                gs.feat.transientActive = step >= transientStart;
+                gs.feat.transientSensitivity = float(cfg.transientSensitivity);
+            }
+            const ViewDepth& vd = depths[vi];
+            if (!vd.d.empty()) {
+                double dw = vd.prior ? cfg.monoDepthWeight : depthWeight;   // predicted maps: their own weight
+                double cnt = dw > 0 ? validDepth(vi, rw, rh) : 0;
+                if (dw > 0 && cnt > 0) gs.feat.depthScale = float(dw / cnt);
+                if (cfg.normalWeight > 0 && step >= cfg.normalStart) {
+                    gs.feat.normalScale = float(cfg.normalWeight / (double(rw) * rh));
+                    gs.feat.normalK = std::max(1, int(std::nearbyint(double(rw) / std::max(vd.w, 1))));
+                }
+                gs.feat.edgeAware = cfg.depthEdgeAware;
+                if (gs.feat.anyDepth()) gs.setDepthTarget(vd.d.data(), vd.w, vd.h, v.width, v.height);
+            }
+            ro.hasDepth = gs.feat.anyDepth();
+
             auto t0 = Clock::now();
             gs.setCamera(cam, ro);
             gs.setTarget(*target);
+            if (!aux.empty()) gs.setAux(aux);
             double sqErr = 0;
             double loss = gs.forwardLoss(nullptr, nullptr, &sqErr);
             auto t1 = Clock::now();
@@ -583,7 +955,30 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                 ex.noiseSeed = uint32_t(cfg.seed);
                 ex.noiseStep = uint32_t(step);
             }
+            if (X.skyOn) {
+                ex.skyLr = 0.01f;
+                ex.skySteps = int(++X.skySteps);
+            }
             gs.backwardStep(groups, ex);
+            // per-photo models: their optimisers step on the host with the gradients the GPU accumulated
+            if (X.appOn) X.app.step(vi, gs.readCorrGrad());
+            else if (X.gridOn) {
+                X.grid.step(vi, gs.readCorrGrad());
+                if ((step + 1) % 50 == 0) X.grid.pinMean();
+            }
+            if (gs.feat.pose) {
+                double g15[15], gd[9];
+                gs.readPoseGrad(g15);
+                poseChain(v.w2c, X.pose.row(vi), g15, gd);
+                X.pose.step(vi, gd);
+            }
+            double stepOutliers = -1;
+            if (transientOn && step >= transientStart) {
+                GpuSplat::TransientState ts = gs.transientState();
+                stepOutliers = double(ts.outliers) / (double(rw) * rh);
+                X.tFraction = 0.9 * X.tFraction + 0.1 * stepOutliers;
+            }
+            gs.feat = LossFeatures();
             auto t2 = Clock::now();
 
             // ------------------------------------------------ strategy (after the optimiser step, as gsplat)
@@ -622,9 +1017,12 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
 
             // ------------------------------------------------ bookkeeping (trainer.py, every 10 steps)
             int64_t cur = step + 1;
-            if (opt.traceEvery > 0 && cur % opt.traceEvery == 0)
-                em.emit({{"type", "trace"}, {"step", cur}, {"loss", loss}, {"psnr", -10 * std::log10(std::max(sqErr, 1e-10))},
-                         {"numGaussians", gs.n}});
+            if (opt.traceEvery > 0 && cur % opt.traceEvery == 0) {
+                json tr = {{"type", "trace"}, {"step", cur}, {"loss", loss}, {"psnr", -10 * std::log10(std::max(sqErr, 1e-10))},
+                           {"numGaussians", gs.n}, {"camera", allCams[vi]->id}};
+                if (stepOutliers >= 0) tr["outliers"] = stepOutliers;   // transient masking: fraction dropped this step
+                em.emit(tr);
+            }
             if (cur % 10 == 0 || cur == cfg.iterations) {
                 lossEma = std::isnan(lossEma) ? loss : 0.9 * lossEma + 0.1 * loss;
                 double p = -10 * std::log10(std::max(sqErr, 1e-10));
@@ -633,6 +1031,9 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
             if (cfg.evalInterval && nEval && (cur % cfg.evalInterval == 0 || cur == cfg.iterations)) {
                 lastEval = evaluate(shDeg, cur == cfg.iterations);
                 em.log(fmt("step %lld: holdout PSNR %.2f dB", (long long)cur, lastEval));
+                if (evalDepthCnt > 0)
+                    em.log(fmt("step %lld: holdout depth error %.4f (mean |rendered depth − depth map|)", (long long)cur,
+                               evalDepthErr / evalDepthCnt));
             }
             if (previewInterval > 0 && !opt.jobDir.empty() && cur % previewInterval == 0 && cur < cfg.iterations) {
                 Params p;
@@ -674,6 +1075,31 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         double trainSec = seconds(trainStart, Clock::now());
         int64_t steps = cfg.iterations - startStep;
         if (region) em.log(fmt("region: %zu of %d splats inside the expanded box written", finalN, p.n));
+        json featureStats = json::object();
+        if (X.skyOn) {   // uncropped, next to the PLY (trainer.py: the Mac merger crops with open outer faces)
+            syncSky();
+            std::string png = writeSkySidecars(opt.outPath, X.skyTex, skyW, skyH, skyB);
+            em.log("skybox saved: " + fs::path(png).filename().string());
+        }
+        if (X.poseOn) {
+            double tr = 0, ang = 0;
+            for (size_t i = 0; i < nTrain; i++) {
+                const double* d = X.pose.row(i);
+                tr += std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                double a[6] = {d[3] + 1, d[4], d[5], d[6], d[7] + 1, d[8]}, R[3][3];
+                rot6d(a, R);
+                ang += std::acos(std::clamp((R[0][0] + R[1][1] + R[2][2] - 1) / 2, -1.0, 1.0)) * 180 / M_PI;
+            }
+            featureStats["poseTranslation"] = tr / double(nTrain);
+            featureStats["poseRotationDeg"] = ang / double(nTrain);
+            em.log(fmt("pose refinement: mean correction %.4g (translation), %.3f° (rotation) over %zu photos", tr / double(nTrain),
+                       ang / double(nTrain), nTrain));
+        }
+        if (transientOn) {
+            featureStats["transientFraction"] = X.tFraction;
+            em.log(fmt("transient masking: %.1f %% of the pixels ignored as moving objects (recent average)", 100 * X.tFraction));
+        }
+        if (evalDepthCnt > 0) featureStats["evalDepthError"] = evalDepthErr / evalDepthCnt;
         em.log(fmt("time per step: forward + loss %.1f ms, backward + Adam %.1f ms, densification %.1f ms (mean over %lld steps)",
                    1e3 * sumForward / double(std::max<int64_t>(steps, 1)), 1e3 * sumBackward / double(std::max<int64_t>(steps, 1)),
                    1e3 * sumDensify / double(std::max<int64_t>(steps, 1)), (long long)steps));
@@ -685,9 +1111,11 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                  {"previewStep", previewStep >= 0 ? json(previewStep) : json(nullptr)},
                  {"msPerStep", {{"forwardLoss", 1e3 * sumForward / double(std::max<int64_t>(steps, 1))},
                                 {"backwardAdam", 1e3 * sumBackward / double(std::max<int64_t>(steps, 1))},
-                                {"densify", 1e3 * sumDensify / double(std::max<int64_t>(steps, 1))}}}});
+                                {"densify", 1e3 * sumDensify / double(std::max<int64_t>(steps, 1))}}},
+                 {"features", featureStats}});
         ctx.destroy(grad2dBuf);
         ctx.destroy(countBuf);
+        for (Buffer* b : {&skyTexB, &skyGradB, &skyMB, &skyVB}) ctx.destroy(*b);
         return EXIT_DONE;
     } catch (const Cancelled&) {
         em.emit({{"type", "cancelled"}});
