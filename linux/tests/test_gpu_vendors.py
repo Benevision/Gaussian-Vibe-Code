@@ -216,3 +216,85 @@ def _paths(tmp_path):
     from splatworker.gui.paths import AppPaths
     return AppPaths.from_env({"HOME": str(tmp_path / "home"), "XDG_DATA_HOME": str(tmp_path / "data"),
                               "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "XDG_CACHE_HOME": str(tmp_path / "cache")})
+
+
+# ------------------------------------------------------------------ RDNA 2 (RX 6700 XT) and the HSA override
+def kfd_node(sys_root, n, gfx_version, location_id, domain=0):
+    d = sys_root / "class" / "kfd" / "kfd" / "topology" / "nodes" / str(n)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "properties").write_text(f"cpu_cores_count 0\nsimd_count 80\ngfx_target_version {gfx_version}\n"
+                                  f"location_id {location_id}\ndomain {domain}\n")
+
+
+def rx6700xt(sys_root, with_kfd=True):
+    card(sys_root, 0, 0x1002, 0x73df, "amdgpu", "0000:03:00.0",
+         {"mem_info_vram_total": 12 * 2**30, "mem_info_vram_used": 300 * 2**20})
+    if with_kfd:
+        kfd_node(sys_root, 0, 0, 0)                          # the CPU node
+        kfd_node(sys_root, 1, 100301, 0x0300)               # bus 3, device 0, function 0
+
+
+def test_gfx_from_kfd_topology_and_device_ids(tmp_path):
+    sys_root = tmp_path / "sys"
+    rx6700xt(sys_root)
+    a = V.scan(sys_root, names={})[0]
+    assert a.gfx == "gfx1031" and a.to_info()["gfx"] == "gfx1031" and not a.integrated
+    assert V.hsa_override([a]) == "10.3.0"
+    nokfd = tmp_path / "b" / "sys"
+    rx6700xt(nokfd, with_kfd=False)
+    assert V.scan(nokfd, names={})[0].gfx == "gfx1031"     # from the device-id table
+    assert V.gfx_from_device_id(0x744c) == ""                # RDNA 3: not in the table
+    kfd_node(tmp_path / "c", 1, 90010, 0x0100)
+    kfd_node(tmp_path / "c", 2, 120001, 0x0400)
+    assert V.kfd_gfx(tmp_path / "c") == {"0000:01:00.0": "gfx90a", "0000:04:00.0": "gfx1201"}
+
+
+def test_supported_cards_get_no_override(tmp_path):
+    sys_root = tmp_path / "sys"
+    card(sys_root, 0, 0x1002, 0x744c, "amdgpu", "0000:03:00.0", {"mem_info_vram_total": 24 * 2**30})
+    kfd_node(sys_root, 1, 110000, 0x0300)
+    assert V.hsa_override(V.scan(sys_root, names={})) is None
+    assert V.hsa_override([]) is None
+
+
+def test_gpu_env_sets_override_inside_the_app_only(tmp_path):
+    from splatworker.gui.installer import gpu_env
+    sys_root = tmp_path / "sys"
+    rx6700xt(sys_root)
+    assert gpu_env({}, sys_root) == {"HSA_OVERRIDE_GFX_VERSION": "10.3.0"}
+    assert gpu_env({"HSA_OVERRIDE_GFX_VERSION": "10.3.1"}, sys_root) == {}      # the user's own value wins
+    assert gpu_env({"SPLATWORK_NO_HSA_OVERRIDE": "1"}, sys_root) == {}
+    assert gpu_env({}, tmp_path / "none") == {}
+
+
+def test_rx6700xt_setup_mentions_the_override(tmp_path, names):
+    d = info_for(tmp_path, names, lambda s: rx6700xt(s))
+    c = choose_profile(d)
+    assert c.profile_id == "rocm6.4" and any("gfx1031" in w and "10.3.0" in w for w in c.warnings)
+
+
+def test_gpu_check_without_a_gpu(monkeypatch, capsys):
+    import importlib.machinery
+    import sys
+    import types
+
+    from splatworker import gpucheck
+    t = types.ModuleType("torch")
+    t.__spec__ = importlib.machinery.ModuleSpec("torch", None)
+    t.__version__ = "2.8.0+rocm6.4"
+    t.version = types.SimpleNamespace(cuda=None, hip="6.4.1")
+    t.cuda = types.SimpleNamespace(is_available=lambda: False)
+    t.xpu = types.SimpleNamespace(is_available=lambda: False)
+    monkeypatch.setitem(sys.modules, "torch", t)
+    rc = gpucheck.main(types.SimpleNamespace(no_train=False, splats=10))
+    out = capsys.readouterr().out
+    assert "no GPU visible to PyTorch" in out and rc == 0
+    import json
+    rep = json.loads(out.strip().splitlines()[-1].split(" ", 1)[1])
+    assert rep["torch"]["value"]["hip"] == "6.4.1" and rep["torchBackend"] == "cpu"
+
+
+def test_launcher_routes_gpu_check_to_the_runtime(tmp_path):
+    from splatworker.gui.launcher import headless_command
+    exe, argv, env, _ = headless_command(["gpu-check"], paths=_paths(tmp_path), environ={"HOME": str(tmp_path)})
+    assert argv[1:4] == ["-m", "splatworker", "gpu-check"] and "serve" not in argv

@@ -307,6 +307,12 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--quick", action="store_true", help="tiny scene and 200 steps: checks it works, not saved")
     b.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)
     b.set_defaults(func=cmd_benchmark)
+
+    gc = sub.add_parser("gpu-check", help="check what the GPU runtime can do (cards, PyTorch on CUDA / ROCm / XPU, "
+                                          "small GPU workloads, gsplat) and print a report to paste")
+    gc.add_argument("--no-train", action="store_true", help="skip the gsplat / fused-ssim checks")
+    gc.add_argument("--splats", type=int, default=100_000, help="splats in the gsplat test (default 100 000)")
+    gc.set_defaults(func=lambda a: __import__("splatworker.gpucheck", fromlist=["main"]).main(a))
     return p
 
 

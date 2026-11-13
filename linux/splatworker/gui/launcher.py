@@ -8,6 +8,7 @@
     splatworker-app --headless [ARGS]    no GUI: run `splatworker serve` with the GUI's settings;
                                          ARGS override them (e.g. --port 9000 --no-mdns)
     splatworker-app --headless info      any other splatworker sub-command, in the GPU runtime
+                                         (info, gpu-check, train, benchmark, convert, splat-info, gen-token)
     splatworker-app --install-runtime [--profile cu124|cu121|cu118|cpu] [--no-splatprep]
                                       [--lightglue] [--yes]
                                          install the GPU runtime from a terminal
@@ -26,7 +27,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 from . import APP_ID
 from .paths import AppPaths
 
-SUBCOMMANDS = ("serve", "train", "gen-token", "info")
+SUBCOMMANDS = ("serve", "train", "gen-token", "info", "gpu-check", "benchmark", "convert", "splat-info")
 
 
 def headless_command(extra: Sequence[str], paths: Optional[AppPaths] = None,

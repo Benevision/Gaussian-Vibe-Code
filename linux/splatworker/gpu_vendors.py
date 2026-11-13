@@ -42,6 +42,7 @@ class Adapter:
     busy_pct: Optional[int] = None
     temperature_c: Optional[int] = None
     card: str = ""                   # card0
+    gfx: str = ""                    # AMD shader ISA, e.g. "gfx1031" (KFD topology, else the device-id table)
     extra: Dict[str, str] = field(default_factory=dict)
 
     @property
@@ -62,6 +63,8 @@ class Adapter:
         """The ``/v1/info`` "adapters" entry."""
         d = {"vendor": self.vendor, "name": self.name, "pci": self.pci, "driver": self.driver,
              "integrated": self.integrated}
+        if self.gfx:
+            d["gfx"] = self.gfx
         if self.memory_mb is not None:
             d["memoryMB"] = self.memory_mb
             if self.memory_used_mb is not None:
@@ -183,6 +186,7 @@ def scan(sys_root: Path = Path("/sys"), names: Optional[Dict] = None) -> List[Ad
             a.memory_mb = total // 2**20 if total else None
             a.memory_used_mb = used // 2**20 if used is not None and total else None
             a.busy_pct = _read_int(dev / "gpu_busy_percent")
+            a.gfx = kfd_gfx(sys_root).get(pci) or gfx_from_device_id(did)
         elif vendor == "intel":
             size = _read_int(dev / "tile0" / "vram0" / "size")      # xe driver, discrete Arc
             if size is None:
@@ -194,6 +198,57 @@ def scan(sys_root: Path = Path("/sys"), names: Optional[Dict] = None) -> List[Ad
             a.temperature_c = t // 1000 if t is not None else None
         out.append(a)
     return out
+
+
+# ------------------------------------------------------------------------------------------ AMD ISA
+# PCI device ids of RDNA 2 chips whose ISA PyTorch's ROCm builds don't ship (and gfx1030, which they do) — used when
+# the KFD topology can't be read. Navi 21 / 22 / 23 / 24.
+_AMD_ID_GFX = [((0x73a0, 0x73bf), "gfx1030"), ((0x73c0, 0x73df), "gfx1031"), ((0x73e0, 0x73ff), "gfx1032"),
+               ((0x7420, 0x743f), "gfx1034")]
+
+
+def gfx_from_device_id(device_id: int) -> str:
+    for (lo, hi), gfx in _AMD_ID_GFX:
+        if lo <= device_id <= hi:
+            return gfx
+    return ""
+
+
+def kfd_gfx(sys_root: Path = Path("/sys")) -> Dict[str, str]:
+    """{PCI address: "gfx1031"} from the KFD topology (``/sys/class/kfd/kfd/topology/nodes/*/properties``:
+    ``gfx_target_version`` 100301 = gfx1031, ``location_id`` = bus << 8 | device << 3 | function, ``domain``)."""
+    out: Dict[str, str] = {}
+    for props in sorted(glob.glob(str(Path(sys_root) / "class" / "kfd" / "kfd" / "topology" / "nodes" / "*"
+                                      / "properties"))):
+        kv = {}
+        for line in (_read(Path(props)) or "").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].lstrip("-").isdigit():
+                kv[parts[0]] = int(parts[1])
+        ver, loc = kv.get("gfx_target_version", 0), kv.get("location_id")
+        if not ver or loc is None:                    # CPU nodes have gfx_target_version 0
+            continue
+        major, minor, step = ver // 10000, (ver // 100) % 100, ver % 100
+        gfx = f"gfx{major}{minor:x}{step:x}" if major >= 10 else f"gfx{major}{minor}{step:x}"
+        bus, devfn = loc >> 8, loc & 0xff
+        pci = f"{kv.get('domain', 0):04x}:{bus:02x}:{devfn >> 3:02x}.{devfn & 7:x}"
+        out[pci] = gfx
+    return out
+
+
+# ISAs PyTorch's ROCm 6.4 builds ship kernels for (gfx1030, gfx1100-1102, gfx1200/1201, Instinct); others of the
+# same family run the nearest one when HSA_OVERRIDE_GFX_VERSION says so — the well-known workaround for e.g. the
+# RX 6700 XT (gfx1031 → 10.3.0). Unofficial: AMD doesn't support it, but the ISAs within RDNA 2 are compatible.
+HSA_OVERRIDES = {"gfx1031": "10.3.0", "gfx1032": "10.3.0", "gfx1033": "10.3.0", "gfx1034": "10.3.0",
+                 "gfx1035": "10.3.0", "gfx1036": "10.3.0", "gfx1103": "11.0.0"}
+
+
+def hsa_override(adapters: List[Adapter]) -> Optional[str]:
+    """The HSA_OVERRIDE_GFX_VERSION the AMD GPU we'd compute on needs, or None (supported, or no AMD GPU)."""
+    a = best_non_nvidia(adapters)
+    if a is None or a.vendor != "amd":
+        return None
+    return HSA_OVERRIDES.get(a.gfx)
 
 
 def by_vendor(adapters: List[Adapter], vendor: str) -> List[Adapter]:

@@ -171,7 +171,24 @@ def base_env(paths: AppPaths, environ: Optional[Mapping[str, str]] = None) -> Di
         env.pop(k, None)
     env.update({"PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_NO_INPUT": "1", "PYTHONUNBUFFERED": "1",
                 "PYTHONNOUSERSITE": "1", "TMPDIR": str(paths.tmp_dir)})
+    env.update(gpu_env(env))
     return env
+
+
+def gpu_env(environ: Mapping[str, str], sys_root: Optional[Path] = None) -> Dict[str, str]:
+    """Variables the GPU runtime needs on this machine, for the installer's checks and the worker alike: an AMD
+    card whose ISA PyTorch's ROCm build lacks (RX 6700 XT = gfx1031) runs the nearest supported one
+    (HSA_OVERRIDE_GFX_VERSION=10.3.0). Set inside the app only; a value the user set themselves wins, and
+    SPLATWORK_NO_HSA_OVERRIDE=1 turns it off."""
+    if "HSA_OVERRIDE_GFX_VERSION" in environ or environ.get("SPLATWORK_NO_HSA_OVERRIDE") == "1":
+        return {}
+    try:
+        from ..gpu_vendors import hsa_override, scan
+
+        v = hsa_override(scan(sys_root or Path("/sys")))
+    except Exception:
+        v = None
+    return {"HSA_OVERRIDE_GFX_VERSION": v} if v else {}
 
 
 class Installer:

@@ -256,6 +256,14 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
         proc = processing_profile_for(driver) if override != CPU_PROFILE_ID else None
         if proc is not None:
             warnings = []
+            if proc.vendor == "amd" and other.gfx:
+                from ..gpu_vendors import HSA_OVERRIDES
+
+                ov = HSA_OVERRIDES.get(other.gfx)
+                if ov:
+                    warnings.append(f"{other.name} ({other.gfx}) isn't on ROCm's list of supported cards. SplatWork runs "
+                                    f"it as gfx{ov.replace('.', '')[:4]} (HSA_OVERRIDE_GFX_VERSION={ov}, set inside the "
+                                    "app only), which usually works for this card family.")
             if proc.vendor == "amd":
                 warnings.append("PyTorch for ROCm supports Radeon RX 9000 and most RX 7000 / Pro W7000 cards and "
                                 "AMD Instinct accelerators; older Radeon cards may not be used, and processing then "
