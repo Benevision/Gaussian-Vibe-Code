@@ -47,5 +47,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   </array>
 </dict></plist>
 PLIST
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed"
+# Sign with a stable identity when this Mac has one (SPLAT_SIGN_IDENTITY, else the first "Apple Development"
+# certificate), so every build has the same code identity: the Keychain then remembers "Always Allow" for the
+# app's saved worker tokens instead of asking again after each update. Without one: ad-hoc (prompts per build).
+IDENTITY="${SPLAT_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development/ {print $2; exit}')}"
+if [ -n "$IDENTITY" ] && codesign --force --deep --sign "$IDENTITY" "$APP" >/dev/null 2>&1; then
+  echo "Signed with a development identity (stable Keychain access)"
+else
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed"
+fi
 echo "Built $APP ($VERSION, build $BUILD)"
