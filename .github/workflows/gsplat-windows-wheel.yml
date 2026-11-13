@@ -22,7 +22,8 @@ concurrency:
 
 jobs:
   wheel:
-    runs-on: windows-latest
+    # Visual Studio 2022: windows-latest now has VS 2026 (MSVC 14.51), whose headers crash CUDA 12.8's cudafe++
+    runs-on: windows-2022
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5

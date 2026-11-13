@@ -14,6 +14,8 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   - It updates itself from new releases, checking each installer against the release's checksums.
   - Built, installed and smoke-tested on GitHub's Windows runners, which have no GPU. Training on an NVIDIA GPU,
     the viewer on real drivers and discovery from a Mac over a real network haven't been tried yet.
+  - RTX 50-series cards get the same PyTorch 2.7 + CUDA 12.8 runtime as on Linux. SplatWork's CI compiles gsplat 1.6
+    for Windows for it. This is untested on a real RTX 50 card.
   - AMD and Intel GPUs can view and process; they'll train once the Vulkan trainer lands.
 - **SplatWork for Linux 1.6.0 — AMD and Intel graphics cards:** the app now recognises AMD Radeon / Instinct and
   Intel Arc cards (name, video memory, load), shows them on the Status page and to the Mac, and explains that
