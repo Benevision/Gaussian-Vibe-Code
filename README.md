@@ -6,7 +6,7 @@ Big scenes are split into blocks that train on several devices at once and are m
 
 Everything runs locally on your network. No cloud account, no uploads to anyone else.
 
-[**Download**](#download) · [Quick start](#quick-start) · [User guide](docs/USER_GUIDE.md) ·
+[**Website**](https://benevision.github.io/SplatWork/) · [Download](#download) · [Quick start](#quick-start) · [User guide](docs/USER_GUIDE.md) ·
 [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 <p align="center">

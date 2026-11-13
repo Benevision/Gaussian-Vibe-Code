@@ -13,7 +13,8 @@ name: SplatWork Node Flatpak
 on:
   push:
     branches: [main]
-    paths: ["linux/**", "tools/**", ".github/workflows/splat-worker-flatpak.yml"]
+    # website/ and the screenshot it uses are published with the Flatpak repository (one Pages site)
+    paths: ["linux/**", "tools/**", "website/**", "docs/images/**", ".github/workflows/splat-worker-flatpak.yml"]
   # Pull requests run the tests and build the Flatpak without publishing anything.
   pull_request:
     paths: ["linux/**", "tools/**", ".github/workflows/splat-worker-flatpak.yml"]
@@ -218,13 +219,13 @@ jobs:
           REF
           sed -i 's/^ *//' site/flatpak/splatworker.flatpakrepo site/flatpak/splatworker.flatpakref
           printf '{"version": "%s", "commit": "%s", "date": "%s"}\n' "$VERSION" "$GITHUB_SHA" "$(date -u +%FT%TZ)" > site/flatpak/version.json
-          cat > site/index.html <<HTML
-          <!doctype html><meta charset="utf-8"><title>SplatWork Node</title>
-          <h1>SplatWork Node $VERSION</h1>
-          <p>Install on Linux: <code>flatpak install --user $BASE/splatworker.flatpakref</code></p>
-          <p>Updates then arrive through GNOME Software / Discover or <code>flatpak update</code>.</p>
-          HTML
           touch site/.nojekyll
+
+      - name: Landing page (website/, plus the screenshot from docs/images)
+        run: |
+          cp -R website/. site/
+          mkdir -p site/images && cp docs/images/*.png site/images/
+          test -f site/index.html
 
       - uses: actions/download-artifact@v4
         with:
