@@ -272,6 +272,7 @@ class LocalPipeline:
         elif o.source_kind == "photos":
             self._stage("Preparing images")
             st = importers.import_photos(src, ds, o.max_image_size, o.blur_rejection, o.blur_threshold,
+                                         keep_location=o.use_location,
                                          progress=lambda f, m: (self._check(), self._progress(f, m)))
             if st["rejected"]:
                 self._log(f"rejected {len(st['rejected'])} blurry photos: {', '.join(st['rejected'][:10])}…")

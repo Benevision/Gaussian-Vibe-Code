@@ -1,12 +1,12 @@
 # SplatWork — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
 - [Viewer](#viewer) — 20 settings
 - [Editing](#editing) — 7 settings
-- [Sources & frame extraction](#sources--frame-extraction) — 13 settings
+- [Sources & frame extraction](#sources--frame-extraction) — 15 settings
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
 - [Masking](#masking) — 4 settings
 - [Training — basics](#training--basics) — 9 settings
@@ -487,6 +487,8 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 | [Compute stereo depth](#compute-stereo-depth) | Off | – | Advanced |
 | [HDR tone mapping](#hdr-tone-mapping) | Automatic | – | Advanced |
 | [Hold out every Nth image](#hold-out-every-nth-image) | 25 (Easy) / 8 (Advanced) | 0–50 | Advanced |
+| [Use photo locations (GPS)](#use-photo-locations-gps) | On | – | Easy |
+| [Aerial settings](#aerial-settings) | On for drone footage | – | Easy |
 
 ### Maximum image size
 
@@ -687,6 +689,41 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 - Training PSNR is a poor guide on its own: it dips while the learning rate is high, and jumps when moving-object masking starts ignoring the worst pixels (about 30 % into training), while the held-out number shows whether the splat really generalises.
 - Easy mode holds out every 25th photo (4 %: a trustworthy trend for almost no cost); Advanced uses every 8th (the research convention).
 - 0 trains on everything.
+
+### Use photo locations (GPS)
+
+> Keep each photo's GPS position and use it to check and scale the camera solve.
+
+| | |
+|---|---|
+| **Default** | On |
+| **Mode** | Easy |
+| **ID** | `source.useLocation` |
+
+**How it works.** Phones and drones store where each photo was taken. With this on, imported photos keep only that location (and a drone's height above take-off) — no other metadata — and learned camera solving compares the solved cameras with it: when they agree the scene is put in metres with +Z up and cameras that disagree are dropped; when they don't, you get a warning instead of a quietly wrong scene.
+
+- It is used for any photos that have locations, phone or drone.
+- Off: the imported photos carry no location at all, so the project folder doesn't reveal where they were taken.
+- Apple Object Capture doesn't use locations.
+
+### Aerial settings
+
+> Settings for drone footage: learned camera solving with GPS checks, sky, High quality.
+
+| | |
+|---|---|
+| **Default** | On for drone footage |
+| **Mode** | Easy |
+| **ID** | `source.aerial` |
+
+**How it works.** Turned on by itself when the photos come from a drone (the camera maker, or DJI's flight and gimbal tags) or when you start from the Drone / aerial tile — never just because photos have GPS, which phone photos have too.
+
+- It switches camera solving to COLMAP / GLOMAP with SuperPoint + LightGlue (Object Capture, built for objects and rooms, ignores GPS and struggles with straight-down views), matching neighbours plus loop closures for photo surveys and frame by frame for video; turns on the sky and its learned skybox; and picks the High quality preset.
+- Local colour correction and flat surfaces, which help aerial scenes most, are on by default anyway.
+
+**When to change it**
+
+- Turn it off to go back to the standard settings.
 
 ## Camera solving (SfM)
 

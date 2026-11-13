@@ -367,12 +367,16 @@ enum ImageUtil {
 
     enum Encoding: String, Codable, Sendable { case jpeg, png }
 
-    static func write(_ image: CGImage, to url: URL, encoding: Encoding = .jpeg, quality: Double = 0.95) throws {
+    /// - Parameter location: copied into the file (GPS + DJI relative altitude only); nil writes no metadata.
+    static func write(_ image: CGImage, to url: URL, encoding: Encoding = .jpeg, quality: Double = 0.95,
+                      location: PhotoLocation? = nil) throws {
         let type: UTType = encoding == .jpeg ? .jpeg : .png
         guard let dst = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else {
             throw PipelineError.encodeFailed(url.lastPathComponent)
         }
-        CGImageDestinationAddImage(dst, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        let opts = [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
+        if let location { CGImageDestinationAddImageAndMetadata(dst, image, location.metadata(), opts) }
+        else { CGImageDestinationAddImage(dst, image, opts) }
         guard CGImageDestinationFinalize(dst) else { throw PipelineError.encodeFailed(url.lastPathComponent) }
     }
 

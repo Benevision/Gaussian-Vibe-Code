@@ -118,6 +118,7 @@ class ProjectOptions:
     stereo_depth: bool = False               # block-matching depth for the left eye
     mask_static: bool = False                # mask.staticRegions: mask fixed parts of the frame
     holdout_every: int = 25                  # source.holdout (0 = none)
+    use_location: bool = True                # source.useLocation: imported photos keep their GPS (only that)
     solver: str = "learned"                  # sfm.solver: learned | poses (use poses from the source)
     features: str = "superpoint_lightglue"   # sfm.features
     matching: str = "auto"                   # sfm.matching

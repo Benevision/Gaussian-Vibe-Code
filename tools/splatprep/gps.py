@@ -47,7 +47,8 @@ def read_gps(path: Path) -> Optional[Tuple[float, float, float]]:
         lon = -lon
     if isinstance(xmp, str):
         xmp = xmp.encode()
-    m = re.search(rb'RelativeAltitude="([-+0-9.]+)"', xmp)
+    # attribute form (DJI's own files) or element form (copies written by SplatWork's import)
+    m = re.search(rb'RelativeAltitude="([-+0-9.]+)"', xmp) or re.search(rb'RelativeAltitude>\s*([-+0-9.]+)\s*<', xmp)
     if m:
         alt = float(m.group(1))
     else:

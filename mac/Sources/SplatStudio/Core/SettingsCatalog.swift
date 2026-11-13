@@ -208,6 +208,14 @@ enum SettingsCatalog {
               summary: "Reserves some images for measuring quality instead of training on them.",
               detail: "Held-out images give an honest PSNR (quality) number in the training dashboard, the same way research papers evaluate. Training PSNR is a poor guide on its own: it dips while the learning rate is high, and jumps when moving-object masking starts ignoring the worst pixels (about 30 % into training), while the held-out number shows whether the splat really generalises. Easy mode holds out every 25th photo (4 %: a trustworthy trend for almost no cost); Advanced uses every 8th (the research convention). 0 trains on everything.",
               defaultValue: "25 (Easy) / 8 (Advanced)", range: "0–50"),
+        .init(id: "source.useLocation", group: .sources, title: "Use photo locations (GPS)",
+              summary: "Keep each photo's GPS position and use it to check and scale the camera solve.",
+              detail: "Phones and drones store where each photo was taken. With this on, imported photos keep only that location (and a drone's height above take-off) — no other metadata — and learned camera solving compares the solved cameras with it: when they agree the scene is put in metres with +Z up and cameras that disagree are dropped; when they don't, you get a warning instead of a quietly wrong scene. It is used for any photos that have locations, phone or drone. Off: the imported photos carry no location at all, so the project folder doesn't reveal where they were taken. Apple Object Capture doesn't use locations.",
+              defaultValue: "On", advanced: false),
+        .init(id: "source.aerial", group: .sources, title: "Aerial settings",
+              summary: "Settings for drone footage: learned camera solving with GPS checks, sky, High quality.",
+              detail: "Turned on by itself when the photos come from a drone (the camera maker, or DJI's flight and gimbal tags) or when you start from the Drone / aerial tile — never just because photos have GPS, which phone photos have too. It switches camera solving to COLMAP / GLOMAP with SuperPoint + LightGlue (Object Capture, built for objects and rooms, ignores GPS and struggles with straight-down views), matching neighbours plus loop closures for photo surveys and frame by frame for video; turns on the sky and its learned skybox; and picks the High quality preset. Local colour correction and flat surfaces, which help aerial scenes most, are on by default anyway. Turn it off to go back to the standard settings.",
+              defaultValue: "On for drone footage", advanced: false),
     ]
 
     // MARK: Cameras

@@ -199,6 +199,14 @@ enum CLI {
             }
             sem.wait(); exit(code)
         }
+        if let src = value("--survey") {
+            // What a photo folder or video says about how it was shot: SplatStudio --survey <folder | video>
+            let u = URL(fileURLWithPath: src)
+            let s = VideoFrameExtractor.videoExtensions.contains(u.pathExtension.lowercased())
+                ? CaptureSurvey.video(u) : CaptureSurvey.photos(PhotoIngest.listImages(in: u, recursive: false))
+            print("sampled \(s.sampled), with location \(s.withLocation), drone: \(s.drone ?? "no")")
+            exit(0)
+        }
         if let src = value("--prepare") {
             // Headless dataset preparation: SplatStudio --prepare <photos dir | video | capture> --out <project dir>
             //   [--solver auto|objectcapture|capture|<splatprep feature id>] [--mask none|people|dynamic]

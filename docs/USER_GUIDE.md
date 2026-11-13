@@ -64,6 +64,7 @@ Choose **New** (⌘N), or drop a folder, a video or a capture onto the window. T
 | Source | Notes |
 |---|---|
 | **Photos folder** | Blurry and duplicate photos can be rejected. |
+| **Drone / aerial** | A folder of drone photos or a drone video, with the aerial settings below. Drone photos opened any other way are recognised too. |
 | **Video** | Frames per second or a target number of frames, and *Pick sharpest frame* (the sharpest frame in each window). |
 | **360° video / 360° photos** | Each equirectangular frame is cut into flat views (8 by default, 90° each). *Drop the floor view* skips the straight-down view showing the tripod or you. |
 | **Stereo footage** | Side-by-side, top/bottom, two files, Apple spatial video (MV-HEVC) or two video tracks. The baseline gives the scene metric scale; stereo depth is optional. |
@@ -92,9 +93,18 @@ Easy, every 8th in Advanced), which keeps some photos aside to measure quality h
 their scale and gravity. On a 649-frame bedroom scan it took 3.6 minutes instead of 28 for a full re-solve and gave
 +2.1 dB on held-out photos. If it can't run, the capture's own poses are used.
 
-**Drone photos with GPS:** learned camera solving checks the solved cameras against the photos' GPS. If they agree,
-the scene is put in metres with Z up and stray cameras are dropped; otherwise you get a warning. Cameras placed far
-off the camera path are dropped for any source.
+**Photo locations (GPS).** Phones and drones record where each photo was taken. With *Use photo locations* on (the
+default, shown when photos have locations), the imported copies keep only that location, and learned camera solving
+checks the solved cameras against it: if they agree, the scene is put in metres with Z up and stray cameras are
+dropped; otherwise you get a warning. Turn it off and the project's photos carry no location at all. Apple Object
+Capture doesn't use locations. Cameras placed far off the camera path are dropped for any source.
+
+**Drone footage.** Photos from a drone are recognised by the drone's own markers (the camera maker, DJI's flight and
+gimbal tags, DJI file names), never by GPS alone, so phone photos with locations are treated as ordinary photos. For
+drone footage, or anything started from the Drone / aerial tile, *Aerial settings* switch camera solving to COLMAP /
+GLOMAP with SuperPoint + LightGlue (GPS-checked, which needs the Models pack or a worker), turn on the sky, and pick the
+High quality preset. Turn the switch off to go back to the standard settings. Locations from a drone video's flight
+log (`.SRT`) aren't used yet.
 
 **Masks** mark pixels that training ignores:
 - *Remove people & pets — quick* (Apple Vision, built in).

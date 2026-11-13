@@ -22,6 +22,8 @@ final class AppModel {
     var newProjectSource: SourceDescription? = nil
     /// A project whose saved settings the New Project sheet opens with (Change Settings on the project page).
     var newProjectPrefill: URL? = nil
+    /// New Project was started from the Drone / aerial tile: use aerial settings whatever the photos say.
+    var newProjectAerial = false
     var showShortcuts = false
     var alert: AlertInfo? = nil
     struct AlertInfo: Identifiable { let id = UUID(); var title: String; var message: String }

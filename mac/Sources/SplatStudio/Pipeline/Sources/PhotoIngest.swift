@@ -17,6 +17,9 @@ struct PhotoIngestOptions: Codable, Hashable, Sendable {
     var duplicateHammingThreshold: Int = 2
     /// Also look into sub-folders.
     var recursive: Bool = false
+    /// Keep each photo's location (GPS, and a drone's height above take-off) in the imported copy, so camera solving
+    /// can check the solve against it and put the scene in metres. Off: imported photos carry no location at all.
+    var keepLocation: Bool = true
     /// Output encoding of the written images.
     var encoding: ImageUtil.Encoding = .jpeg
 
@@ -27,7 +30,7 @@ struct PhotoIngestOptions: Codable, Hashable, Sendable {
         maxImageSize = c(.maxImageSize, maxImageSize); rejectBlurry = c(.rejectBlurry, rejectBlurry)
         blurRelativeThreshold = c(.blurRelativeThreshold, blurRelativeThreshold); blurAbsoluteThreshold = c(.blurAbsoluteThreshold, blurAbsoluteThreshold)
         rejectDuplicates = c(.rejectDuplicates, rejectDuplicates); duplicateHammingThreshold = c(.duplicateHammingThreshold, duplicateHammingThreshold)
-        recursive = c(.recursive, recursive); encoding = c(.encoding, encoding)
+        recursive = c(.recursive, recursive); encoding = c(.encoding, encoding); keepLocation = c(.keepLocation, keepLocation)
     }
 }
 
@@ -69,7 +72,8 @@ enum PhotoIngest {
             do {
                 let img = try ImageUtil.load(src, maxSize: options.maxImageSize)
                 let name = String(format: "%06d.%@", i, ext)
-                try ImageUtil.write(img, to: imagesDir.appendingPathComponent(name), encoding: options.encoding)
+                try ImageUtil.write(img, to: imagesDir.appendingPathComponent(name), encoding: options.encoding,
+                                    location: options.keepLocation ? PhotoLocation.read(src) : nil)
                 var f = IngestedFrame(image: "images/\(name)", width: img.width, height: img.height)
                 f.sharpness = ImageMetrics.sharpness(img)
                 f.source = src.path

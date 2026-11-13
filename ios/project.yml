@@ -103,6 +103,7 @@ targets:
       # referenced by the above (image remapping / undistortion, option types of the video & 360 sources)
       - path: ../mac/Sources/SplatStudio/Pipeline/ImageRemapper.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/PhotoIngest.swift
+      - path: ../mac/Sources/SplatStudio/Pipeline/Sources/PhotoLocation.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/VideoFrames.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/Equirect360.swift
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoSources.swift

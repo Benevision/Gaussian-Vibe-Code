@@ -11,6 +11,11 @@ struct NewProjectSheet: View {
     @State private var source: SourceDescription?
     /// Reuse the stages an earlier run in the same project folder finished (when their settings match).
     @State private var reuseEarlier = true
+    /// What the photos / video say about how they were shot (locations, drone), read in the background.
+    @State private var survey: CaptureSurvey? = nil
+    /// Aerial settings applied (drone footage, or started from the Drone / aerial tile).
+    @State private var aerial = false
+    @State private var beforeAerial: (SolverKind, String, String, String, Bool, TrainingConfig.Preset)? = nil
     @State private var options = PrepOptions()
     @State private var step = 0
     @State private var projectName = ""
@@ -69,7 +74,8 @@ struct NewProjectSheet: View {
             if mode == .advanced { holdout = true }
             if case .captureBundle = source { solverKind = .fromCapture }
             ProcessingDevicePicker.applyRemembered(to: &options)
-            if let dir = model.newProjectPrefill { prefill(from: dir); model.newProjectPrefill = nil }
+            if let dir = model.newProjectPrefill { prefill(from: dir); model.newProjectPrefill = nil; model.newProjectAerial = false }
+            else { surveySource() }
             Task { await python.refresh() }
         }
     }
@@ -166,6 +172,7 @@ struct NewProjectSheet: View {
             }
         }
         .font(.callout)
+        if let sv = survey, sv.isDrone || aerial || sv.withLocation > 0 { locationPanel(sv) }
         if let s = source { sourceOptions(s) }
     }
 
@@ -582,6 +589,74 @@ struct NewProjectSheet: View {
         step = 1
     }
 
+    // MARK: drone footage and photo locations
+
+    /// Reads the source's metadata in the background; drone footage (or the Drone / aerial tile) applies the aerial
+    /// settings. Locations alone never do: phone photos have them too.
+    private func surveySource() {
+        let forced = model.newProjectAerial
+        model.newProjectAerial = false
+        guard let s = source else { survey = nil; return }
+        Task.detached(priority: .userInitiated) {
+            let sv: CaptureSurvey?
+            switch s {
+            case .photos(let folder): sv = CaptureSurvey.photos(PhotoIngest.listImages(in: folder, recursive: false))
+            case .photoFiles(let urls): sv = CaptureSurvey.photos(urls)
+            case .video(let u): sv = CaptureSurvey.video(u)
+            default: sv = nil
+            }
+            await MainActor.run {
+                guard source == s else { return }
+                survey = sv ?? (forced ? CaptureSurvey() : nil)
+                if forced || sv?.isDrone == true { setAerial(true) }
+            }
+        }
+    }
+
+    private func setAerial(_ on: Bool) {
+        if on, !aerial {
+            beforeAerial = (solverKind, featureModel, matching, mapper, options.masking.sky, model.training.preset)
+            solverKind = .learned; featureModel = "superpoint_lightglue"; mapper = "auto"
+            matching = isVideoSource ? "sequential" : "auto"     // video: frame by frame (loop closures mis-registered look-alike scenery)
+            options.masking.sky = true
+            if !model.training.customised { model.training.preset = .high }
+        } else if !on, aerial, let b = beforeAerial {
+            (solverKind, featureModel, matching, mapper, options.masking.sky) = (b.0, b.1, b.2, b.3, b.4)
+            if !model.training.customised { model.training.preset = b.5 }
+            beforeAerial = nil
+        }
+        aerial = on
+    }
+
+    @ViewBuilder private func locationPanel(_ sv: CaptureSurvey) -> some View {
+        PanelSection(title: sv.isDrone || aerial ? "Drone footage" : "Photo locations", systemImage: sv.isDrone || aerial ? "airplane" : "location") {
+            if sv.isDrone || aerial {
+                SettingRow(id: "source.aerial") {
+                    Toggle("", isOn: Binding(get: { aerial }, set: { setAerial($0) })).labelsHidden()
+                }
+                Text(sv.drone.map { "Recognised as drone footage (\($0))." } ?? "Started from the Drone / aerial tile.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if aerial, options.compute == .thisMac, !{ if case .ready = python.state { return true }; return false }() {
+                    Label("Learned camera solving needs the Models pack on this Mac (Models & Benchmarks), or choose a Linux worker as the processing device on the next page.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if case .video = source, sv.isDrone || aerial {
+                Text("Locations from a drone's flight log (.SRT) aren't used yet; the video's camera path is solved from the images.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if sv.withLocation > 0 {
+                SettingRow(id: "source.useLocation") { Toggle("", isOn: $options.photos.keepLocation).labelsHidden() }
+                Text("\(sv.withLocation) of the \(sv.sampled) photos checked have a location. "
+                     + (solverKind == .learned ? "Learned camera solving uses them to check the cameras and put the scene in metres."
+                        : "Only learned camera solving uses them (Camera solver on the next page); Object Capture ignores them."))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.callout)
+    }
+
     /// Per-source defaults, the same whichever way the source was chosen (welcome tiles, Open, drop, Change…):
     /// outdoor-capable sources find the sky (learned skybox); captures, COLMAP and Nerfstudio don't.
     static func applySourceDefaults(_ s: SourceDescription, to o: inout PrepOptions) {
@@ -594,6 +669,8 @@ struct NewProjectSheet: View {
         if p.runModal() == .OK, let u = p.url {
             source = make(u)
             Self.applySourceDefaults(source!, to: &options)
+            if aerial { setAerial(false) }
+            surveySource()
             if projectName.isEmpty { projectName = defaultName(source!) }
         }
     }

@@ -408,3 +408,29 @@ def test_maximum_preset_stores_photos_at_its_training_resolution():
     assert ProjectOptions(name="P", source_kind="photos", source="/x", preset="ultra", max_image_size=3200).with_storage_for_preset().max_image_size == 3200
     assert ProjectOptions(name="P", source_kind="photos", source="/x", preset="high").with_storage_for_preset().max_image_size == 1600
     assert ProjectOptions(name="P", source_kind="photos", source="/x", preset="ultra", auto_train=False).with_storage_for_preset().max_image_size == 1600
+
+
+def test_photo_import_keeps_only_the_location(tmp_path):
+    import numpy as np
+    from PIL import Image
+    from splatworker.studio import importers
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(2):
+        im = Image.fromarray(np.zeros((40, 60, 3), np.uint8))
+        ex = im.getexif()
+        ex[0x010F] = "DJI"     # camera maker: not copied
+        ex.get_ifd(0x8825).update({1: "N", 2: (51, 30, 0.0), 3: "E", 4: (0, 6, 0.0), 5: 0, 6: 99.0})
+        xmp = ('<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+               '<rdf:Description xmlns:drone-dji="http://www.dji.com/drone-dji/1.0/" drone-dji:RelativeAltitude="+30.50"/>'
+               '</rdf:RDF></x:xmpmeta>').encode()
+        im.save(src / f"{i}.jpg", exif=ex, xmp=xmp)
+    importers.import_photos(src, tmp_path / "ds", 1600, False)
+    out = Image.open(tmp_path / "ds" / "images" / "0.jpg")
+    gps = out.getexif().get_ifd(0x8825)
+    assert gps.get(1) == "N" and gps.get(6) == 99.0
+    assert 0x010F not in out.getexif()
+    assert b'RelativeAltitude="+30.50"' in (out.info.get("xmp") or b"")
+    importers.import_photos(src, tmp_path / "ds2", 1600, False, keep_location=False)
+    out = Image.open(tmp_path / "ds2" / "images" / "0.jpg")
+    assert not out.getexif().get_ifd(0x8825) and not out.info.get("xmp")

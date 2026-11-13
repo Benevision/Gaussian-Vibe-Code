@@ -36,8 +36,36 @@ def sharpness(gray: np.ndarray) -> float:
     return float(lap.var())
 
 
+def _location(im):
+    """(EXIF holding only the GPS block, XMP holding only DJI's height above take-off) of a photo, or Nones.
+    Imported copies keep where each photo was taken, and nothing else, so camera solving can check against GPS
+    and put the scene in metres (as the Mac's import does)."""
+    import re
+
+    from PIL import Image
+
+    try:
+        gps = dict(im.getexif().get_ifd(0x8825))
+    except Exception:
+        gps = {}
+    if not (gps.get(2) and gps.get(4)):
+        return None, None
+    ex = Image.Exif()
+    ex.get_ifd(0x8825).update(gps)
+    xmp = im.info.get("xmp") or b""
+    if isinstance(xmp, str):
+        xmp = xmp.encode()
+    m = re.search(rb'RelativeAltitude="([-+0-9.]+)"', xmp) or re.search(rb"RelativeAltitude>\s*([-+0-9.]+)\s*<", xmp)
+    out_xmp = None
+    if m:
+        out_xmp = ('<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+                   '<rdf:Description xmlns:drone-dji="http://www.dji.com/drone-dji/1.0/" drone-dji:RelativeAltitude="%s"/>'
+                   '</rdf:RDF></x:xmpmeta>' % m.group(1).decode()).encode()
+    return ex, out_xmp
+
+
 def import_photos(src: Path, dataset_dir: Path, max_size: int = 1600, blur_rejection: bool = True,
-                  blur_threshold: float = 0.35, progress: Progress = _noop) -> Dict:
+                  blur_threshold: float = 0.35, progress: Progress = _noop, keep_location: bool = True) -> Dict:
     """Copy (and downscale) photos into ``dataset_dir/images`` as JPEG/PNG; returns stats."""
     from PIL import Image, ImageOps
 
@@ -56,7 +84,9 @@ def import_photos(src: Path, dataset_dir: Path, max_size: int = 1600, blur_rejec
     written: List[Path] = []
     for k, f in enumerate(files):
         try:
-            im = ImageOps.exif_transpose(Image.open(f))
+            raw = Image.open(f)
+            loc = _location(raw) if keep_location else (None, None)
+            im = ImageOps.exif_transpose(raw)
         except Exception as e:
             progress(k / len(files), f"skipped {f.name}: {e}")
             continue
@@ -66,7 +96,15 @@ def import_photos(src: Path, dataset_dir: Path, max_size: int = 1600, blur_rejec
             im = im.resize((max(1, round(im.width * s)), max(1, round(im.height * s))), Image.LANCZOS)
         ext = ".png" if f.suffix.lower() == ".png" else ".jpg"
         dst = out / (f.stem + ext)
-        im.save(dst, quality=95) if ext == ".jpg" else im.save(dst)
+        if ext == ".jpg":
+            kw = {"quality": 95}
+            if loc[0] is not None:
+                kw["exif"] = loc[0]
+            if loc[1]:
+                kw["xmp"] = loc[1]
+            im.save(dst, **kw)
+        else:
+            im.save(dst)
         small = im.convert("L")
         small.thumbnail((512, 512))
         sharp[dst.name] = sharpness(np.asarray(small))

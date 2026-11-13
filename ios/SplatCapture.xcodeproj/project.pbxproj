@@ -17,6 +17,7 @@
 		2542C135BCA8426BBC647CE7 /* TrainKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A674FF21ED6DB0A0A24A1AE2 /* TrainKit.swift */; };
 		286D81C329180C0711754412 /* ZipReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B4A75A95EBB6C42023D39CE /* ZipReader.swift */; };
 		299B4D8EE2C8DF9B1BCEC1CE /* CaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF41F58A2BB1AA8A56C19F27 /* CaptureStore.swift */; };
+		2BFD4E2555DEE7CE5CB7B4BF /* PhotoLocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77ADE0588FE32C0299F98B66 /* PhotoLocation.swift */; };
 		3AD4ABCD1EFF242A29175670 /* CommonShaders.swift in Sources */ = {isa = PBXBuildFile; fileRef = C77BC5C83B6155013ADD0900 /* CommonShaders.swift */; };
 		3CEFF53BE29C024D9EBFEAC8 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEFFAFEA95589D94A7784FFB /* LibraryView.swift */; };
 		3FB2A71289BD05C802B36DE9 /* SystemBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97733CDC8C43C26BFCEC1D26 /* SystemBenchmark.swift */; };
@@ -126,6 +127,7 @@
 		6CB75762CC6A47897F47538C /* MetalTrainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalTrainer.swift; sourceTree = "<group>"; };
 		7230BB00608C7000385A1398 /* FrameProcessing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProcessing.swift; sourceTree = "<group>"; };
 		72840BEB6FA86C73DAEDF7EA /* ImageRemapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRemapper.swift; sourceTree = "<group>"; };
+		77ADE0588FE32C0299F98B66 /* PhotoLocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLocation.swift; sourceTree = "<group>"; };
 		7A2CE60DC8CED6FBC2677AB1 /* SplatCapture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SplatCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7AE6CA3FC42FE6EFDD3DC4D4 /* TrainingData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingData.swift; sourceTree = "<group>"; };
 		8204A8E6DA1B767A693F3DA6 /* ZipWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipWriter.swift; sourceTree = "<group>"; };
@@ -366,6 +368,7 @@
 			children = (
 				3C28CE971B1AD74C2DB12576 /* Equirect360.swift */,
 				3FC1A0B353FEE57A6947C3A0 /* PhotoIngest.swift */,
+				77ADE0588FE32C0299F98B66 /* PhotoLocation.swift */,
 				D32202F0594CCEDC23FC7894 /* StereoDepth.swift */,
 				C2646E8D676FB956F189F424 /* StereoSources.swift */,
 				331362718FD1B1A67C345601 /* VideoFrames.swift */,
@@ -616,6 +619,7 @@
 				D08E3594660A7ECF3FC63AFE /* PLY.swift in Sources */,
 				A7089EEC04D88A8F7E8FD8AD /* PauseController.swift in Sources */,
 				4F3E5083E20330179B9CEAC5 /* PhotoIngest.swift in Sources */,
+				2BFD4E2555DEE7CE5CB7B4BF /* PhotoLocation.swift in Sources */,
 				6341FE074E7D263DB8A7DCAB /* PipelineCommon.swift in Sources */,
 				91FEB51E56630A95773FD427 /* PoseCommon.swift in Sources */,
 				433E875D28817FCB93763B10 /* RemoteStore.swift in Sources */,

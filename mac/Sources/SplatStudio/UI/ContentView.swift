@@ -259,20 +259,21 @@ struct WelcomeView: View {
                     HStack(spacing: 12) {
                         ActionCard(title: "Photos", subtitle: "A folder of overlapping photos of an object or place.", systemImage: "photo.stack") { pick(.photos) }
                         ActionCard(title: "Video", subtitle: "Walk slowly around the subject. Frames are picked for sharpness.", systemImage: "video") { pick(.video) }
-                        ActionCard(title: "360° video", subtitle: "Equirectangular footage from Insta360, GoPro Max, Theta…", systemImage: "globe") { pick(.video360) }
+                        ActionCard(title: "Drone / aerial", subtitle: "Drone photos or video. Uses GPS to check the cameras and set metric scale.", systemImage: "airplane", tint: .cyan) { pick(.drone) }
                     }
                     HStack(spacing: 12) {
+                        ActionCard(title: "360° video", subtitle: "Equirectangular footage from Insta360, GoPro Max, Theta…", systemImage: "globe") { pick(.video360) }
                         ActionCard(title: "iPhone LiDAR", subtitle: "A SplatWork Capture recording: posed frames + depth. Fastest, metric scale.", systemImage: "iphone.gen3", tint: .green) { pick(.capture) }
                         ActionCard(title: "Stereo footage", subtitle: "Side-by-side, top-bottom, spatial video or Arcturus Vision recordings.", systemImage: "eyeglasses", tint: .purple) { pick(.stereo) }
-                        ActionCard(title: "COLMAP / Nerfstudio", subtitle: "Existing posed datasets from other tools.", systemImage: "camera.metering.matrix", tint: .orange) { pick(.posed) }
                     }
                 }
                 .frame(width: 624, alignment: .leading)
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("View").font(.headline).foregroundStyle(.secondary)
+                    Text("Open").font(.headline).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         ActionCard(title: "Open splat", subtitle: ".ply, .spz or .splat from any 3DGS tool.", systemImage: "cube.transparent", tint: .teal) { pick(.splat) }
                         ActionCard(title: "Open dataset", subtitle: "A prepared SplatWork dataset to (re)train.", systemImage: "tray.full", tint: .teal) { pick(.dataset) }
+                        ActionCard(title: "COLMAP / Nerfstudio", subtitle: "Existing posed datasets from other tools.", systemImage: "camera.metering.matrix", tint: .orange) { pick(.posed) }
                     }
                 }
                 .frame(width: 624, alignment: .leading)
@@ -284,11 +285,11 @@ struct WelcomeView: View {
         .background(.background)
     }
 
-    enum Kind { case photos, video, video360, capture, stereo, posed, splat, dataset }
+    enum Kind { case photos, video, video360, capture, stereo, posed, splat, dataset, drone }
 
     private func pick(_ k: Kind) {
         let p = NSOpenPanel()
-        p.canChooseDirectories = [.photos, .capture, .posed, .dataset].contains(k)
+        p.canChooseDirectories = [.photos, .capture, .posed, .dataset, .drone].contains(k)
         p.canChooseFiles = k != .photos && k != .dataset
         p.allowsMultipleSelection = k == .stereo
         switch k {
@@ -296,7 +297,8 @@ struct WelcomeView: View {
         case .splat: p.allowedContentTypes = AppModel.openableTypes
         default: break
         }
-        p.message = k == .stereo ? "Choose one stereo video, or the left and right videos" : ""
+        p.message = k == .stereo ? "Choose one stereo video, or the left and right videos"
+            : k == .drone ? "Choose a folder of drone photos, or a drone video" : ""
         guard p.runModal() == .OK, let u = p.url else { return }
         switch k {
         case .splat, .dataset: model.open(u)
@@ -306,6 +308,11 @@ struct WelcomeView: View {
         case .capture: model.newProjectSource = .captureBundle(u); model.showNewProject = true
         case .stereo: model.newProjectSource = .stereoVideo(left: p.urls[0], right: p.urls.count > 1 ? p.urls[1] : nil); model.showNewProject = true
         case .posed: model.newProjectSource = SourceDescription.guess(u) ?? .colmap(project: u, images: nil); model.showNewProject = true
+        case .drone:
+            let isVideo = VideoFrameExtractor.videoExtensions.contains(u.pathExtension.lowercased())
+            model.newProjectSource = isVideo ? .video(u) : .photos(folder: u)
+            model.newProjectAerial = true
+            model.showNewProject = true
         }
     }
 }
