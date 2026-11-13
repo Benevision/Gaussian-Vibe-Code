@@ -14,7 +14,19 @@ Three steps, so gsplat can run inside the Flatpak's GPU runtime while the Vulkan
 ``all`` does the three in one go when one Python has gsplat and the binary can run:
     python compare_gsplat.py all --dir D --vk-train build/splatwork-vk-train
 
-On the RTX 4080 PC (fish shell), see docs/dev/VULKAN_TRAINER.md for the exact commands.
+On the RTX 4080 PC (CachyOS, fish shell), from a checkout of the repository:
+
+    sudo pacman -S --needed cmake ninja gcc glslang vulkan-headers vulkan-icd-loader
+    cmake -S linux/vktrain -B ~/vkbuild -G Ninja && cmake --build ~/vkbuild
+    ~/vkbuild/vktrain-selftest                       # kernel checks on the 4080: native atomics and CAS
+    mkdir -p ~/Downloads/vkcompare && cp linux/vktrain/compare_gsplat.py ~/Downloads/vkcompare/
+    flatpak run --command=sh com.example.SplatWorker -c 'cd ~/Downloads/vkcompare && ~/.var/app/com.example.SplatWorker/data/splatworker/venv/bin/python compare_gsplat.py make-scene --dir .'
+    ~/vkbuild/splatwork-vk-train --dump ~/Downloads/vkcompare/scene.bin ~/Downloads/vkcompare/vk_out.bin
+    ~/vkbuild/splatwork-vk-train --dump ~/Downloads/vkcompare/scene.bin ~/Downloads/vkcompare/vk_out_cas.bin --atomics cas
+    flatpak run --command=sh com.example.SplatWorker -c 'cd ~/Downloads/vkcompare && ~/.var/app/com.example.SplatWorker/data/splatworker/venv/bin/python compare_gsplat.py compare --dir .'
+
+(~/Downloads is visible inside the Flatpak; the GPU runtime's venv has torch + gsplat. Repeat with
+``make-scene --dir . --antialiased`` for gsplat's antialiased mode.)
 ``compare --no-gsplat`` only checks the Vulkan output against the double-precision CPU reference image that
 the dump also contains (used by linux/tests/test_vktrain.py).
 

@@ -22,6 +22,7 @@ services `_splatworker._tcp` / `_splatcapture._tcp`, the Mac module and binary `
 |---|---|---|
 | Linux worker + studio core | `cd linux && python -m pytest -q tests` (no GPU needed; fake backends) | 304 tests: API, queue, pause/resume/shutdown, processing, datasets, devices, block training, GUI logic, formats, photo import |
 | splatprep | `cd tools && python -m pytest -q tests` (needs opencv-python-headless, scipy) | 107 tests |
+| Vulkan trainer kernels (`linux/vktrain`, stage 1) | `vktrain-selftest` on Mesa lavapipe in `linux/vktrain/ci/Dockerfile` (CI: `vulkan-trainer.yml`; `tests/test_vktrain.py` when glslang + a Vulkan device exist) | every kernel against a double-precision CPU reference and finite differences; compared with gsplat on the RTX 4080 by hand (`compare_gsplat.py`) |
 | Linux GTK interface | `linux/scripts/gui_smoke.py` under Xvfb in a Debian container with Mesa (OpenGL via llvmpipe): screenshots of every page | layout and wiring, not real GPUs |
 | Mac app | `swift build -c release`; headless CLI: `--prepare`, `--train [--blocks N]`, `--eval`, `--convert`, `--render`, `--survey`; UI snapshots with `SPLAT_UI_SNAPSHOTS=<dir>` (plus `SPLAT_UI_PROJECT`, `SPLAT_UI_DRONE`) | end to end on real photos; the trainer's gradients are checked |
 | iPhone app | `xcodebuild` for the simulator and for devices (Release) | builds; not run on a phone for 1.2 |
