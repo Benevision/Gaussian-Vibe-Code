@@ -82,7 +82,36 @@ def autostart_file(config_home: Optional[Path] = None) -> Path:
     return Path(base) / "autostart" / f"{APP_ID}.desktop"
 
 
+WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+WINDOWS_RUN_VALUE = "SplatWork"
+
+
+def set_windows_run_key(enabled: bool, exec_argv: List[str], winreg=None) -> str:
+    """Windows: start at sign-in through ``HKCU\\...\\Run`` (no admin needed). The installed app's launcher
+    (``SPLATWORK_LAUNCHER``, set by SplatWork.exe) replaces the Python command line when known."""
+    if winreg is None:
+        import winreg  # noqa: PLC0415 — Windows only
+    launcher = os.environ.get("SPLATWORK_LAUNCHER")
+    if launcher:
+        exec_argv = [launcher, *[a for a in exec_argv if a.startswith("--")]]
+    import subprocess
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY) as k:
+        if enabled:
+            winreg.SetValueEx(k, WINDOWS_RUN_VALUE, 0, winreg.REG_SZ, subprocess.list2cmdline(exec_argv))
+        else:
+            try:
+                winreg.DeleteValue(k, WINDOWS_RUN_VALUE)
+            except FileNotFoundError:
+                pass
+    return "HKCU\\" + WINDOWS_RUN_KEY
+
+
 def set_autostart_file(enabled: bool, exec_argv: List[str], config_home: Optional[Path] = None) -> Path:
+    import sys
+
+    if sys.platform == "win32" and config_home is None:
+        return Path(set_windows_run_key(enabled, exec_argv))
     path = autostart_file(config_home)
     if enabled:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -38,3 +38,43 @@ jobs:
         run: python -m pytest -q tests -p no:cacheprovider -rs
       - name: Worker smoke test (start, /v1/info, mDNS, stop)
         run: python windows/scripts/worker_smoke.py
+
+  # Stage B: the GTK 4 studio from MSYS2 UCRT64 (gtk4, libadwaita, PyGObject; Mesa llvmpipe as software OpenGL).
+  studio:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-python-numpy
+            mingw-w64-ucrt-x86_64-python-pillow
+            mingw-w64-ucrt-x86_64-python-pydantic
+            mingw-w64-ucrt-x86_64-python-scipy
+            mingw-w64-ucrt-x86_64-mesa
+      - name: Install Python packages
+        run: python -m pip install --break-system-packages fastapi uvicorn zeroconf httpx qrcode
+      - name: Versions
+        run: |
+          python -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw; print('GTK', Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version(), 'Adw', Adw.get_major_version(), Adw.get_minor_version())"
+          ls /ucrt64/bin | grep -i -E "opengl32|gallium|libEGL" || true
+      - name: Studio smoke test
+        env:
+          GALLIUM_DRIVER: llvmpipe
+        run: python windows/scripts/studio_smoke.py --out windows/smoke-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-screenshots
+          path: windows/smoke-out

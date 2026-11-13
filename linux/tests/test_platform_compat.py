@@ -111,3 +111,38 @@ def test_dxgi_adapters_runs():
     adapters = scan()   # the CI runner has only Microsoft's software adapter, which is skipped
     for a in adapters:
         assert a.vendor in ("nvidia", "amd", "intel", "other") and a.name
+
+
+def test_windows_run_key_with_fake_registry(monkeypatch):
+    from splatworker.gui import autostart
+
+    store = {}
+
+    class Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeWinreg:
+        HKEY_CURRENT_USER, REG_SZ = 1, 1
+
+        def CreateKey(self, root, path):
+            assert path == autostart.WINDOWS_RUN_KEY
+            return Key()
+
+        def SetValueEx(self, k, name, _r, _t, value):
+            store[name] = value
+
+        def DeleteValue(self, k, name):
+            if name not in store:
+                raise FileNotFoundError(name)
+            del store[name]
+
+    monkeypatch.setenv("SPLATWORK_LAUNCHER", r"C:\Program Files\SplatWork\SplatWork.exe")
+    autostart.set_windows_run_key(True, ["python", "-m", "splatworker.gui.launcher", "--background"], FakeWinreg())
+    assert store["SplatWork"] == r'"C:\Program Files\SplatWork\SplatWork.exe" --background'
+    autostart.set_windows_run_key(False, [], FakeWinreg())
+    autostart.set_windows_run_key(False, [], FakeWinreg())   # already off
+    assert store == {}
