@@ -141,14 +141,17 @@ Choose the **Home video** tile (or *Change… → Home video*) and pick the digi
 file first (a minute or two for a long tape) and lists its **clips**. Clips are the shots between scene cuts. Each
 clip has a picture and a verdict:
 
-- **Good: the camera moves.** These clips are ticked. The camera travels, so there is depth to recover.
+- **Good: the camera moves.** The camera travels, so there is depth to recover. The best of these is marked
+  *best* and is ticked.
 - **Only turns: little depth.** The camera pans from one spot. You can tick these, but they rarely make a splat on
   their own.
-- **Camera hardly moves**, **Mostly blurred.** Untick these unless nothing else shows the place.
+- **Camera hardly moves**, **Mostly blurred**, **Mostly moving things** (people close up, water, a car). These
+  rarely give a usable scene.
 - Very short stretches and blank (blue or black) screens aren't listed.
 
-Clips that show the same place are joined into one scene. Clips that don't connect are left out of it. To make a
-splat of one of those, create another project with only that clip ticked.
+One clip is the default because it solves in minutes and reliably. To join clips, tick other clips **of the same
+place**. A ticked clip that the solve can't place with the others is left out, and the log says why. For a different
+place on the same tape, create another project and tick that clip.
 
 What happens to the frames:
 - **Picked frames.** Frames are picked where the camera has moved on and the picture is sharpest, not at a fixed

@@ -73,74 +73,146 @@ where it walks.
 
 The sample frames that went with this study were shared outside the repo, and none are committed.
 
-## 2. Plan
+## 2. As built
 
-The work lives mostly in **splatprep**, so the Mac app (which already runs splatprep for learned SfM) and the Linux
-worker share it. This follows ARCHITECTURE "Extension points": a restoration stage between ingest and masks that only
-rewrites `FrameSet` images, plus per-clip cameras.
+The work lives in splatprep (`tools/splatprep/vhs.py`), so the Mac (local splatprep) and Linux workers share it:
+`task: frames` with a `vhs` object (PROTOCOL.md). The Mac's source is `SourceDescription.homeVideo`, and the Linux
+studio's source kind is `homevideo`.
 
-### 2.1 Fix first, for every video: square pixels
+### 2.1 Square pixels, for every video
 
-Apply the stream's sample aspect ratio when extracting frames in `frames.py` and in the Mac `VideoFrameReader`
-(resample to square pixels, keeping the height). This is a small, separate fix that also helps the plain video path,
-so the comparison in §3 runs both with and without it.
+`frames.py` (`pixel_aspect`, `square_pixels`) and the Mac's `VideoFrameReader` (`pixelAspect`, applied in `render`)
+resample stored widths to square pixels and keep the scan lines. This isn't specific to VHS: the plain video path
+on the test clip placed **73 of 73** cameras with square pixels against **64 of 73** stretched (§3).
 
-### 2.2 `splatprep vhs` (new module `tools/splatprep/vhs/`)
+### 2.2 Analysis (one pass, ~95 s for the 7.5 min main clip)
 
-1. **Analyse** (`task: vhsAnalyse`, fast, low-res decode): SAR, true cadence (duplicate runs), per-frame combing score,
-   borders and head-switching band, no-signal frames, scene cuts → clips, per-clip sharpness, motion and parallax
-   estimates, zoom estimate, and a usable/unusable verdict with a reason in plain words. Output is `vhs.json`, which
-   the New Project sheet shows.
-2. **Clean up** each kept frame:
-   - drop duplicates and no-signal frames;
-   - field-aware deinterlace only for combed frames (bwdif-style: rebuild the missing field from the field itself
-     plus its temporal neighbours);
-   - crop borders and the head-switching band;
-   - resample to square pixels at the measured real detail, so no upscaling;
-   - light temporal denoise (3–5 aligned frames) and deblocking;
-   - per-clip colour normalisation (white balance and levels against the clip median);
-   - mask static overlays such as date stamps when detected.
-3. **Select frames per clip**: windowed sharpest frame, a minimum motion between picks (optical flow), and skipping
-   frames whose motion is pure rotation relative to the last pick, so the picks carry parallax. Close-ups that fill
-   the frame with a moving subject are skipped.
-4. **Solve per clip**: one camera per clip (SIMPLE_RADIAL, square pixels after 2.2), or a focal length per frame when
-   zoom is detected. Learned features at native resolution, with a higher keypoint budget for small images. Clips
-   that fail or have no parallax get a reason.
-5. **Merge**: register the solved clips against each other (retrieval pairs across clips → one mapper run with a
-   camera per clip). Clips that join become one project. The rest become separate projects or are left out; the user
-   chooses.
+Every frame is decoded at a quarter of the width and full height, which is enough for combing and borders. Each
+frame is measured for:
+- **repeats:** mean difference to the previous frame < 0.6 gray levels;
+- **no signal:** a uniform frame;
+- **comb score:** adjacent-line over same-field-line difference. Clean frames measure 0.5–0.6; above 0.7 counts as
+  combed or tape-damaged. None of the three samples has real interlacing left, only damaged frames;
+- **tracking-dropout streaks:** thin runs brighter or darker than the lines two above and two below;
+- **sharpness:** Laplacian variance on the central 80 %;
+- **colour statistics.**
 
-### 2.3 Training defaults for VHS projects
+KLT tracks on a 320-px thumbnail give:
+- **camera travel:** the median feature motion;
+- **zoom:** the homography scale over ~0.5 s, counted only where there is no parallax;
+- **parallax:** the share of tracks that fit the epipolar geometry but not a homography;
+- **rigidity:** the share of tracks that fit one rigid motion.
 
-- per-image appearance correction on;
-- SH degree 1 (tape colour can't support view-dependent colour, and higher bands fit noise);
-- transient masking on (people and the dog), plus people masks from the existing masker where available;
-- sky and water masks on;
-- a lower resolution schedule to match the real detail.
+The per-frame data is turned into clips and properties:
+- **Borders and the head-switching band:** from time-averaged column and row profiles. The main clip crops
+  21 / 13 px at the sides and 19 rows at the bottom.
+- **Cuts:** a jump well above the recent frame-to-frame change. Glitch bursts shorter than 1 s fold into one short
+  clip.
+- **Burnt-in overlays:** static, edgy pixels whose surroundings change.
+- **Verdicts:** `good`, `rotationOnly` (parallax < 10 %), `static`, `blurry`, `moving` (rigidity < 55 %: people
+  close up, water), `short` and `noSignal`.
+- **Recommended clip:** the `good` clip with the best depth × length × sharpness × rigidity².
+- **Cache:** the per-frame data is kept in `vhs-analysis.npz`, so finding the clips and preparing the frames decode
+  the file once.
 
-All of these are existing settings (`train.appearanceCorrection`, `train.shDegree`, `train.transientMasking`, …), so
-VHS is a preset, not new trainer code.
+### 2.3 Frames
 
-### 2.4 Interface
+- **Picking:** per clip, a new frame each time the camera has moved a step, or 1.5 s have passed with some movement;
+  within each stretch the sharpest frame wins. Sharpness counts only up to twice the clip median, because tearing
+  scores as "sharp". The step adapts to the frame budget, which is shared by camera travel.
+- **Clean-up order:**
+  1. rebuild combed frames from one field;
+  2. inpaint dropout streaks;
+  3. crop;
+  4. resample to square pixels at ≤ 576 lines (the main clip gives 768 × 576);
+  5. motion-compensated temporal denoise: two neighbours each side, aligned by a homography and blended where they
+     agree, so moving people don't ghost;
+  6. one gray-world + levels transform per clip (gains within ±20 %, stretch ≤ 1.15×).
+- **Frame metadata:** each frame carries `clip` and a `cameraGroup`: one per clip, plus a new group each time the lens
+  has zoomed more than ~8 %.
 
-- A "Home video (VHS, old tapes)" tile on the Mac start page and the same entry in the Linux studio.
-- In the New Project sheet, the detected clips: thumbnail, length, verdict ("good: lots of movement", "too short",
-  "only turning, no depth", "mostly close-ups") and a tick box. A choice for joining clips into one project or making
-  one project per clip.
+### 2.4 Cameras: what changed after measuring
 
-### 2.5 Optional learned restoration
+The plan was a camera per clip and joining clips that overlap. One joint solve of all ten `good` clips of the main
+clip went like this:
+- 561 frames, 58 min.
+- It placed 526 frames, but stacked three clips of the overcast beach onto one spot, near a fourth clip of hands in
+  water.
+- One zoom group came out with a 2° field of view.
+- Clip 13 alone solves cleanly in 4 min.
 
-Upscaling and restoration models (Real-ESRGAN-style) are kept out of the default path. The real detail is ~480×576,
-and inventing detail per frame gives inconsistent texture across views, which hurts multi-view fitting. If tried, it
-goes in the Models pack as an optional model and is measured (§3) before it's offered.
+So now:
+- **One clip by default:** the project uses the recommended clip. You tick more clips of the same place to join them.
+- **Wrong joins are left out:** with several clips, splatprep's `check_clips` (sfm `clipTravel`) leaves out a clip
+  whose solved cameras sit on one spot although the analysis saw the camera travel, or that got an impossible zoom.
+  On the joint solve it leaves out exactly the three stacked clips and the 2° group.
+- **Solver choice:** a single clip with one lens setting goes to **Object Capture** on the Mac, which did best (§3).
+  Several clips or zoom groups go to splatprep (SuperPoint + LightGlue), which takes a camera per group.
 
-## 3. How it will be measured
+### 2.5 Training defaults
 
-On the main clip's best clips, with the Mac CLI:
+`HomeVideoIngest.adjustTraining` on the Mac and `ProjectOptions.train_config` in the Linux studio set:
+- SH degree ≤ 1;
+- transient masking on;
+- training size ≤ 1024 px.
 
-- **Plain**: today's video path (`--prepare` on the clip's time range) vs **VHS**: the new path on the same range.
-- Report cameras registered / frames offered, held-out PSNR (`--eval`), and renders (`--render`) from a few training
-  views and one novel view.
-- Report clips that can't be solved and why.
-- splatprep unit tests on synthetic video: a known SAR, injected 3:1 duplicates, combed frames, black borders, a
-  bottom band, blue-screen frames, a burnt-in date stamp and cuts. The Linux suite keeps passing.
+These apply unless the user customised the settings. Accuracy is the same as with the default settings (§3), but
+people and the dog are left out instead of ghosting.
+
+### 2.6 Not done, and why
+
+- **Learned upscaling or restoration** (Real-ESRGAN and the like): not used. The frames hold ~768 × 576 of real
+  detail. Upscaling invents texture per frame that doesn't agree between views, and the denoise above already uses
+  the real extra information (neighbouring frames). It could be an optional Models-pack step later, if a
+  measurement shows a gain.
+- **Linux clip list:** the Linux studio takes clip numbers and lists the clips in the project log. The Mac's list with
+  pictures isn't mirrored yet.
+- **Deinterlacing** is tested on synthetic combing only: none of the samples has interlacing left.
+
+## 3. Results
+
+All runs on the Mac CLI (M-series, the Balanced preset, 15k steps). Every 8th camera, in time order, was held out
+of training and scored (`--eval`). Each path's held-out photos are its own frames, so the numbers compare
+reconstruction quality per path, not identical images. The held-out photos contain the people, and the VHS
+training default leaves people out, so that row is penalised where they stand.
+
+### Clip 13 of the main clip (overcast beach with boulders, 384.7–421.2 s, cut out losslessly)
+
+| Path | Frames | Cameras placed | Solve | Held-out PSNR |
+|---|---|---|---|---|
+| Plain video, before this work (stretched pixels, Object Capture) | 73 | 64 | 21 s | 18.55 dB |
+| Plain video, square pixels (Object Capture) | 73 | 73 | 18 s | 19.09 dB |
+| Home video, learned SfM (per-clip camera) | 75 | 72 | 4 min | 18.89 dB (one edge view 11.8) |
+| Home video, learned SfM, default training settings | 75 | 72 | 4 min | 18.87 dB |
+| **Home video, Object Capture (now the default for one clip)** | 75 | 72 | 31 s | **19.56 dB** |
+
+The renders from a held-out camera matter more here than the PSNR:
+- **Plain path:** sand blotches where people stood.
+- **Home video path:** clean sand and rocks, with the people and the dog gone.
+
+### Clip 6 of the main clip (open beach under the dunes, 239.0–308.4 s): the default flow
+
+This is what a user gets: the whole 7.5 min file opened as home video with nothing changed. The analysis
+recommends clip 6. It took 150 frames in two zoom groups, so the solve was learned SfM. The plain paths read a
+lossless cut of the same clip.
+
+| Path | Frames | Cameras placed | Prepare | Held-out PSNR |
+|---|---|---|---|---|
+| Plain video, before this work (stretched pixels, Object Capture) | 139 | — | — | **fails**: Object Capture error 6, twice |
+| Plain video, square pixels (Object Capture) | 139 | 121 | 27 s | 19.36 dB |
+| **Home video (default)** | 150 | 122 (18 off the camera path left out) | 12 min 20 s, incl. the 95 s analysis | **20.57 dB** |
+
+Training took 7.8 min for home video and 13.9 min for plain (smaller frames). In held-out renders, the plain splat
+has ghost people and a smeared dog where the family played; the home-video splat shows the clean beach, dunes and
+sky. This is the main clip's usable splat.
+
+### What can't be solved
+
+- **The joint solve of all ten clips:** see §2.4.
+- **Clip 2 (71.9–139.4 s):** hands and towels in shallow water, very shaky. It is now `moving` (rigidity 52 %), and
+  it was the top-ranked clip before rigidity was added.
+- **The second sample (garden and beach pan):** the camera mostly turns. The garden walk-up (0.4–34.7 s) is `good`
+  with parallax 17 %; the pans are `rotationOnly`, and the last 15 s are a blue screen.
+- **The third sample (field with car):** the camera pans and zooms from the edge of the field after a moving car. The
+  analysis rates most clips `good` (parallax 27–37 %), but much of that parallax is the car, and every long clip
+  zooms. It is not measured here; expect the fixed scenery (trees, fence) at best.
