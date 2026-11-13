@@ -66,6 +66,10 @@ def test_throughput_table():
     assert D.estimate_throughput([{"name": "Apple M4 Pro"}]) == 1
     assert D.estimate_throughput([{"name": "Mystery GPU", "memoryMB": 24000}]) == 3.0
     assert D.estimate_throughput([]) == 1.0
+    assert D.estimate_throughput([{"name": "AMD Radeon RX 7900 XTX"}]) == 3.5
+    assert D.estimate_throughput([{"name": "AMD Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M"}]) == 3.5
+    assert D.estimate_throughput([{"name": "Intel Arc A770"}]) == 1.4     # not the CUDA "A10"
+    assert D.estimate_throughput([{"name": "AMD Instinct MI300X"}]) == 7
 
 
 def _cams(n, w=1920, h=1440):

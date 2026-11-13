@@ -83,8 +83,21 @@ struct ComputeScheduler: Sendable {
                                          ("A18 Pro", 0.22), ("A18", 0.18), ("A17 Pro", 0.18)]
         // Apple chip names first (an "Apple A18 Pro" must not match the CUDA "A10"/"A100" entries)
         let apple = table.filter { ["M4", "M3", "M2", "A18", "A17"].contains(where: $0.0.hasPrefix) }
+        // AMD / Intel GPUs (SplatWork for Linux reports them, docs/dev/GPU_SUPPORT.md): unmeasured guesses from
+        // their compute throughput; no AMD / Intel trainer exists yet, so they only matter once such a worker
+        // offers "train", and a benchmark replaces them. Checked before the NVIDIA table ("Arc A770" vs "A10"),
+        // longest names first.
+        let amdIntel: [(String, Double)] = [("MI300X", 7), ("MI250X", 4), ("MI210", 2.5), ("W7900", 3.5), ("W7800", 2.8),
+                                            ("7900 XTX", 3.5), ("7900 XT", 3), ("7900 GRE", 2.6), ("9070 XT", 3.2), ("9070", 2.7),
+                                            ("7800 XT", 2.2), ("7700 XT", 1.8), ("6950 XT", 2.3), ("6900 XT", 2.2), ("6800 XT", 2),
+                                            ("Max 1550", 4), ("B580", 1.5), ("B570", 1.3), ("A770", 1.4), ("A750", 1.2), ("A580", 1)]
+        let amdIntelMarkers = ["AMD", "Radeon", "Instinct", "Intel", "Arc "]
         let s = gpus.map { g -> Double in
             if g.name.hasPrefix("Apple"), let hit = apple.first(where: { g.name.localizedCaseInsensitiveContains($0.0) }) { return hit.1 }
+            if amdIntelMarkers.contains(where: { g.name.localizedCaseInsensitiveContains($0) }) {
+                if let hit = amdIntel.first(where: { g.name.localizedCaseInsensitiveContains($0.0) }) { return hit.1 }
+                return max(0.5, Double(g.memoryMB ?? 8000) / 8000)
+            }
             if let hit = table.first(where: { g.name.localizedCaseInsensitiveContains($0.0) }) { return hit.1 }
             return max(0.5, Double(g.memoryMB ?? 8000) / 8000)
         }.reduce(0, +)

@@ -245,6 +245,14 @@ _SPEED = [("H200", 9), ("H100", 8), ("B200", 10), ("5090", 6), ("4090", 5), ("A1
           ("M4 Max", 2), ("M4 Pro", 1), ("M3 Max", 1.7), ("M3 Pro", 0.8), ("M2 Max", 1.4),
           ("A18 Pro", 0.22), ("A18", 0.18), ("A17 Pro", 0.18)]
 _APPLE = [e for e in _SPEED if e[0].startswith(("M4", "M3", "M2", "A18", "A17"))]
+# AMD / Intel (ComputeScheduler.estimateThroughput): unmeasured guesses from their compute throughput relative to
+# the NVIDIA entries — no AMD / Intel trainer exists yet (docs/dev/GPU_SUPPORT.md), so these only matter once a
+# worker on one of them offers "train"; a benchmark replaces them. Checked before the NVIDIA table, longest first.
+_AMD_INTEL = [("MI300X", 7), ("MI250X", 4), ("MI210", 2.5), ("W7900", 3.5), ("W7800", 2.8),
+              ("7900 XTX", 3.5), ("7900 XT", 3), ("7900 GRE", 2.6), ("9070 XT", 3.2), ("9070", 2.7),
+              ("7800 XT", 2.2), ("7700 XT", 1.8), ("6950 XT", 2.3), ("6900 XT", 2.2), ("6800 XT", 2),
+              ("Max 1550", 4), ("B580", 1.5), ("B570", 1.3), ("A770", 1.4), ("A750", 1.2), ("A580", 1)]
+_AMD_INTEL_MARKERS = ("amd", "radeon", "instinct", "intel", "arc ")
 
 
 def estimate_throughput(gpus: Sequence[Dict[str, Any]]) -> float:
@@ -255,6 +263,8 @@ def estimate_throughput(gpus: Sequence[Dict[str, Any]]) -> float:
         hit = None
         if name.startswith("Apple"):          # "Apple A18 Pro" must not match the CUDA "A10"
             hit = next((s for n, s in _APPLE if n.lower() in low), None)
+        elif any(m in low for m in _AMD_INTEL_MARKERS):   # "Arc A770" must not match an NVIDIA "A10"-style name
+            hit = next((s for n, s in _AMD_INTEL if n.lower() in low), None)
         if hit is None:
             hit = next((s for n, s in _SPEED if n.lower() in low), None)
         if hit is None:
