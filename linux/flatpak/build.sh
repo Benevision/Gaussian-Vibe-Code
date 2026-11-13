@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build SplatWork Node with flatpak-builder and install it for the current user.
+# Build SplatWork for Linux with flatpak-builder and install it for the current user.
 #
 #   ./build.sh                 build + install (user installation)
 #   ./build.sh --run           ... and start it
@@ -49,7 +49,7 @@ cd "$HERE"
 
 cat <<MSG
 
-Installed. Start it from the app grid ("SplatWork Node") or with:
+Installed. Start it from the app grid ("SplatWork for Linux") or with:
   flatpak run $APP_ID                # desktop app
   flatpak run $APP_ID --headless     # server only (uses the app's settings)
 MSG

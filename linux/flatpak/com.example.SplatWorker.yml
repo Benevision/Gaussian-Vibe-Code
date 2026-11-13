@@ -1,4 +1,4 @@
-# SplatWork Node (GTK 4 + libadwaita, OpenGL viewer and studio) with the CUDA training server.
+# SplatWork (GTK 4 + libadwaita, OpenGL viewer and studio) with the CUDA training server.
 #
 #   ./build.sh          build and install for the current user
 #   ./make-bundle.sh    single-file SplatWorker-<version>-x86_64.flatpak for sharing

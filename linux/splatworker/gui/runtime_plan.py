@@ -218,7 +218,7 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
             blocking=(f"{too_new[0].name} (compute capability {too_new[0].compute_capability[0]}."
                       f"{too_new[0].compute_capability[1]}) needs PyTorch 2.7 or newer, for which no "
                       "prebuilt gsplat exists. Training on this GPU is not possible inside the Flatpak "
-                      "yet. Install SplatWork Node natively with linux/install.sh instead (it can compile "
+                      "yet. Install SplatWork natively with linux/install.sh instead (it can compile "
                       "gsplat with the CUDA toolkit)."))
     if too_new:
         warnings.append("Some GPUs (" + ", ".join(g.name for g in too_new) + ") are too new for this "
@@ -235,7 +235,7 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
         prof = profile_by_id(override)
         if prof.id in unavailable:
             warnings.append(f"{prof.label}: its gsplat build is not published yet, so this setup will fail. "
-                            "Choose another runtime, or wait for the next SplatWork Node update.")
+                            "Choose another runtime, or wait for the next SplatWork update.")
         if driver.cuda_version and driver.cuda_version < prof.min_driver_cuda:
             warnings.append(f"{prof.label} needs a driver supporting CUDA {prof.min_driver_cuda[0]}."
                             f"{prof.min_driver_cuda[1]}; yours supports "

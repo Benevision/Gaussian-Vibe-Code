@@ -131,7 +131,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv and argv[0] == "--version":
         from splatworker import __version__
 
-        print(f"SplatWork Node {__version__} ({APP_ID})")
+        print(f"SplatWork {__version__} ({APP_ID})")
         return 0
     if argv and argv[0] in ("--headless", "--cli"):
         exe, cmd, env, warning = headless_command(argv[1:])

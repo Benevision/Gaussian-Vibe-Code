@@ -1,6 +1,6 @@
-# SplatWork Node
+# SplatWork for Linux
 
-SplatWork Node is the Linux member of the SplatWork suite. It does two jobs in one app:
+SplatWork for Linux is the Linux member of the SplatWork suite. It does two jobs in one app:
 
 - **A GPU worker.** SplatWork on the Mac (and SplatWork Capture on the iPhone) send it training and dataset
   processing jobs over the local network. Training uses [gsplat](https://github.com/nerfstudio-project/gsplat), the
@@ -51,7 +51,7 @@ A shared single-file bundle installs with `flatpak install --user SplatWorker-<v
 
 ## First launch
 
-Open **SplatWork Node** from the app grid. On first launch the setup assistant runs:
+Open **SplatWork for Linux** from the app grid. On first launch the setup assistant runs:
 
 1. It finds your NVIDIA GPU and driver through NVML / `nvidia-smi`, and reads the highest CUDA version
    the driver supports.
@@ -452,7 +452,7 @@ cd linux/flatpak
 ./build-gsplat-wheel.sh --all  # every supported card (RTX 20 – RTX 50) — for publishing
 ```
 
-The wheel is copied to SplatWork Node's `wheels/` folder (`~/.var/app/com.example.SplatWorker/data/splatworker/wheels`)
+The wheel is copied to SplatWork for Linux's `wheels/` folder (`~/.var/app/com.example.SplatWorker/data/splatworker/wheels`)
 and Set Up uses it from there. To publish an `--all` build for everyone, create a GitHub Release tagged
 `gsplat-1.6.0-cu128` and attach the `.whl`: the Flatpak workflow then uses it instead of compiling. When gsplat 1.6
 is officially released with prebuilt wheels, switch the profile back to the public index and delete the release.

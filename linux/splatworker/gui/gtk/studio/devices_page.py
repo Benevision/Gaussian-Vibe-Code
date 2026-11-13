@@ -1,4 +1,4 @@
-"""Compute Devices: other workers on the network (SplatWork Nodes, Macs with "Act as a worker"), found by
+"""Compute: other workers on the network (Linux workers, Macs with "Act as a worker"), found by
 Bonjour or added by address, with their health; and the
 "Train on" row of the New Project dialog. Logic lives in ``studio/devices.py`` and ``studio/compute.py``."""
 from __future__ import annotations
@@ -34,7 +34,7 @@ class DevicesPage(Gtk.Box):
                       "merged. Choose it per project in New Project → Training → Train on.")
         box.append(intro)
         self.list_group = group("Workers on the network",
-                                "SplatWork Nodes and Macs with “Act as a worker” appear here by themselves "
+                                "Linux workers and Macs with “Act as a worker” appear here by themselves "
                                 "(Bonjour _splatworker._tcp).")
         self._rows = []
         box.append(self.list_group)
@@ -53,7 +53,7 @@ class DevicesPage(Gtk.Box):
         add.connect("clicked", lambda *_: self.add_dialog())
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Check all workers now")
         refresh.connect("clicked", lambda *_: threading.Thread(target=self.reg.refresh, daemon=True).start())
-        self.append(_page("Compute Devices", sw, "Other machines that can train", header_extra=[add, refresh]))
+        self.append(_page("Compute", sw, "Other machines that can train", header_extra=[add, refresh]))
         self.reg.listeners.append(self._changed)
         self.refresh()
         GLib.timeout_add(1000, lambda: (self.ctl.start_devices(), False)[1])
@@ -119,7 +119,7 @@ class DevicesPage(Gtk.Box):
     # ------------------------------------------------------------------ dialogs
     def add_dialog(self) -> None:
         dlg = Adw.AlertDialog(heading="Add worker",
-                              body="The address of a SplatWork Node (port 7878) or a Mac with “Act as a worker” "
+                              body="The address of a SplatWork (port 7878) or a Mac with “Act as a worker” "
                                    "(port 7879). The access token is only needed if that worker has one (SplatWork "
                                    "Node → Preferences → Access token; on a Mac, Compute → Act as a worker).")
         lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
@@ -197,5 +197,5 @@ def train_on_row(controller, options) -> Adw.ComboRow:
     row = combo_row("Train on", choices, options.train_on, lambda v: setattr(options, "train_on", v),
                     "net.placement",
                     subtitle="Preparation runs here; training can go to another worker or to all of them "
-                             "(Compute Devices in the sidebar).")
+                             "(Compute in the sidebar).")
     return row

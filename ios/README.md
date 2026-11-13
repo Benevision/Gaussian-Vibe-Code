@@ -82,8 +82,8 @@ xcrun altool --upload-app -f build/export/SplatCapture.ipa -t ios --apiKey <KEY>
 3. **View** the result (drag to orbit, two fingers to pan, pinch to zoom, double-tap to reset) or share the `.ply`. Splats are saved in *Files › On My iPhone › SplatWork Capture › Splats*.
 
 When other devices are on the network, tick them under **Train on**:
-- **Macs** running SplatWork with *Compute › Act as a worker* on, and **PCs** running SplatWork Node. One device trains the whole scene. Several devices split scenes of 400 or more photos into blocks that train in parallel and are merged on the phone.
-- A **SplatWork Node PC** also runs the steps that need Python: camera-pose refinement, learned moving-object masks (SAM 2) and sky masks with a learned skybox. Without one, these steps are skipped, which the result's *What happened* list shows.
+- **Macs** running SplatWork with *Compute › Act as a worker* on, and **PCs** running SplatWork for Linux. One device trains the whole scene. Several devices split scenes of 400 or more photos into blocks that train in parallel and are merged on the phone.
+- A **SplatWork for Linux PC** also runs the steps that need Python: camera-pose refinement, learned moving-object masks (SAM 2) and sky masks with a learned skybox. Without one, these steps are skipped, which the result's *What happened* list shows.
 
 Debug builds can run the whole flow without the UI, for example in the Simulator: `xcrun simctl launch <device> <bundle id> -splatSelfTest`. The options are documented in `Splat/SplatSelfTest.swift`.
 

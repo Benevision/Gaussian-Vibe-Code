@@ -70,10 +70,10 @@ struct MakeSplatView: View {
             Toggle("Refine camera poses", isOn: $jobs.options.refinePoses)
             Toggle("Learned moving-object masks", isOn: $jobs.options.learnedMovingMasks)
             Toggle("Sky masks + skybox", isOn: $jobs.options.sky)
-        } header: { Text("With a SplatWork Node PC") } footer: {
+        } header: { Text("With a Linux PC") } footer: {
             Text(devices.anyProcessor
-                 ? "A SplatWork Node PC is online: these steps run there (the photos are uploaded once)."
-                 : "No SplatWork Node PC is online, so these are skipped and everything runs on the devices below — this iPhone alone is enough.")
+                 ? "A Linux PC running SplatWork is online: these steps run there (the photos are uploaded once)."
+                 : "No Linux PC running SplatWork is online, so these are skipped and everything runs on the devices below — this iPhone alone is enough.")
         }
         .disabled(!devices.anyProcessor)
 
@@ -95,7 +95,7 @@ struct MakeSplatView: View {
         } header: {
             HStack { Text("Train on"); Spacer(); if devices.isBrowsing { ProgressView().controlSize(.mini) } }
         } footer: {
-            Text("Tick several devices to split a large scene into blocks trained in parallel (from 400 photos; smaller scenes train whole on the fastest device). Macs appear when SplatWork has Compute › “Act as a worker” on; PCs run SplatWork Node.")
+            Text("Tick several devices to split a large scene into blocks trained in parallel (from 400 photos; smaller scenes train whole on the fastest device). Macs appear when SplatWork has Compute › “Act as a worker” on; PCs run SplatWork for Linux.")
         }
 
         Section {
@@ -201,7 +201,7 @@ struct DeviceCheckRow: View {
     }
 }
 
-/// Access token for a device that wants one (a Mac shows it under Compute › Act as a worker, SplatWork Node in its window).
+/// Access token for a device that wants one (a Mac shows it under Compute › Act as a worker, SplatWork for Linux in its window).
 struct DeviceTokenRow: View {
     let device: SplatDeviceInfo
     let devices: SplatDevices

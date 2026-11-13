@@ -144,13 +144,19 @@ class ViewerPage(Gtk.Box):
     def _home(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, halign=Gtk.Align.CENTER,
                       valign=Gtk.Align.CENTER, margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
+        # the SplatWork mark (branding/logo-mark.svg), shipped with the code so it shows outside the Flatpak too
+        logo = Gtk.Picture.new_for_filename(str(Path(__file__).with_name("logo.svg")))
+        logo.set_size_request(84, 84)
+        logo.set_halign(Gtk.Align.CENTER)
+        logo.set_can_shrink(True)
+        box.append(logo)
         box.append(label("SplatWork", ("title-1",), xalign=0.5))
         box.append(label("View, create and edit 3D Gaussian splats — trained on this PC's GPU, which keeps working "
-                         "for your Mac at the same time.", ("dim-label",), xalign=0.5))
+                         "for your other devices at the same time.", ("dim-label",), xalign=0.5))
 
         def tiles(title, items):
             box.append(label(title, ("heading",), xalign=0.0))
-            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
+            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                                min_children_per_line=2, column_spacing=12, row_spacing=12, homogeneous=True)
             for icon, name, sub, cb in items:
                 b = Gtk.Button()
@@ -159,31 +165,43 @@ class ViewerPage(Gtk.Box):
                                 margin_start=10, margin_end=10)
                 inner.append(Gtk.Image(icon_name=icon, pixel_size=32))
                 inner.append(label(name, ("heading",), xalign=0.5))
-                inner.append(label(sub, ("caption", "dim-label"), xalign=0.5))
+                sub_l = label(sub, ("caption", "dim-label"), xalign=0.5)
+                sub_l.set_max_width_chars(26)      # three tiles across, as on the Mac
+                sub_l.set_lines(3)
+                inner.append(sub_l)
                 b.set_child(inner)
                 b.connect("clicked", lambda *_a, c=cb: c())
                 flow.append(b)
             box.append(flow)
         np_ = self.on_new_project
+        # The Mac's start page: same tiles, wording and order (plus 360° photos, a separate source here)
         tiles("Create", [
-            ("folder-pictures-symbolic", "Photos", "A folder of photos", lambda: np_("photos", None)),
-            ("camera-video-symbolic", "Video", "Walk around the scene", lambda: np_("video", None)),
-            ("preferences-system-network-symbolic", "360° video", "Equirectangular footage", lambda: np_("video360", None)),
-            ("image-x-generic-symbolic", "360° photos", "A folder of equirectangular photos",
+            ("folder-pictures-symbolic", "Photos", "A folder of overlapping photos of an object or place.",
+             lambda: np_("photos", None)),
+            ("camera-video-symbolic", "Video", "Walk slowly around the subject. Frames are picked for sharpness.",
+             lambda: np_("video", None)),
+            # this app's defaults are already the aerial settings (learned solving with GPS checks, sky, High)
+            ("airplane-mode-symbolic", "Drone / aerial", "Drone photos. Uses GPS to check the cameras and set metric scale.",
+             lambda: np_("photos", None)),
+            ("preferences-system-network-symbolic", "360° video", "Equirectangular footage from Insta360, GoPro Max, Theta…",
+             lambda: np_("video360", None)),
+            ("image-x-generic-symbolic", "360° photos", "A folder of equirectangular photos.",
              lambda: np_("photos360", None)),
-            ("view-dual-symbolic", "Stereo", "Side-by-side, over-under or two-stream footage",
+            ("phone-symbolic", "iPhone LiDAR", "A SplatWork Capture recording: posed frames + depth. Metric scale.",
+             lambda: np_("capture", None)),
+            ("view-dual-symbolic", "Stereo footage", "Side-by-side, top-bottom or two-stream footage.",
              lambda: np_("stereo", None)),
-            ("phone-symbolic", "iPhone capture", ".splatcapture with poses", lambda: np_("capture", None)),
-            ("view-grid-symbolic", "COLMAP / Nerfstudio", "Posed images", lambda: np_("colmap", None)),
         ])
-        tiles("View", [
-            ("document-open-symbolic", "Open splat", "PLY, compressed PLY, .splat, .spz", self.open_dialog),
-            ("folder-open-symbolic", "Open dataset", "A folder with dataset.json", self.open_dataset_dialog),
+        tiles("Open", [
+            ("document-open-symbolic", "Open splat", ".ply, .spz or .splat from any 3DGS tool.", self.open_dialog),
+            ("folder-open-symbolic", "Open dataset", "A prepared SplatWork dataset to (re)train.", self.open_dataset_dialog),
+            ("view-grid-symbolic", "COLMAP / Nerfstudio", "Existing posed datasets from other tools.",
+             lambda: np_("colmap", None)),
         ])
         box.append(label("Tip: drop files anywhere on this window. Press ? in the viewer for shortcuts.",
                          ("caption", "dim-label"), xalign=0.5))
         sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
-        clamp = Adw.Clamp(maximum_size=760)
+        clamp = Adw.Clamp(maximum_size=880)
         clamp.set_child(box)
         sw.set_child(clamp)
         return sw

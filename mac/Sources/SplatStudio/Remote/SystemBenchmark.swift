@@ -391,7 +391,7 @@ enum MemoryForecast {
             let ram = Int64(info.memory?.availableMB ?? 0) * 1_048_576
             if images > 3 << 30, ram == 0 || images * 2 > ram {
                 return "\(name) would hold all \(dataset.manifest.cameras.count) photos in memory (about \(formatBytes(Int(images * 2)))), "
-                    + "which can freeze it. Update SplatWork Node on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
+                    + "which can freeze it. Update SplatWork for Linux on \(name) to 1.3.13 or later (it streams photos from disk), or lower Max image size."
             }
         }
         // GPU: splat state (params, gradients, Adam, rasteriser buffers) + per-pixel scratch + CUDA context.

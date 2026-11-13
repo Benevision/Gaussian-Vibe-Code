@@ -4,16 +4,16 @@ Called from :meth:`LocalPipeline.train` when ``ProjectOptions.train_on`` is not 
 training (frames, masks, camera solve) ran on this PC's worker. Placements:
 
 * ``"<device id>"`` — upload the dataset to that worker, train there, download ``result.ply`` (+ the learned
-  skybox from SplatWork Nodes) into the project's ``outputs/``. A device that is offline falls back to this PC;
+  skybox from Linux workers) into the project's ``outputs/``. A device that is offline falls back to this PC;
   a scene that would not fit it is split into blocks on that device alone.
 * ``"all"`` — this PC plus every online worker. Scenes below ``split_above`` photos train whole on the device
   expected to finish first (this PC returns ``None``: the normal local path with live previews); bigger ones,
   or ones no single device can hold, are split (:mod:`.blocks`), distributed by throughput and memory, trained
-  concurrently (one job per GPU on a SplatWork Node) and merged. A block that fails on another machine is
+  concurrently (one job per GPU on a Linux worker) and merged. A block that fails on another machine is
   retried on this PC.
 
 Uploads: a zip written to the project folder (photos stored, not recompressed) and streamed with a
-Content-Length; downloads stream to disk. Workers with ``chain`` (SplatWork Node ≥ 1.3.8) keep the photos as a
+Content-Length; downloads stream to disk. Workers with ``chain`` (SplatWork for Linux ≥ 1.3.8) keep the photos as a
 dataset of their own, recorded in ``dataset/.remote-uploads.json``: later runs send only ``dataset.json``,
 masks and points and compose them over the stored photos. Macs and iPhones (no compose; they drop older
 uploads when a new one arrives) get one full upload per run, shared by all their blocks.

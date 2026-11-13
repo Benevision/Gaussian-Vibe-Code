@@ -6,7 +6,7 @@ This document is the contract between the three apps:
 |---|---|---|
 | **SplatWork** (macOS) | `mac/` | Viewer, editor, dataset preparation, Metal training, client for remote workers, receiver for iPhone captures |
 | **SplatWork Capture** (iOS) | `ios/` | Records LiDAR + ARKit-posed image sequences, sends them to the Mac |
-| **SplatWork Node** (Linux) | `linux/` | Optional CUDA training server the Mac can offload jobs to |
+| **SplatWork for Linux** (Linux) | `linux/` | Optional CUDA training server the Mac can offload jobs to |
 
 All JSON is UTF-8, `camelCase` keys, numbers as JSON numbers. Unknown keys MUST be ignored (forward compatibility).
 
@@ -175,7 +175,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 
 * Default port **7878**, plain HTTP on the LAN (optionally behind TLS reverse proxy).
 * Discovery: the worker advertises Bonjour/mDNS service type **`_splatworker._tcp`**, TXT record `version=1`, `gpu=<name>`, `auth=1|0`, and (worker ≥ 1.3.10) `addrs=<ip>:<kind>,…` listing its LAN addresses preferred first (`ethernet` before `wifi`). `GET /v1/info` returns the same list as `"addresses": [{"address":"192.168.1.20","kind":"ethernet"}, …]`. SplatWork moves a discovered worker onto its first ethernet address that answers, falls back to the others if that address stops answering, and leaves manually added workers on the address the user typed. A discovered worker can be hidden from the list (Compute page) and added manually instead.
-* Worker kinds: SplatWork's "act as a worker" adds TXT `kind=mac` (and `"kind":"mac"` in `/v1/info`); SplatWork Node sends none. Older versions of SplatWork Capture advertised `kind=iphone`; iPhones no longer act as workers, and clients ignore workers of that kind.
+* Worker kinds: SplatWork's "act as a worker" adds TXT `kind=mac` (and `"kind":"mac"` in `/v1/info`); SplatWork for Linux sends none. Older versions of SplatWork Capture advertised `kind=iphone`; iPhones no longer act as workers, and clients ignore workers of that kind.
 * Auth: if the worker has a token configured every request needs `Authorization: Bearer <token>`. Unauthenticated → `401`.
 * Errors: non-2xx with body `{"error": "message"}`.
 
@@ -248,7 +248,7 @@ other computers' jobs, as before.
 copied; deleting the dataset never touches the folder), and `POST /v1/datasets/{id}/export-local`
 `{"path":"/abs/folder"}` → `{"files":n}` merges a dataset (e.g. a processing job's `outputDatasetId`) into a folder
 with hard links — only into a folder registered with `/v1/datasets/local` (or below it); `/`, the home folder and
-anything holding the worker's data can't be registered. The desktop app on the worker PC (SplatWork Node) uses these
+anything holding the worker's data can't be registered. The desktop app on the worker PC (SplatWork for Linux) uses these
 to run its New Project pipeline on its own project folders without uploading. Other clients never see these
 datasets: `GET /v1/datasets` leaves them out (and never lists the folder path), and jobs, compose, archive and
 delete answer `404` for them.
@@ -264,7 +264,7 @@ delete answer `404` for them.
  "previewObjectMask": true}                          // 255 on the object (default: keep convention, object = 0)
 ```
 
-SplatWork Node's mask editor sends one per click (the model loads per job, a few seconds on the PC) and tracks the
+SplatWork for Linux's mask editor sends one per click (the model loads per job, a few seconds on the PC) and tracks the
 clicked objects with the existing `masks` task (`"maskModel": "sam2_track"`, `"maskPrompts"`, `"replaceMasks": true`).
 Its edits are stored as a mask layer of the project's dataset (`splatprep-masks/manual/masks` 255 = keep,
 `…/restore` 255 = keep whatever other layers say), so they survive "Prepare again".
@@ -292,7 +292,7 @@ demand (two decoded frames held). Apple MV-HEVC spatial video needs VideoToolbox
 **Rigs with a baseline (worker ≥ 1.4.0).** In an `sfm` request's `rig.groups`, a value may be
 `{"R": R, "t": [x, y, z]}` instead of `R` (`t` = camera centre in the rig frame, metres). Sensors are told apart by
 rotation and centre, views of one frame with a baseline are matched with each other, and the rig config holds the
-translation, so a stereo pair maps in metres. SplatWork Node sends this for parallel stereo pairs with a known
+translation, so a stereo pair maps in metres. SplatWork for Linux sends this for parallel stereo pairs with a known
 baseline (left = `I`, right = `{"R": I, "t": [b, 0, 0]}`). An older splatprep can't parse such a group, so the
 Node sends it only to its own worker (same version).
 
@@ -399,7 +399,7 @@ The Mac app is always the coordinator. Per project the user picks **This Mac**, 
 * Stage placement: each stage (frame extraction, masking, SfM, training) is assigned to the device with the best benchmark score that supports the chosen model (e.g. LightGlue on CUDA, Object Capture on the Mac).
 * Block-parallel training for large scenes: the scene is partitioned into K spatial blocks (CityGaussian/VastGaussian style). Each block is a training job with `TrainingConfig.region = {"min":[x,y,z],"max":[x,y,z],"margin":0.15}`: only gaussians inside the expanded box are kept/densified, and only cameras that see the block are used. Blocks are distributed across devices proportional to measured throughput; the Mac merges results keeping, for each block, gaussians whose centre lies inside the *un-expanded* box.
 * Workers accept `TrainingConfig.region` (optional) and `TrainingConfig.cameraIds` (optional list restricting which cameras are used).
-* SplatWork Node's Studio (worker ≥ 1.4.0) coordinates the same way with only the existing endpoints: it prepares
+* SplatWork for Linux's Studio (worker ≥ 1.4.0) coordinates the same way with only the existing endpoints: it prepares
   on its own GPU, then trains on one chosen worker or block-parallel on itself + every online worker (SplatWork
   Nodes and Macs with "Act as a worker"), using the Mac's split, placement and merge rules. Uploads carry a
   `Content-Length`; on `chain` workers the photos stay as a dataset of their own and later runs compose

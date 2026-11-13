@@ -8,7 +8,7 @@ body:
       label: Which app?
       options:
         - SplatWork (Mac)
-        - SplatWork Node (Linux)
+        - SplatWork for Linux (Linux)
         - SplatWork Capture (iPhone)
         - splatprep (command line)
     validations:
@@ -17,7 +17,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: SplatWork → About on the Mac; Preferences in SplatWork Node; Settings in SplatWork Capture.
+      description: SplatWork → About on the Mac; Preferences in SplatWork for Linux; Settings in SplatWork Capture.
     validations:
       required: true
   - type: textarea

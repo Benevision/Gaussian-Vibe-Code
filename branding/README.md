@@ -7,7 +7,7 @@ The hex mesh mark: six linked nodes (your devices) around a splat. All files are
 | `logo-mark.svg` | The mark on a transparent background: README, website (`website/logo.svg`), documents |
 | `app-icon-macos.svg` | Mac app icon (824 px rounded square on the 1024 px grid) → `mac/Resources/AppIcon.icns` |
 | `app-icon-ios.svg` | iPhone app icon, full-bleed (iOS rounds the corners) → `ios/.../AppIcon.appiconset/AppIcon.png` |
-| `app-icon-linux.svg` | SplatWork Node icon → `linux/flatpak/icons/com.example.SplatWorker.svg` |
+| `app-icon-linux.svg` | SplatWork for Linux icon → `linux/flatpak/icons/com.example.SplatWorker.svg` |
 | `logo-symbolic.svg` | One-colour icon for small sizes → `linux/flatpak/icons/com.example.SplatWorker-symbolic.svg` |
 
 The Mac app's start page draws the same mark in code (`mac/Sources/SplatStudio/UI/HexMeshLogo.swift`).

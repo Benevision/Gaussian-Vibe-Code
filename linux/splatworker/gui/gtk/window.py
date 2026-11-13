@@ -428,7 +428,7 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             title, button = U.banner_text(u.state, u.version or (self._update_info or {}).get("version", ""),
                                           auto, self._update_busy, u.fraction, u.error)
         elif self._update_info:      # not a Flatpak install: tell, don't act
-            title, button = f"SplatWork Node {self._update_info.get('version')} is available.", "How to Update"
+            title, button = f"SplatWork {self._update_info.get('version')} is available.", "How to Update"
         else:
             title, button = "", None
         self.update_banner.set_title(title)
@@ -509,7 +509,7 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
         alert(self, f"Update to {v}" if v else "Update",
               (f"The automatic update failed: {err}\n\n" if err else "")
               + "Updates arrive like any other Flatpak: GNOME Software or Discover offer them automatically, "
-              "or run this in a terminal (then restart SplatWork Node):\n\n" + updates.UPDATE_COMMAND,
+              "or run this in a terminal (then restart SplatWork):\n\n" + updates.UPDATE_COMMAND,
               responses=(("close", "Close", "default"), ("copy", "Copy Command", "suggested")),
               callback=lambda r: copy_text(self, updates.UPDATE_COMMAND) if r == "copy" else None,
               default="copy", close="close")

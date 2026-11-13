@@ -1125,7 +1125,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 sett
 | **Mode** | Easy |
 | **ID** | `train.device` |
 
-**How it works.** One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork Node with CUDA, typically 2–4× faster than an M4 Pro, with live previews).
+**How it works.** One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork for Linux with CUDA, typically 2–4× faster than an M4 Pro, with live previews).
 
 - Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically.
 - Other Macs with Compute → Act as a worker turned on can take blocks too.
@@ -1796,7 +1796,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 sett
 
 ### Linux GPU workers
 
-> SplatWork Node servers found on your network (Bonjour) or added manually.
+> SplatWork for Linux servers found on your network (Bonjour) or added manually.
 
 | | |
 |---|---|
@@ -1804,7 +1804,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 sett
 | **Mode** | Easy |
 | **ID** | `net.workers` |
 
-**How it works.** Install SplatWork Node on a Linux PC with an NVIDIA GPU (see linux/README.md).
+**How it works.** Install SplatWork for Linux on a Linux PC with an NVIDIA GPU (see linux/README.md).
 
 - It appears here automatically.
 - Add it manually with host:port if your network blocks Bonjour.

@@ -2,7 +2,7 @@
 
 Notable changes to SplatWork. The Mac app is released by version tag (see
 [Releases](https://github.com/Benevision/SplatWork/releases)); a rolling *developer build* follows `main`.
-SplatWork Node (Linux) is published to its Flatpak repository on every change and carries its own version number.
+SplatWork for Linux (Linux) is published to its Flatpak repository on every change and carries its own version number.
 
 ## Unreleased
 
@@ -34,7 +34,7 @@ SplatWork Node (Linux) is published to its Flatpak repository on every change an
 - **Fisheye footage**: solved with a fisheye lens model, with masks warped along.
 - Camera solving drops cameras placed far off the camera path.
 
-### SplatWork Node 1.4
+### SplatWork for Linux 1.4
 - The Linux app is now a full studio: viewer, New Project, editing (including Auto clean and the mask editor),
   export, turntable videos, iPhone Inbox, compute devices and block-parallel training across machines, all next to
   the worker server.

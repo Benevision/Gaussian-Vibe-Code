@@ -63,7 +63,7 @@ class DriverInfo:
                     f"Your system runs NVIDIA driver {self.kernel_driver_version}, but the matching "
                     f"Flatpak driver extension is not installed. Install it in a terminal with:\n\n"
                     f"{flatpak_gl_install_command(self.kernel_driver_version)}\n\n"
-                    "then restart SplatWork Node. (\"flatpak update\" does not always add it.)")
+                    "then restart SplatWork. (\"flatpak update\" does not always add it.)")
         if self.kernel_driver_version:
             return ("The NVIDIA driver is loaded but not usable",
                     f"Driver {self.kernel_driver_version} is loaded, but its libraries could not be "

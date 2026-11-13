@@ -20,7 +20,7 @@ Everything runs locally on your network. No cloud account, no uploads to anyone 
 | App | Runs on | What it does |
 |---|---|---|
 | **SplatWork** | Mac (Apple silicon, macOS 15+) | The main app. Turns photos, video, 360° video, stereo footage, iPhone captures and COLMAP / Nerfstudio datasets into splats. Native Metal renderer and trainer, editor, exporter, and the coordinator for every other device. |
-| **SplatWork Node** | Linux PC with an NVIDIA GPU (Flatpak) | A CUDA worker (gsplat) that the Mac and iPhone send training and processing jobs to, and a full desktop studio of its own: viewer, new projects, editing and export on Linux. |
+| **SplatWork for Linux** | Linux PC with an NVIDIA GPU (Flatpak) | A CUDA worker (gsplat) that the Mac and iPhone send training and processing jobs to, and a full desktop studio of its own: viewer, new projects, editing and export on Linux. |
 | **SplatWork Capture** | iPhone (iOS 18+; LiDAR models record depth) | Records ARKit-posed frames with LiDAR depth and sends them to the Mac. Can also turn its own scans into splats on the phone, or hand the heavy steps to your Mac or PC. |
 | **splatprep** | Mac or Linux (Python) | The processing toolkit inside the apps: learned feature matching and camera solving (COLMAP / GLOMAP), moving-object and sky masks (SAM 2), video splitting and benchmarks. Also usable on its own from the command line. |
 
@@ -58,14 +58,14 @@ The app isn't notarized yet, so the first time, right-click it and choose **Open
 releases (SplatWork → Check for Updates…). A rolling *developer build* with the latest changes is published as a
 pre-release.
 
-**SplatWork Node for Linux** (NVIDIA GPU, any distribution with Flatpak): install it from the project's Flatpak
+**SplatWork for Linux for Linux** (NVIDIA GPU, any distribution with Flatpak): install it from the project's Flatpak
 repository, so updates arrive through `flatpak update`, GNOME Software or KDE Discover:
 
 ```bash
 flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
 ```
 
-Open **SplatWork Node**; its setup assistant detects your driver and installs a matching PyTorch and gsplat
+Open **SplatWork for Linux**; its setup assistant detects your driver and installs a matching PyTorch and gsplat
 (about 2.7 GB, all inside the app's own folder). Then turn the server on. Details:
 [linux/README.md](linux/README.md).
 
@@ -85,7 +85,7 @@ Open **SplatWork Node**; its setup assistant detects your driver and installs a 
 The [user guide](docs/USER_GUIDE.md) covers capture tips, every step and troubleshooting.
 
 **Optional extras:**
-- **A Linux PC with an NVIDIA GPU** running SplatWork Node trains several times faster than a laptop and runs the
+- **A Linux PC with an NVIDIA GPU** running SplatWork for Linux trains several times faster than a laptop and runs the
   learned camera solvers and masks. The Mac finds it automatically on the local network.
 - **The Models pack** (Mac, from *Models & Benchmarks*) adds learned feature matchers and segmentation models to the
   Mac itself.
@@ -96,7 +96,7 @@ The [user guide](docs/USER_GUIDE.md) covers capture tips, every step and trouble
 
 ```
  iPhone                         Mac                                        Linux PC (NVIDIA)
- SplatWork Capture              SplatWork                                  SplatWork Node
+ SplatWork Capture              SplatWork                                  SplatWork for Linux
  ─────────────────              ─────────                                  ──────────────
  ARKit frames + LiDAR ─send──▶  source ─▶ frames ─▶ masks ─▶ cameras ─▶ dataset
                                   │          └───────┴───────┴─ on the worker if chosen ──▶ splatprep (CUDA)
@@ -112,7 +112,7 @@ protocols are documented in [docs/PROTOCOL.md](docs/PROTOCOL.md), and the design
 
 ## Project status
 
-SplatWork is young and moving quickly. The Mac app and SplatWork Node are used for real projects; multi-device
+SplatWork is young and moving quickly. The Mac app and SplatWork for Linux are used for real projects; multi-device
 block training and the iPhone app have had less real-world use. Expect rough edges, and please
 [open an issue](https://github.com/Benevision/SplatWork/issues) when you hit one. See the
 [changelog](CHANGELOG.md) for what changed recently.
@@ -123,7 +123,7 @@ block training and the iPhone app have had less real-world use. Expect rough edg
 |---|---|---|
 | Mac app | Xcode 16+ / Swift 6 on Apple silicon | `cd mac && ./scripts/build_app.sh && open build/SplatWork.app` |
 | iPhone app | Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) | `cd ios && xcodegen generate && open SplatCapture.xcodeproj` |
-| SplatWork Node | `flatpak-builder` (or Python 3.10+ and CUDA for a native install) | `cd linux/flatpak && bash build.sh` |
+| SplatWork for Linux | `flatpak-builder` (or Python 3.10+ and CUDA for a native install) | `cd linux/flatpak && bash build.sh` |
 | splatprep | Python 3.10+ | `cd tools && ./install.sh` |
 
 The Mac app also runs headless, which is handy for scripting and batch jobs:
@@ -143,7 +143,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, code layout and how to send ch
 |---|---|
 | [User guide](docs/USER_GUIDE.md) | Creating projects, training, viewing, editing, exporting, troubleshooting |
 | [Settings reference](docs/SETTINGS.md) | Every setting with its default, range and explanation |
-| [SplatWork Node](linux/README.md) | Installing and running the Linux worker and studio |
+| [SplatWork for Linux](linux/README.md) | Installing and running the Linux worker and studio |
 | [SplatWork Capture](ios/README.md) | Building and using the iPhone app |
 | [splatprep](tools/README.md) | The processing toolkit and its command line |
 | [Architecture](docs/ARCHITECTURE.md) | How the parts fit together |

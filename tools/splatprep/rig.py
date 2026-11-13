@@ -19,7 +19,7 @@ Request (from SplatWork)::
 ``R`` is the 3×3 row-major rotation rig_from_cam (a direction in the view's camera frame — x right, y down,
 z forward — times R gives the direction in the 360° frame).
 
-Sensors with a baseline (stereo pairs, SplatWork Node ≥ 1.4.0): a group value may instead be
+Sensors with a baseline (stereo pairs, SplatWork for Linux ≥ 1.4.0): a group value may instead be
 ``{"R": R, "t": [x, y, z]}`` — ``t`` is the camera centre in the rig frame (metres; the rig frame of a stereo pair
 is the left eye). Sensors are then told apart by rotation *and* centre, views of the same frame are paired with
 each other (they have parallax), and the rig config carries the translations, so the mapper solves in metres.

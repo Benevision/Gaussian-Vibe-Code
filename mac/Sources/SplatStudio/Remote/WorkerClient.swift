@@ -23,7 +23,7 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     /// Host RAM (worker ≥ 1.3.14).
     struct Memory: Codable, Hashable, Sendable { var totalMB: Int?; var availableMB: Int? }
     var memory: Memory?
-    /// What runs the worker: "mac" (SplatWork's "act as a worker"), nil for the SplatWork Node. "iphone" comes from
+    /// What runs the worker: "mac" (SplatWork's "act as a worker"), nil for the SplatWork for Linux. "iphone" comes from
     /// older SplatWork Capture versions, which could act as workers; those are ignored.
     var kind: String?
     /// Worker ≥ 1.3.13: training images are streamed from disk when they don't fit in RAM.
@@ -92,7 +92,7 @@ struct WorkerError: LocalizedError, Sendable {
 
 // MARK: - Client
 
-/// HTTP client for a SplatWork Node (PROTOCOL.md §4 training API and §6 processing API).
+/// HTTP client for a worker: SplatWork for Linux, or a Mac acting as one (PROTOCOL.md §4 training API and §6 processing API).
 final class WorkerClient: @unchecked Sendable {
     let baseURL: URL
     let token: String?

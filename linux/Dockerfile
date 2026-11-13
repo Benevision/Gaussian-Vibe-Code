@@ -1,4 +1,4 @@
-# SplatWork Node - CUDA training server
+# SplatWork for Linux - CUDA training server
 #
 #   docker build -t splatworker .
 #   docker run --gpus all --network host \

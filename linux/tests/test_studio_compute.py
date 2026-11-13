@@ -55,7 +55,7 @@ def test_device_kind_and_summary():
                         "capabilities": ["train", "process", "chain"], "busy": True})
     assert pc.kind == "linux" and pc.slots == 2 and pc.can_chain and pc.has_sky
     assert pc.gpu_name == "2 × NVIDIA GeForce RTX 4080"
-    assert pc.summary() == "SplatWork Node · pc:7878 · 2 × NVIDIA GeForce RTX 4080 · busy · 2 queued"
+    assert pc.summary() == "SplatWork for Linux · pc:7878 · 2 × NVIDIA GeForce RTX 4080 · busy · 2 queued"
     assert D.Device("x", "v6", "fe80::1", 7878).base_url == "http://[fe80::1]:7878"
 
 

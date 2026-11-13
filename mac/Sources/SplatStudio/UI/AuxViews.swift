@@ -136,7 +136,7 @@ struct WorkersView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Compute").font(.largeTitle.bold())
-                    Text("Offload camera solving and training to a Linux PC with an NVIDIA GPU running SplatWork Node — or let this Mac train jobs for your iPhone and other Macs.").foregroundStyle(.secondary)
+                    Text("Offload camera solving and training to a Linux PC with an NVIDIA GPU running SplatWork for Linux — or let this Mac train jobs for your iPhone and other Macs.").foregroundStyle(.secondary)
                 }
                 Spacer()
                 HelpButton(id: "net.workers")
@@ -156,7 +156,7 @@ struct WorkersView: View {
             }
             GroupBox("Linux workers") {
                 if browser.workers.isEmpty {
-                    Text(browser.isBrowsing ? "Searching the local network… Start SplatWork Node on your PC and it will appear here." : "Discovery is off.")
+                    Text(browser.isBrowsing ? "Searching the local network… Start SplatWork for Linux on your PC and it will appear here." : "Discovery is off.")
                         .foregroundStyle(.secondary).padding(6).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 ForEach(browser.workers) { w in

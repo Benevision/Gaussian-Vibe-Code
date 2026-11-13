@@ -5,7 +5,7 @@ Thanks for your interest! Bug reports, ideas, documentation fixes and code are a
 ## Reporting bugs and asking for features
 
 [Open an issue](https://github.com/Benevision/SplatWork/issues/new/choose). For a bug, say which app and version
-(SplatWork → About, or SplatWork Node's Preferences), what you did, what you expected and what happened. A project's
+(SplatWork → About, or SplatWork for Linux's Preferences), what you did, what you expected and what happened. A project's
 `prep.log`, the training dashboard and a screenshot help a lot. Security problems go through
 [SECURITY.md](SECURITY.md), not public issues.
 
@@ -15,7 +15,7 @@ Thanks for your interest! Bug reports, ideas, documentation fixes and code are a
 |---|---|---|
 | `mac/` | SplatWork for Mac: app, Metal renderer and trainer, pipeline, worker client (`Sources/SplatStudio`) | Swift 6, SwiftUI, Metal |
 | `ios/` | SplatWork Capture: capture app plus the on-device trainer (`SplatTrainKit`) | Swift, ARKit |
-| `linux/` | SplatWork Node: worker server (`splatworker/`), GTK studio (`splatworker/gui/`), Flatpak (`flatpak/`) | Python, FastAPI, GTK 4 |
+| `linux/` | SplatWork for Linux: worker server (`splatworker/`), GTK studio (`splatworker/gui/`), Flatpak (`flatpak/`) | Python, FastAPI, GTK 4 |
 | `tools/` | splatprep processing toolkit and evaluation scripts | Python, PyTorch |
 | `docs/` | User guide, settings reference, architecture, protocols, developer notes | Markdown |
 | `steamframe/` | Experimental headset capture prototype | Python |
@@ -37,7 +37,7 @@ swift build -c release            # build the app and its command line
 **iPhone app** (Xcode 26+, XcodeGen): `cd ios && xcodegen generate`, then build the *SplatCapture* scheme. Run
 `xcodegen generate` again whenever you add or remove files; `project.yml` is the source of truth.
 
-**SplatWork Node and splatprep** (Python 3.10+):
+**SplatWork for Linux and splatprep** (Python 3.10+):
 
 ```bash
 cd linux && python -m pytest -q    # worker, studio core and GUI logic (no GPU needed)
@@ -60,7 +60,7 @@ python linux/scripts/gen_catalog.py
 1. Fork the repository and create a branch from `main`.
 2. Keep each pull request to one change, with tests where it makes sense.
 3. Run the tests above for the parts you touched, and say in the pull request what you checked by hand.
-4. Write user-facing text plainly, and use the product names SplatWork, SplatWork Capture and SplatWork Node.
+4. Write user-facing text plainly, and use the product names SplatWork, SplatWork Capture and SplatWork for Linux.
 
 Every push to `main` builds the Mac developer build and the Linux Flatpak repository, so `main` should always be
 releasable.

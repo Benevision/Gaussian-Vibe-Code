@@ -79,7 +79,7 @@ def _check_gsplat_kernels(torch, gsplat) -> None:
     if not ok:
         raise TrainingError(
             f"gsplat {getattr(gsplat, '__version__', '?')}'s GPU kernels can't load with PyTorch {torch.__version__} — "
-            "the GPU runtime's PyTorch was replaced. Open SplatWork Node → menu → Set Up… and run it again to repair "
+            "the GPU runtime's PyTorch was replaced. Open SplatWork for Linux → menu → Set Up… and run it again to repair "
             "(downloads and settings are kept).")
 
 

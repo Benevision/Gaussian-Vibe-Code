@@ -123,7 +123,7 @@ class SplatWorkerApp(Adw.Application):
             if not self._background_requested:
                 self._request_background(s.autostart)
             n = Gio.Notification.new(f"{APP_NAME} is still running")
-            n.set_body("The server keeps working for your Mac. Open SplatWork Node again to see it, or choose "
+            n.set_body("The server keeps working for your Mac. Open SplatWork again to see it, or choose "
                        "Quit in its menu to stop it.")
             n.set_default_action("app.show")
             self.send_notification("background", n)
@@ -146,7 +146,7 @@ class SplatWorkerApp(Adw.Application):
             what = [f"{len(running)} job(s) are running"] if running else []
             if local:
                 what.append("working on " + ", ".join(local))
-            alert(self.window, "Quit SplatWork Node?",
+            alert(self.window, "Quit SplatWork?",
                   " and ".join(what).capitalize() + "; this is stopped.",
                   (("cancel", "Cancel", "default"), ("quit", "Quit", "destructive")), answer)
         else:

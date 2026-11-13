@@ -29,7 +29,7 @@ hours, installs them when you quit or relaunch, and can be checked by hand with 
 To build it yourself instead: `cd mac && ./scripts/build_app.sh && open build/SplatWork.app`.
 
 **Optional extras:**
-- **SplatWork Node** on a Linux PC with an NVIDIA GPU trains faster and runs the learned camera solvers and masks.
+- **SplatWork for Linux** on a Linux PC with an NVIDIA GPU trains faster and runs the learned camera solvers and masks.
   See [section 11](#11-setting-up-a-linux-worker).
 - **SplatWork Capture** on an iPhone (LiDAR models give the best results). See [ios/README.md](../ios/README.md).
 - **The Models pack** adds learned feature matchers and segmentation models to the Mac itself. Install it from
@@ -201,7 +201,7 @@ Defaults worth knowing (all in the settings reference):
 
 ### Where it runs
 
-Tick the **compute devices** that may train this project: this Mac, Linux workers running SplatWork Node, and other
+Tick the **compute devices** that may train this project: this Mac, Linux workers running SplatWork for Linux, and other
 Macs with *Compute → Act as a worker* turned on.
 - **One device**: the whole scene trains there. A worker streams its live preview back.
 - **Several devices**: scenes of 400 images or more are split into spatial blocks that train in parallel and are
@@ -355,12 +355,12 @@ of your other Macs, protected by an access token you paste once when adding it.
 
 Full details are in [linux/README.md](../linux/README.md).
 
-1. **Install SplatWork Node** on the PC from the project's Flatpak repository, so updates arrive through
+1. **Install SplatWork for Linux** on the PC from the project's Flatpak repository, so updates arrive through
    `flatpak update`, GNOME Software or KDE Discover:
    ```bash
    flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
    ```
-2. **Open SplatWork Node.** The setup assistant (**Set Up…**) finds your NVIDIA driver, lists what it will download
+2. **Open SplatWork for Linux.** The setup assistant (**Set Up…**) finds your NVIDIA driver, lists what it will download
    (about 2.7 GB, needing about 6 GB of disk) and installs a private Python, PyTorch and gsplat inside the app's own
    folder. You can cancel and retry; it resumes from the step that failed and never breaks a working setup.
    - Driver 570 or newer (RTX 20 to RTX 50 series): PyTorch 2.7 + CUDA 12.8 + gsplat 1.6.
@@ -374,7 +374,7 @@ Full details are in [linux/README.md](../linux/README.md).
 6. **Processing models:** install them on the worker from the Mac's Compute page to run camera solving, learned masks
    and video splitting there.
 
-SplatWork Node updates itself when no job is running, keeping its settings, token and GPU runtime.
+SplatWork for Linux updates itself when no job is running, keeping its settings, token and GPU runtime.
 
 ## 12. Troubleshooting
 
@@ -383,10 +383,10 @@ SplatWork Node updates itself when no job is running, keeping its settings, toke
   ```bash
   flatpak install flathub org.freedesktop.Platform.GL.nvidia-620-70-06//1.4
   ```
-  then restart SplatWork Node. Reboot first if you updated the driver without rebooting.
+  then restart SplatWork for Linux. Reboot first if you updated the driver without rebooting.
 - **The Mac doesn't find the worker:** check the firewall (TCP 7878, UDP 5353), make sure both are on the same
   network, or add the worker by its address. *Needs token* means the token is missing or wrong.
-- **A feature says it needs a newer worker**, or is quietly done on the Mac instead: update SplatWork Node with
+- **A feature says it needs a newer worker**, or is quietly done on the Mac instead: update SplatWork for Linux with
   `flatpak update`. Settings, token and GPU runtime are kept across updates.
 - **Camera solving placed only a few photos:** use more overlapping images, try another camera solver, or try without
   masks (masks can hide most of each photo).

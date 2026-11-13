@@ -203,10 +203,10 @@ class Preferences:
         self._switch(g, "start_server_on_launch", "Start the server when the app opens",
                      "So you never forget to turn it on before training from the Mac.")
         self._switch(g, "run_in_background", "Keep running when the window is closed",
-                     "The server keeps serving the Mac in the background. Open SplatWork Node again from the app "
+                     "The server keeps serving the Mac in the background. Open SplatWork again from the app "
                      "grid to see it, or choose Quit in the menu to stop it.")
         self._switch(g, "autostart", "Start automatically when you log in",
-                     "Starts SplatWork Node in the background at login (the system may ask for permission). "
+                     "Starts SplatWork in the background at login (the system may ask for permission). "
                      "Useful for a dedicated GPU box.", after=self.on_autostart)
         self._switch(g, "auto_update", "Install updates automatically",
                      "New versions from the SplatWork repository are downloaded and installed, and the app "

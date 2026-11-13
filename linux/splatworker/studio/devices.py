@@ -1,4 +1,4 @@
-"""Other compute devices on the LAN: SplatWork Nodes (Linux), SplatWork on a Mac with "Act as a worker" and
+"""Other compute devices on the LAN: Linux workers (Linux), SplatWork on a Mac with "Act as a worker" and
 SplatWork Capture's Compute screen on an iPhone. All of them speak the worker API (PROTOCOL.md §4) and advertise
 ``_splatworker._tcp`` (TXT ``kind=mac`` / ``kind=iphone`` for the Apple ones, none for Linux).
 
@@ -128,7 +128,7 @@ class Device:
 
     @property
     def kind(self) -> str:
-        """"linux" (SplatWork Node), "mac" or "iphone" (Apple Metal workers)."""
+        """"linux" (SplatWork for Linux), "mac" or "iphone" (Apple Metal workers)."""
         k = (self.info or {}).get("kind") or self.txt.get("kind") or ""
         v = str((self.info or {}).get("workerVersion") or "")
         if k in ("mac", "iphone"):
@@ -159,7 +159,7 @@ class Device:
 
     @property
     def has_sky(self) -> bool:
-        """Learned skybox sidecars (``/v1/jobs/{id}/sky.png``): SplatWork Node ≥ 1.3.15 only."""
+        """Learned skybox sidecars (``/v1/jobs/{id}/sky.png``): SplatWork for Linux ≥ 1.3.15 only."""
         return self.kind == "linux"
 
     @property
@@ -188,7 +188,7 @@ class Device:
 
     @property
     def slots(self) -> int:
-        """Jobs it runs at once: one per GPU on a SplatWork Node, one on a Mac / iPhone."""
+        """Jobs it runs at once: one per GPU on a Linux worker, one on a Mac / iPhone."""
         return max(1, len(self.gpus)) if self.kind == "linux" else 1
 
     @property
@@ -200,7 +200,7 @@ class Device:
 
     def summary(self) -> str:
         """One line for the device list: kind · GPU · queue · status."""
-        kind = {"mac": "Mac", "iphone": "iPhone", "linux": "SplatWork Node"}[self.kind]
+        kind = {"mac": "Mac", "iphone": "iPhone", "linux": "SplatWork for Linux"}[self.kind]
         bits = [kind, f"{self.host}:{self.port}"]
         if self.gpu_name:
             bits.append(self.gpu_name)
@@ -331,7 +331,7 @@ def fit_problem(device: Device, cameras: Sequence[Dict[str, Any]], config: Dict[
         ram = int((info.get("memory") or {}).get("availableMB") or 0) * 1_048_576
         if images > 3 << 30 and (ram == 0 or images * 2 > ram):
             return (f"{device.name} would hold all {len(cameras)} photos in memory "
-                    f"(about {images * 2 / 2**30:.1f} GB): update SplatWork Node there to 1.3.13 or later")
+                    f"(about {images * 2 / 2**30:.1f} GB): update SplatWork for Linux there to 1.3.13 or later")
     vram = max([int(g.get("memoryMB") or 0) for g in device.gpus] or [0])
     if vram > 0:
         per = 800 if config.get("optimizerPrecision") == "compact" else 1150

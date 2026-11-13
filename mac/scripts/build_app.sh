@@ -39,7 +39,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
-  <key>NSLocalNetworkUsageDescription</key><string>SplatWork receives captures from your iPhone and talks to SplatWork Node GPU servers on your local network.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>SplatWork receives captures from your iPhone and talks to SplatWork for Linux GPU servers on your local network.</string>
   <key>NSBonjourServices</key><array><string>_splatcapture._tcp</string><string>_splatworker._tcp</string></array>
   <key>CFBundleDocumentTypes</key><array>
     <dict><key>CFBundleTypeName</key><string>Gaussian Splat</string><key>CFBundleTypeRole</key><string>Editor</string>

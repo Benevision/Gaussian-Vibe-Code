@@ -1,4 +1,4 @@
-"""Desktop front end for SplatWork Node (GTK 4 + libadwaita), packaged as a Flatpak.
+"""Desktop front end for SplatWork (GTK 4 + libadwaita), packaged as a Flatpak.
 
 Everything in this package except :mod:`splatworker.gui.gtk` is plain Python with no
 GTK dependency, so the setup planner, pip progress parser, NVML wrapper, settings
@@ -10,4 +10,4 @@ as a child process using the GPU runtime the setup assistant installed into
 """
 
 APP_ID = "com.example.SplatWorker"
-APP_NAME = "SplatWork Node"
+APP_NAME = "SplatWork"

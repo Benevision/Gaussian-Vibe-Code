@@ -36,7 +36,7 @@ class NewProjectDialog(Adw.Window):
         cancel = Gtk.Button(label="Cancel")
         cancel.connect("clicked", lambda *_: self.close())
         header.pack_start(cancel)
-        self.create_btn = Gtk.Button(label="Create")
+        self.create_btn = Gtk.Button(label="Create & train")
         self.create_btn.add_css_class("suggested-action")
         self.create_btn.connect("clicked", lambda *_: self._create())
         header.pack_end(self.create_btn)
@@ -124,7 +124,7 @@ class NewProjectDialog(Adw.Window):
         page.add(prep)
 
         # ---------------------------------------------------------- cameras
-        cams = group("Cameras")
+        cams = group("Camera solving")
         self.solver_row = combo_row("Camera solver", [("learned", "COLMAP / GLOMAP + learned features"),
                                                       ("poses", "Use poses from the source")], o.solver,
                                     lambda v: setattr(o, "solver", v), "sfm.solver")
@@ -144,7 +144,7 @@ class NewProjectDialog(Adw.Window):
         self.cams_group = cams
         page.add(cams)
 
-        masks = group("Masks", "Layers stack: every model removes its part, the sky becomes a learned skybox.")
+        masks = group("Masking", "Layers stack: every model removes its part, the sky becomes a learned skybox.")
         self.mask_switches = {}
         for model, title in (("person", "Remove people & pets"), ("sam2_auto", "Remove moving things (SAM 2)")):
             r = switch_row(title, model in o.mask_models, lambda v, m=model: self._mask(m, v), "mask.model")
@@ -159,7 +159,7 @@ class NewProjectDialog(Adw.Window):
 
         # ---------------------------------------------------------- training
         tr = group("Training")
-        tr.add(switch_row("Start training as soon as ready", o.auto_train, lambda v: setattr(o, "auto_train", v)))
+        tr.add(switch_row("Start training as soon as the dataset is ready", o.auto_train, self._auto_train))
         tr.add(combo_row("Quality preset", [(k, f"{v['title']} — {v['subtitle']}") for k, v in PRESETS.items()],
                          o.preset, lambda v: setattr(o, "preset", v), "train.preset"))
         self.train_on_row = train_on_row(controller, o)
@@ -172,6 +172,10 @@ class NewProjectDialog(Adw.Window):
         self._valid()
 
     # ------------------------------------------------------------------ behaviour
+    def _auto_train(self, v: bool) -> None:
+        self.o.auto_train = v
+        self.create_btn.set_label("Create & train" if v else "Create dataset")
+
     def _prio(self, v: bool) -> None:
         self.ctl.prefs.local_jobs_first = v
         self.ctl.save_prefs()

@@ -1,4 +1,4 @@
-# SplatWork Node studio — design and feature parity
+# SplatWork for Linux studio — design and feature parity
 
 *Developer notes.* The Linux desktop app (`linux/`, Flatpak `com.example.SplatWorker`) is both a GPU **worker** for
 other devices and a full **SplatWork** studio. This page explains how the studio is built and tracks, feature by
@@ -141,7 +141,7 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
 | Pause / Resume, Save checkpoint | worker capability `pause`: pausing saves the full trainer state (`resume.pt`: params, optimizer, strategy, RNG, schedulers), frees the GPU and survives worker restarts; `POST /v1/jobs/{id}/checkpoint` → `checkpoint.ply`. Buttons on the Projects training dashboard (checkpoint → `outputs/…-stepN.ply`) and on Queue & Worker rows | ✅ (untested on CUDA) |
 | Results in `outputs/<name>-<time>.ply` + skybox, opened when done | ✅ | ✅ |
 | Shared GPU with the Mac's jobs | one queue per GPU, local priority, "Run next", origin shown | ✅ |
-| Compute devices: other Linux workers / the Mac, Both mode | Compute Devices page (`studio/devices.py`): Bonjour `_splatworker._tcp` (Mac, Linux; retired iPhone workers are ignored) + manual address/token (`devices.json`), health via `/v1/info` with ethernet preference; New Project → *Train on*: This PC / a device / All devices. Preparation always runs on this PC. Photos stay on SplatWork Nodes between runs (`chain`); Mac workers get them again each run | 🟡 untested on a real LAN; no re-attach after an app restart; no live preview or skybox from Mac workers (their API lacks them) |
+| Compute devices: other Linux workers / the Mac, Both mode | Compute Devices page (`studio/devices.py`): Bonjour `_splatworker._tcp` (Mac, Linux; retired iPhone workers are ignored) + manual address/token (`devices.json`), health via `/v1/info` with ethernet preference; New Project → *Train on*: This PC / a device / All devices. Preparation always runs on this PC. Photos stay on Linux workers between runs (`chain`); Mac workers get them again each run | 🟡 untested on a real LAN; no re-attach after an app restart; no live preview or skybox from Mac workers (their API lacks them) |
 | Block-parallel training | single machine: the worker splits a too-big job (1.3.15); several machines: `studio/blocks.py` + `studio/compute.py` (the Mac's partition, distribution by speed and memory, owned-splat merge streamed from disk), each device gets only its blocks' photos, a failed remote block is retried here | ✅ single machine; 🟡 multi-machine untested on real devices |
 | Benchmark | `studio/benchmark.py`: the Mac's standard scene (48 views, 1600×1200, 1 M points, 2 000 steps) as a job of the local worker; `benchmarks.json` in the Mac's `DeviceBenchmark` format; table on Models & Benchmarks; `splatworker benchmark [--url …]` also measures other workers incl. transfer speeds. Measured speeds replace the GPU-name table when placing work | ✅ (processing-model timings ➖ not measured) |
 
@@ -174,7 +174,7 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
   a splat spread thinly over many pixels can pass here and fail on the Mac. The plan rules (2 %, 25 % of the
   typical photo count, minimum typical count 12) are identical.
 * The Flatpak's app id stays `com.example.SplatWorker` so existing installs update in place; the window and
-  launcher are called **SplatWork Node** (the suite was renamed from "Splat Studio" to SplatWork).
+  launcher are called **SplatWork for Linux** (the suite was renamed from "Splat Studio" to SplatWork).
 
 ## Manual test plan (needs an NVIDIA GPU)
 
@@ -217,7 +217,7 @@ Install the build from the branch (after the CI build or a local `linux/flatpak/
     runtime's python.
 10. **Compute devices.** Turn on "Act as a worker" on the Mac: it appears under Compute Devices within ~15 s
     (this PC's own worker must not). Add another worker by address (+ token). New Project with *Train on* = the
-    Mac; then *Train again* on another SplatWork Node (its log should say it still has the photos). A 400+ photo
+    Mac; then *Train again* on another Linux worker (its log should say it still has the photos). A 400+ photo
     scene with *All devices*: per-device block lists and "merged N blocks" in `prep.log`, no seams at block
     borders; kill the Mac worker mid-run (its blocks are retried here); Cancel cancels the remote job.
 11. **Benchmark.** Models & Benchmarks → Run benchmark (a job in Queue & Worker, then a steps/s row); compare with

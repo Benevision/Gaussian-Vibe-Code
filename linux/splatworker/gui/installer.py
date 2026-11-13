@@ -86,7 +86,7 @@ def classify_failure(lines: List[str], returncode: Optional[int], step: Step) ->
     if "no matching distribution" in low or "could not find a version that satisfies" in low:
         return InstallError(f"{step.title}: the package is not available", detail,
                             "The package server does not offer this build (yet or any more). Try a different "
-                            "runtime in the assistant's advanced options, or update SplatWork Node.")
+                            "runtime in the assistant's advanced options, or update SplatWork.")
     if "permission denied" in low or "errno 13" in low:
         return InstallError("Permission denied", detail,
                             "The app could not write to its data folder. Remove the runtime in Settings and "
@@ -212,7 +212,7 @@ class Installer:
         done_w = sum(s.weight for s in self.plan.steps[:start_at])
         verify: Dict[str, Any] = {}
         try:
-            self._log(f"=== SplatWork Node runtime setup ({self.plan.profile_id}) "
+            self._log(f"=== SplatWork runtime setup ({self.plan.profile_id}) "
                       f"{datetime.now().isoformat(timespec='seconds')}")
             if start_at == 0:
                 self._preflight()
@@ -285,7 +285,7 @@ class Installer:
             raise InstallError(f"gsplat {prof.gsplat} for {prof.label} is not published yet",
                                f"{prof.gsplat_find_links} has no gsplat-{prof.gsplat}+{prof.gsplat_index} wheel.",
                                "Choose \"PyTorch 2.4 + CUDA 12.4\" in the advanced options, or wait for the next "
-                               "SplatWork Node update. Your current runtime has not been changed.")
+                               "SplatWork update. Your current runtime has not been changed.")
 
     def _swap_in(self) -> None:
         """Replace the live runtime with the verified staging one (old one removed only after the swap)."""

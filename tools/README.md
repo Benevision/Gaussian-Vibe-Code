@@ -1,6 +1,6 @@
 # splatprep
 
-Processing toolkit shared by **SplatWork** (macOS, PyTorch MPS) and **SplatWork Node** (Linux, CUDA):
+Processing toolkit shared by **SplatWork** (macOS, PyTorch MPS) and **SplatWork for Linux** (Linux, CUDA):
 learned / classic feature matching, SfM, masking, a synthetic ground-truth generator and a
 benchmark harness. The contract is `docs/PROTOCOL.md` §2 (dataset.json) and §6 (processing).
 

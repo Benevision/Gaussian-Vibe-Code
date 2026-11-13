@@ -110,7 +110,7 @@ targets:
       - path: ../mac/Sources/SplatStudio/Pipeline/Sources/StereoDepth.swift
       - path: ../mac/Sources/SplatStudio/Formats/SplatFormats.swift
       - path: ../mac/Sources/SplatStudio/Formats/CompressedPLY.swift
-      # Offloading: discover SplatWork Nodes / Macs (_splatworker._tcp) and train on them, whole or in blocks.
+      # Offloading: discover Linux workers / Macs (_splatworker._tcp) and train on them, whole or in blocks.
       - path: ../mac/Sources/SplatStudio/Remote/WorkerClient.swift
       - path: ../mac/Sources/SplatStudio/Remote/WorkerBrowser.swift
       - path: ../mac/Sources/SplatStudio/Remote/ComputeScheduler.swift

@@ -47,7 +47,8 @@ class T(SplatWorkerApp):
         self.window.set_default_size(1400, 900)
         self.window.present()
         steps = [
-            (1500, lambda: self.window.open_path(__import__("pathlib").Path("/tmp/x/scene/sphere.ply"))),
+            (1200, lambda: shot("0-home")),
+            (300, lambda: self.window.open_path(__import__("pathlib").Path("/tmp/x/scene/sphere.ply"))),
             (5000, lambda: shot("1-viewer")),
             (300, lambda: self.window.viewer_page.mode_row.set_selected(1)),
             (1500, lambda: shot("2-depth")),
@@ -187,7 +188,7 @@ class T(SplatWorkerApp):
         from splatworker.studio import benchmark
         cfg = self.state.paths.config_dir
         benchmark.save_benchmark(cfg, {"deviceId": "local", "name": "cachyos-pc", "date": "2026-11-08T10:00:00Z",
-                                       "gpu": "NVIDIA GeForce RTX 4080", "software": "SplatWork Node 1.4.0",
+                                       "gpu": "NVIDIA GeForce RTX 4080", "software": "SplatWork for Linux 1.4.0",
                                        "trainStepsPerSecond": 41.7, "splats": 1000000, "megapixels": 1.92,
                                        "uploadMBps": None, "downloadMBps": None})
         benchmark.save_benchmark(cfg, {"deviceId": "http://192.168.0.20:7878", "name": "Office PC",

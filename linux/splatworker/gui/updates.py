@@ -111,7 +111,7 @@ def restart_argv(background: bool) -> List[str]:
 def banner_text(state: str, version: str, auto: bool, busy: bool, fraction: float = 0.0,
                 error: str = "") -> Tuple[str, Optional[str]]:
     """(title, button label or None) for the window banner."""
-    name = f"SplatWork Node {version}".strip() if version else "A SplatWork Node update"
+    name = f"SplatWork {version}".strip() if version else "A SplatWork update"
     if state == AVAILABLE:
         if auto and busy:
             return f"{name} is available. It installs and restarts when no jobs are running.", "Download Now"
@@ -120,7 +120,7 @@ def banner_text(state: str, version: str, auto: bool, busy: bool, fraction: floa
         return f"Downloading {name}… {int(fraction * 100)}%", None
     if state == INSTALLED:
         if auto and busy:
-            return f"{name} is installed. SplatWork Node restarts into it when no jobs are running.", "Restart Now"
+            return f"{name} is installed. SplatWork restarts into it when no jobs are running.", "Restart Now"
         return f"{name} is installed.", "Restart"
     if state == FAILED:
         return f"Couldn't update automatically: {error}", "How to Update"

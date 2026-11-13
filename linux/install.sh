@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SplatWork Node installer: creates a virtualenv with CUDA PyTorch + gsplat.
+# SplatWork for Linux installer: creates a virtualenv with CUDA PyTorch + gsplat.
 #
 #   ./install.sh                       # venv in ./venv, auto-detect CUDA wheel tag
 #   ./install.sh --cuda cu121          # force a PyTorch CUDA wheel tag (cu118 cu121 cu124 cu126 cu128)

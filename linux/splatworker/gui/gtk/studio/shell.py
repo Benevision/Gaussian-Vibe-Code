@@ -20,9 +20,12 @@ from .projects_page import ProjectsPage
 from .viewer_page import ViewerPage
 
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".insv", ".360", ".webm")
+# Same order and names as the Mac's sidebar (Viewer, iPhone Inbox, Compute, Models & Benchmarks, Settings
+# Reference), plus this app's Projects page and its own worker queue.
 SECTIONS = [("viewer", "Viewer", "view-reveal-symbolic"), ("projects", "Projects", "folder-symbolic"),
+            ("inbox", "iPhone Inbox", "phone-symbolic"),
+            ("devices", "Compute", "network-workgroup-symbolic"),
             ("worker", "Queue & Worker", "network-server-symbolic"),
-            ("devices", "Compute Devices", "network-workgroup-symbolic"), ("inbox", "iPhone Inbox", "phone-symbolic"),
             ("models", "Models & Benchmarks", "applications-science-symbolic"),
             ("reference", "Settings Reference", "accessories-dictionary-symbolic")]
 
@@ -77,7 +80,7 @@ class StudioShell:
         self.pages.add_named(self.viewer_page, "viewer")
         self.pages.add_named(self.projects_page, "projects")
         self.pages.add_named(worker_view, "worker")
-        self.devices_page = page("Compute Devices", lambda: DevicesPage(self, self.studio))
+        self.devices_page = page("Compute", lambda: DevicesPage(self, self.studio))
         self.pages.add_named(self.devices_page, "devices")
         self.pages.add_named(self.inbox_page, "inbox")
         self.pages.add_named(self.models_page, "models")
@@ -107,7 +110,7 @@ class StudioShell:
             row.badge = badge
             self.side_list.append(row)
             self._section_rows[key] = row
-        self.recent_header = label("Recent", ("caption-heading", "dim-label"), wrap=False)
+        self.recent_header = label("Files", ("caption-heading", "dim-label"), wrap=False)
         self.recent_header.set_margin_top(12)
         self.recent_header.set_margin_start(12)
         self.recent_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)

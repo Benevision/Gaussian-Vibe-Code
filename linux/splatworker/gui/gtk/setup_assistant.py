@@ -20,7 +20,7 @@ PROFILE_CHOICES = [(None, "Automatic (recommended)")] + [(p.id, p.label) for p i
 
 class SetupAssistant(Adw.Window):
     def __init__(self, parent: Gtk.Window, state, on_finished: Optional[Callable[[bool], None]] = None):
-        super().__init__(transient_for=parent, modal=True, title="Set Up SplatWork Node",
+        super().__init__(transient_for=parent, modal=True, title="Set Up SplatWork",
                          default_width=680, default_height=720)
         self.state = state
         self.on_finished = on_finished
@@ -127,7 +127,7 @@ class SetupAssistant(Adw.Window):
             title="What will be installed",
             description=esc(f"About {self.plan.download_mb / 1000:.1f} GB will be downloaded from the internet "
                             f"and about {self.plan.disk_mb / 1000:.1f} GB of disk space used, in "
-                            f"{self.state.paths.data_root}. Nothing is installed outside SplatWork Node's own "
+                            f"{self.state.paths.data_root}. Nothing is installed outside SplatWork's own "
                             "folder; removing the app removes it all."))
         for s in self.plan.steps:
             r = action_row(s.title.replace("Downloading ", "").replace("Installing ", ""), s.description)
@@ -141,7 +141,7 @@ class SetupAssistant(Adw.Window):
         sp = Adw.SwitchRow(title="Dataset processing (splatprep)",
                            subtitle="Lets the Mac run feature matching, SfM and masking on this computer. "
                                     "Adds about 60 MB." if self.splatprep_src else
-                                    "Not included in this build of SplatWork Node.",
+                                    "Not included in this build of SplatWork.",
                            active=self.with_splatprep, sensitive=self.splatprep_src is not None)
         sp.connect("notify::active", self._on_option, "splatprep")
         opts.add(sp)

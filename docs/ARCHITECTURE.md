@@ -5,14 +5,14 @@ SplatWork has four parts that share the formats and protocols in [PROTOCOL.md](P
 | Part | Folder | Language | Role |
 |---|---|---|---|
 | **SplatWork** | `mac/` | Swift, SwiftUI, Metal | Coordinator: viewer, editor, dataset preparation, Metal trainer, client for workers, receiver for iPhone captures |
-| **SplatWork Node** | `linux/` | Python, FastAPI, gsplat, GTK 4 | Optional CUDA server for training and processing jobs, packaged as a Flatpak |
+| **SplatWork for Linux** | `linux/` | Python, FastAPI, gsplat, GTK 4 | Optional CUDA server for training and processing jobs, packaged as a Flatpak |
 | **splatprep** | `tools/splatprep/` | Python, PyTorch | Learned SfM, masks, video frames and benchmarks. Runs on the Mac (MPS, Models pack) and inside the worker (CUDA) |
 | **SplatWork Capture** | `ios/` | Swift, ARKit | iPhone capture of posed frames, LiDAR depth and points |
 
 (`steamframe/` holds an experimental headset capture prototype. Its hardware access is unverified.)
 
 ```
- iPhone (SplatWork Capture)                    Mac (SplatWork)                          Linux PC (SplatWork Node)
+ iPhone (SplatWork Capture)                    Mac (SplatWork)                          Linux PC (SplatWork for Linux)
  ──────────────────────                    ──────────────────                          ───────────────────────
  ARKit + LiDAR frames                      Sources ─▶ DatasetBuilder                   FastAPI server (:7878)
  .splatcapture bundle ──POST /v1/captures─▶  ingest ─▶ masks ─▶ poses ─▶ dataset/      JobManager (queue, 1 job/GPU)

@@ -1,6 +1,6 @@
 # Suite release: push a tag like v1.4.0 and this builds
 #   * SplatWork for Mac (Apple silicon) as a .dmg — version = the tag
-#   * SplatWork Node for Linux as a single-file .flatpak (its own version, linux/splatworker/__init__.py)
+#   * SplatWork for Linux for Linux as a single-file .flatpak (its own version, linux/splatworker/__init__.py)
 # and publishes them on one GitHub Release with SHA-256 checksums and install notes.
 #
 #   git tag -a v1.4.0 -m "SplatWork 1.4.0" && git push origin v1.4.0
@@ -130,12 +130,16 @@ jobs:
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"; REPO="${GITHUB_REPOSITORY#*/}"
           SIGNED="ad-hoc signed (not notarized): the first time, right-click the app → **Open** → **Open**, or run \`xattr -dr com.apple.quarantine \"/Applications/SplatWork.app\"\`."
           [ "$NOTARIZED" = "true" ] && SIGNED="signed with a Developer ID and notarized."
+          V="${GITHUB_REF_NAME#v}"
+          # The release's section of CHANGELOG.md ("## 1.2.0 — date" up to the next "## "), as the highlights
+          awk -v v="$V" '$0 ~ "^## " v "( |$)" {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md > highlights.md || true
           {
+            if [ -s highlights.md ]; then echo "## What's new"; cat highlights.md; echo; fi
             echo "## Install"
             echo
             echo "**Mac (Apple silicon, macOS 15 or later)** — \`$DMG\`: open it and drag SplatWork to Applications. This build is $SIGNED"
             echo
-            echo "**Linux GPU worker (NVIDIA)** — SplatWork Node $WV, \`$FP\`:"
+            echo "**Linux GPU worker (NVIDIA)** — SplatWork for Linux $WV, \`$FP\`:"
             echo '```'
             echo "flatpak install --user $FP"
             echo '```'
@@ -143,7 +147,7 @@ jobs:
             echo
             echo "**iPhone (SplatWork Capture)** — not included: iOS apps can't be installed from a download; build it from \`ios/\` in Xcode."
             echo
-            echo "## Changes"
+            echo "## All changes"
             echo
             if [ -n "$PREV" ]; then git log --no-merges --format='* %s' "$PREV..HEAD"; else git log --no-merges --format='* %s' -n 40; fi
           } > notes.md

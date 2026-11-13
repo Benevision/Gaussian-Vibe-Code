@@ -64,7 +64,7 @@ def cmd_serve(args) -> int:
     if token is None:
         log.warning("no token configured: anyone on the network can use this worker "
                     "(use --token-file or SPLATWORKER_TOKEN)")
-    log.info("SplatWork Node %s '%s' on %s:%d, data dir %s", __version__, settings.name,
+    log.info("SplatWork for Linux %s '%s' on %s:%d, data dir %s", __version__, settings.name,
              settings.host, settings.port, settings.data_dir)
     app = create_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=args.log_level,
@@ -181,7 +181,7 @@ def cmd_info(args) -> int:
 
 def cmd_benchmark(args) -> int:
     """The standard training benchmark (the Mac's Compute → Benchmark / ``--benchmark``) on a running worker:
-    by default this PC's (SplatWork Node's server, or ``splatworker serve``). Saved to benchmarks.json."""
+    by default this PC's (SplatWork for Linux's server, or ``splatworker serve``). Saved to benchmarks.json."""
     from urllib.parse import urlparse
 
     from .gui.paths import AppPaths
@@ -225,7 +225,7 @@ def cmd_benchmark(args) -> int:
     except (ApiError, benchmark.BenchmarkError) as e:
         print(f"benchmark failed: {getattr(e, 'message', None) or e}", file=sys.stderr)
         if isinstance(e, ApiError) and e.status is None:
-            print("Is the worker running? Start SplatWork Node (or `splatworker serve`), or pass --url.",
+            print("Is the worker running? Start SplatWork for Linux (or `splatworker serve`), or pass --url.",
                   file=sys.stderr)
         return 1
     if loopback:
@@ -240,7 +240,7 @@ def cmd_benchmark(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="splatworker", description="SplatWork Node - CUDA training server")
+    p = argparse.ArgumentParser(prog="splatworker", description="SplatWork for Linux - CUDA training server")
     p.add_argument("--version", action="version", version=f"splatworker {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -261,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-extracted-gb", type=float, default=40.0)
     s.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug"])
     s.add_argument("--allow-local-datasets", action="store_true",
-                   help="enable the endpoints for SplatWork Node's desktop app on this PC (local folders as "
+                   help="enable the endpoints for SplatWork for Linux's desktop app on this PC (local folders as "
                         "datasets, queue order); it must also pass its per-launch secret in $" + LOCAL_SECRET_ENV)
     s.set_defaults(func=cmd_serve)
 
@@ -297,8 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     b = sub.add_parser("benchmark", help="measure training speed (the standard SplatWork benchmark) on a running "
                                          "worker, by default this PC's; saved to benchmarks.json")
-    b.add_argument("--url", help="worker URL (default: this PC's SplatWork Node server, from its settings)")
-    b.add_argument("--token", help="bearer token (default: SplatWork Node's own token file)")
+    b.add_argument("--url", help="worker URL (default: this PC's SplatWork for Linux server, from its settings)")
+    b.add_argument("--token", help="bearer token (default: SplatWork for Linux's own token file)")
     b.add_argument("--token-file")
     b.add_argument("--config-dir", help="where benchmarks.json is kept (default: the app's config dir)")
     b.add_argument("--scene-dir", help="where the synthetic scene is built and cached")
