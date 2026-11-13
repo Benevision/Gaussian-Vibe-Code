@@ -210,6 +210,53 @@ carries on as the experimental `rocm6.4-train` runtime. The Mac trainer is not c
   gsplat): the EWA Jacobian's derivative where x/z or y/z is clamped is the usual approximation, not the exact
   derivative; the 0.99 alpha clamp has no gradient.
 
+### Stage 2a status (the training program, `splatwork-vk-train train`)
+
+- **Interface** (for the worker backend in stage 3, like `trainer.subprocess_entry`):
+  `splatwork-vk-train train --dataset DIR --out result.ply [--config cfg.json] [--set key=value …] [--iterations N]
+  [--job-dir DIR] [--resume FILE] [--preview-every N]`. Stdout is JSON lines with the messages `subprocess_entry`
+  queues: `status` (state, message, step, totalSteps, loss, psnr, evalPsnr, numGaussians, elapsedSeconds,
+  etaSeconds), `log`, `preview`, `checkpoint`, `paused`, `cancelled`, `error`, and `done` (numGaussians, psnr,
+  evalPsnr, trainPsnr, loss, elapsedSeconds, steps, stepsPerSecond, msPerStep). The job dir gets `preview.splat`
+  (`export_preview_splat`'s layout), `checkpoint.ply` and `resume.vkstate`. Control is one command per line on
+  stdin: `checkpoint`, `pause` (checkpoint + resume state, exit 3), `cancel` (exit 4); SIGTERM / SIGINT cancel;
+  end of stdin is not a command. `--resume FILE` continues (and a later pause saves there). Exit codes 0 done,
+  1 error, 2 invalid arguments / config, 3 paused, 4 cancelled.
+- **Matches trainer.py:** dataset.json parsing and checks, images resized like `load_view` (PIL-style Lanczos,
+  EXIF orientation, masks bilinear), soft loss masks (`gt·m + pred.detach()·(1 − m)`), alpha photos composited
+  over the step's background; `init_points` (points3d.ply, region filter, random-init fallback, maxGaussians
+  subsample, background shell), kNN (k = 3) scale init, random quaternions, `initialOpacity`; the shuffled view
+  order; random / black / white background (black for evaluation); L1 + SSIM with fused-ssim's `padding="valid"`;
+  the opacity / scale (MCMC defaults), anisotropy and flatness regularisers; Adam (eps 1e-15) with the per-group
+  LRs, position LR × sceneExtent decaying exponentially to `lrPositionFinal`; the SH degree schedule;
+  `progressiveResolution`; gsplat's MCMCStrategy (relocation, +5 % growth to the cap, position noise with the
+  post-scheduler LR) with `longAxisSplit`, and DefaultStrategy (clone / split / prune incl. the 3D scale prune
+  after the first reset interval, gradients scaled by W/2, H/2, `absGrad` with the ×4 threshold, the growth stop
+  at `maxGaussians`); holdout PSNR (clamped render, masks scored against the render, mean over photos);
+  `cameraIds` and the region camera test; the PLY layout with the `splatstudio_up` comment (gravityUp first).
+- **Logged as not supported yet** (one line each when enabled; 2b): appearance correction, bilateral grid,
+  decoupled SSIM, depth supervision, depth-normal loss and depth priors (incl. `priorInitPoints`,
+  `monoDepthWeight`), transient masking, skybox, pose refinement, `optimizerPrecision: compact` (fp32 is used).
+- **Deliberate differences:** the result is trimmed to the region's expanded box (trainer.py writes everything and
+  leaves the cropping to the Mac's merger; neither prunes during training). gsplat 1.5's DefaultStrategy never
+  resets opacities (`step % reset_every == 0 & step > 0` parses as a chained comparison that is always false):
+  matched; `--opacity-reset` turns the textbook reset on. Random numbers are this program's own (mt19937_64 for
+  the host, a counter hash for the GPU noise), so runs are not bit-identical to the CUDA trainer's. The reported
+  `loss` is the photometric loss (L1 + SSIM) without the regulariser terms. Relocation's equation 9 runs in double
+  (gsplat: float). Photos stay in RAM (4 bytes / pixel), there's no disk-streaming mode yet.
+- **Densification runs on the host** on a read-back copy of params + both Adam moments (708 bytes / splat each way):
+  ~1 GB each way per refinement at 1.5 M splats, every `densifyInterval` steps inside the window — estimated
+  0.1–0.2 s per refinement on PCIe 4 (not measured yet). Free on lavapipe (mapped memory).
+- **Lavapipe numbers** (aarch64 colima VM, 4 GB; synthetic 128×96 scene, 14 + 2 photos, 3–11 k splats):
+  25–30 steps / s; per step ~15 ms forward + loss, ~20 ms backward + Adam. Holdout PSNR after 1000 steps:
+  MCMC 20.3 → 22.2 → 23.8 → 24.2 dB (3000 → 3827 splats), adaptive 20.1 → 23.3 → 25.0 → 25.4 dB (3000 → 10966).
+  A run resumed from a saved state follows the uninterrupted run within 4e-6 (relative loss, first 10 steps;
+  ≤ 1.5e-4 over 70 steps). Real GPU numbers come from the PC (`compare_training.sh`).
+- **PC comparison:** `bash linux/vktrain/compare_training.sh DATASET [--iterations N] [--strategy both]` trains
+  with the CUDA trainer (`flatpak run com.example.SplatWorker --cli train`) and with splatwork-vk-train on the same
+  config (unsupported features off for both) and prints eval PSNR, splats, wall time and steps / s. `--no-cuda`
+  for AMD / Intel.
+
 ### Stages (each checked in with the user)
 
 1. Kernels: projection, sort, tile binning, rasterisation forward / backward, L1 + SSIM loss, Adam — with gradient
