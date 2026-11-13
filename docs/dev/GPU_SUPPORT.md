@@ -113,6 +113,75 @@ Checked against upstream, not on hardware.
 Nothing here should be presented as "training works on AMD / Intel" until a real card has trained the benchmark
 scene.
 
+## Decision (2026-11-13): a portable Vulkan trainer
+
+The user approved option B: a Vulkan compute port of the Mac's Metal trainer (`TrainShaders.swift`,
+`MetalTrainer.swift`, `TrainingData.swift`, `TrainSkybox.swift`), ported by design, not line by line. It becomes the
+training path on AMD and Intel and an option on NVIDIA, where gsplat / CUDA stays the default until the Vulkan
+trainer has proven itself on the reference eval (target: within about 0.3 dB of gsplat). The ROCm gsplat spike
+carries on as the experimental `rocm6.4-train` runtime. The Mac trainer is not changed.
+
+### Shading language: GLSL 4.6 compute → SPIR-V, compiled when the app is built
+
+- **Why GLSL:** the most mature path to SPIR-V (glslang ships in the Freedesktop SDK the Flatpak builds with, and
+  in every distribution), every driver we care about (NVIDIA, Mesa RADV, Mesa ANV, lavapipe for tests) is
+  exercised daily with it, and the extensions we need are standard: `GL_EXT_shader_atomic_float` (float atomic add,
+  with a fallback), `GL_KHR_shader_subgroup_arithmetic` (subgroup sums), `GL_EXT_shader_explicit_arithmetic_types`.
+- **Not Slang** (for now): its automatic differentiation and Metal / D3D12 targets are attractive, but it adds a
+  young compiler to the build and, through SlangPy, a JIT runtime to the app. Our kernels' gradients are hand-written
+  and checked numerically on the Mac already; the same checks run here. Slang stays an option for the Windows app.
+- **Not WGSL / wgpu:** WGSL has no float atomics (the backward pass accumulates per-splat gradients with them) and
+  limited subgroup support.
+- Users need no compiler: shaders are compiled to SPIR-V during the Flatpak build and embedded in the binary.
+
+### Host: a small native trainer program, `splatwork-vk-train` (C++17, Vulkan 1.2)
+
+- A standalone executable, built in the Flatpak (and later for Windows), that trains one dataset directory with
+  one `TrainingConfig` (docs/PROTOCOL.md §3), like the Python trainer process the worker already spawns: it reads
+  the dataset and config, prints progress as JSON lines, writes preview / checkpoint / result PLYs and a resume
+  file, and obeys pause / checkpoint / cancel requests. The worker's backend runs it as a subprocess, so the server,
+  queue, protocol and the Mac are unchanged.
+- **Why a native program and not Python:** the worker runs either in the app's own Python (3.14, no torch) or in the
+  downloaded GPU runtime (3.10); a separate executable works under both and needs **no download at all** — the
+  point of the Vulkan path on AMD / Intel. The training loop (densification, schedules) is host code on the Mac
+  too; Swift → C++ is a close port. Python Vulkan bindings (`vulkan` / cffi, Kompute) would add per-dispatch
+  overhead, dependencies to install, and less control over memory and dynamic sizes.
+- Third-party code, all permissively licensed and vendored: Vulkan Memory Allocator (MIT), stb_image (public
+  domain / MIT), nlohmann/json (MIT). Nothing from Spirula (GPL-3.0).
+- The Vulkan loader and drivers come from the Flatpak runtime (`org.freedesktop.Platform` ships the loader, Mesa
+  RADV / ANV / lavapipe through the GL extension; NVIDIA's Vulkan driver comes with the `GL.nvidia-<version>`
+  extension the app already asks for). `--device=all` gives the device nodes.
+
+### Portability rules for the kernels
+
+- **Subgroup size is never assumed** (wave32 vs wave64 is what broke AMD's gsplat port): reductions use
+  `subgroupAdd` (any width) or shared memory; nothing hard-codes 32 or 64. The tile size (16×16) is a workgroup
+  size, not a subgroup size.
+- **Float atomic add** in the backward pass uses `GL_EXT_shader_atomic_float` when the device reports
+  `shaderBufferFloat32AtomicAdd` (NVIDIA, RADV, ANV, lavapipe do); otherwise a second SPIR-V build uses a
+  compare-and-swap loop on the float's bits. Gradients are first summed per subgroup, so either way only one
+  atomic per subgroup and splat is issued.
+- Sorting (depth, then tile keys) is a GPU LSD radix sort written for this trainer (workgroup histograms + scan),
+  independent of subgroup width.
+
+### Testing
+
+- Every kernel has a numerical gradient check (finite differences in double precision on the CPU against the
+  analytic backward pass) and a CPU reference, run with **Mesa lavapipe** (software Vulkan) in the Debian test
+  container and in CI — no GPU needed.
+- On the RTX 4080: the same kernels and a full training run compared with gsplat / CUDA (PSNR on the reference
+  eval, speed). On the RX 6700 XT (SteamOS, Mesa RADV): the same steps through the Flatpak.
+
+### Stages (each checked in with the user)
+
+1. Kernels: projection, sort, tile binning, rasterisation forward / backward, L1 + SSIM loss, Adam — with gradient
+   checks on lavapipe.
+2. Training loop: densification (MCMC and default strategies), the full `TrainingConfig`, progress / previews,
+   pause / resume / checkpoints, block regions. Quality and speed against gsplat on the 4080.
+3. Runtime and setup: a "vulkan" trainer chosen by default on AMD / Intel and selectable on NVIDIA, no CUDA / ROCm
+   download, setup wording, the SteamOS test procedure, release.
+4. AMD test on the RX 6700 XT.
+
 ## Suggested order
 
 1. ✅ (1.6.0) **Detect AMD and Intel GPUs** (sysfs `/sys/class/drm/card*/device/vendor` for 0x1002 / 0x8086, VRAM from
