@@ -10,6 +10,7 @@ Where SplatWork stands, what is tested and how, what is known to be missing, and
 | SplatWork (Mac) | 1.2.0 | the release tag (`SPLAT_VERSION` in `mac/scripts/build_app.sh`); build number = commit count | `.dmg` on the GitHub release; a rolling `dev` pre-release from `main` |
 | SplatWork for Linux | 1.6.0 (unreleased; 1.5.0 in the 1.2.0 release) | `linux/splatworker/__init__.py`, `linux/pyproject.toml`, `<release>` in `linux/flatpak/com.example.SplatWorker.metainfo.xml` | Flatpak repository on GitHub Pages (every push to `main`), `.flatpak` bundle on the release |
 | SplatWork Capture (iPhone) | 1.2 (build 2) | `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `ios/project.yml` | build from source (not on the App Store / TestFlight) |
+| SplatWork for Windows | 1.3.0 (unreleased; `windows/VERSION`, the release tag in releases) | `windows/VERSION`; `bundle.json` in the app folder | `.msi` + portable `.zip` on the GitHub release (from the next release) |
 | splatprep | 0.1.0 | `tools/pyproject.toml` | inside the Mac app and the Linux Flatpak |
 
 Identifiers that must not change (installs and data depend on them): Flatpak app id `com.example.SplatWorker`, Bonjour
@@ -26,6 +27,7 @@ services `_splatworker._tcp` / `_splatcapture._tcp`, the Mac module and binary `
 | Linux GTK interface | `linux/scripts/gui_smoke.py` under Xvfb in a Debian container with Mesa (OpenGL via llvmpipe): screenshots of every page | layout and wiring, not real GPUs |
 | Mac app | `swift build -c release`; headless CLI: `--prepare`, `--train [--blocks N]`, `--eval`, `--convert`, `--render`, `--survey`; UI snapshots with `SPLAT_UI_SNAPSHOTS=<dir>` (plus `SPLAT_UI_PROJECT`, `SPLAT_UI_DRONE`) | end to end on real photos; the trainer's gradients are checked |
 | iPhone app | `xcodebuild` for the simulator and for devices (Release) | builds; not run on a phone for 1.2 |
+| SplatWork for Windows | `.github/workflows/windows.yml` on `windows-latest` (no GPU): the Linux suite and splatprep tests on Windows, worker smoke (start, `/v1/info`, mDNS, stop), GTK studio smoke with screenshots (Mesa software OpenGL), MSI build → silent install → installed worker + studio → firewall rules → uninstall | startup, packaging and discovery on one machine; not real GPUs, real drivers or a real LAN |
 | Releases | `gh workflow run release.yml -f version=X.Y.Z-rc1` builds everything without publishing | 1.2.0 was dry-run first |
 
 Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand on an RTX 4080), Apple Object Capture
@@ -50,7 +52,8 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
    1.6.0 (untested on real AMD / Intel hardware); training needs a decision on the path: see [GPU_SUPPORT.md](GPU_SUPPORT.md).
 2. **Linux parity with this release's Mac features:** the Projects list with stage checkpoints and resume, drone
    mode and the photo-location switch, Show Live View, block Retry / Leave Out / Pause.
-3. **A Windows app** with the Mac and Linux feature set: plan in [WINDOWS.md](WINDOWS.md).
+3. **A Windows app** with the Mac and Linux feature set: built and green in CI ([WINDOWS.md](WINDOWS.md)); needs
+   a real Windows PC with an NVIDIA GPU for the first hardware test.
 4. **Steam Frame capture:** recording with the stereo cameras and the IR cameras together, for room meshing that
    makes splats more accurate.
 
@@ -63,7 +66,7 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 3. Run the tests above, then a dry run: `gh workflow run release.yml -f version=X.Y.Z-rc1`.
 4. Tag the commit the dry run built and push the tag:
    `git tag -a vX.Y.Z <commit> -m "SplatWork X.Y.Z" && git push origin vX.Y.Z`.
-   The workflow builds the `.dmg` and the Flatpak bundle, writes `SHA256SUMS.txt` and publishes the release; Mac apps
+   The workflow builds the `.dmg`, the Flatpak bundle and the Windows `.msi` / `.zip` (via `windows.yml`), writes `SHA256SUMS.txt` and publishes the release; Mac apps
    offer the update, and the website's download button follows the latest release.
 
 Every push to `main` also publishes the Mac developer build (`dev` pre-release) and, for changes under `linux/`,

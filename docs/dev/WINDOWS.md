@@ -1,8 +1,29 @@
 # SplatWork for Windows: plan
 
-*Developer notes for the roadmap item "a Windows app with the Mac and Linux feature set". Status: **plan approved**
-(2026-11-13): GTK 4 shared with Linux; no Windows test PC yet, so Stages A–C are tested on the `windows-latest` CI
-runner only (no GPU) and everything that needs real hardware ships marked untested.*
+*Developer notes for the roadmap item "a Windows app with the Mac and Linux feature set". Status: **built** (2026-11-13),
+see below. GTK 4 shared with Linux; no Windows test PC yet, so everything is tested on the `windows-latest` CI runner
+only (no GPU) and what needs real hardware is listed as untested.*
+
+## Status (2026-11-13): built, green in CI, untested on real hardware
+
+| Stage | Done | Tested on `windows-latest` (no GPU) |
+|---|---|---|
+| A — worker | `platform_compat.py` (memory, junction / hard-link instead of symlink, process trees, stop through stdin), `platform_win.py` (DXGI adapters), `%APPDATA%` / `%LOCALAPPDATA%` paths, Windows port checks, `os.pathsep`, the GPU runtime for Windows (python-build-standalone 3.10, `Scripts\python.exe`, gsplat 1.5.3 `win_amd64` wheels for cu124 / cu121 / cu118; cu128 skipped) | Linux suite + splatprep suite on Windows; `windows/scripts/worker_smoke.py`: start → `/v1/info` → found over mDNS → clean stop |
+| B — studio | the shared GTK 4 studio from MSYS2 (GTK 4.24, libadwaita 1.10), WGL loader for the viewer, Windows wording, start at sign-in through the HKCU `Run` key | `windows/scripts/studio_smoke.py`: window, viewer (Mesa llvmpipe OpenGL 4.3), Projects, Worker, Compute, Models, Inbox, New Project, each screenshotted |
+| C — release | `SplatWork.exe` / `splatwork-cli.exe` launchers embedding Python (`windows/launcher`), app folder (`windows/build/make_bundle.py`), MSI (WiX 5: per-machine, firewall rules for Private networks, Start menu, major upgrades), zip, in-app update from the release's MSI (`gui/windows_update.py`), `release.yml` job, README / website / changelog | MSI built, installed silently, installed worker + studio smoke-tested, firewall rules and shortcut checked, uninstalled cleanly |
+
+**Not tested** (needs a Windows PC with an NVIDIA GPU, which the project doesn't have yet):
+1. setup assistant downloading the CUDA runtime, and training a scene with gsplat on Windows;
+2. the viewer on real NVIDIA / AMD / Intel drivers, HiDPI scaling;
+3. a Mac finding the PC over a real network, the firewall rules from the MSI on a Private network, and the hint on
+   Public networks;
+4. the update flow from one release to the next (needs two releases with the MSI);
+5. a processing job sent from a Mac (COLMAP / GLOMAP Windows binaries are not bundled; pycolmap is the mapper);
+6. the turntable video (GStreamer VP8/VP9 plug-ins are bundled but unexercised), OneDrive-redirected Documents.
+
+Known gaps: Windows workers show as "SplatWork for Linux" in other studios' device lists (the protocol doesn't carry
+the OS, and changing it was out of scope); no RTX 50-series training profile until a Windows cu128 gsplat wheel is
+built; the installer isn't code-signed (SmartScreen warns once).
 
 ## Summary
 

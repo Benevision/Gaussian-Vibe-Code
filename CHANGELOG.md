@@ -6,6 +6,15 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Windows (new, untested on real hardware):** the Linux worker and studio, with the same GTK 4
+  interface, packaged for Windows 10 / 11 as an `.msi` installer and a portable `.zip`.
+  - It includes the Projects list, the new project flow, the viewer and editor, Compute devices and the setup
+    assistant. The assistant installs PyTorch, CUDA and gsplat for NVIDIA cards using gsplat's Windows wheels.
+  - Macs find the PC over Bonjour. The installer opens the worker's port and mDNS on Private networks only.
+  - It updates itself from new releases, checking each installer against the release's checksums.
+  - Built, installed and smoke-tested on GitHub's Windows runners, which have no GPU. Training on an NVIDIA GPU,
+    the viewer on real drivers and discovery from a Mac over a real network haven't been tried yet.
+  - AMD and Intel GPUs can view and process; they'll train once the Vulkan trainer lands.
 - **SplatWork for Linux 1.6.0 — AMD and Intel graphics cards:** the app now recognises AMD Radeon / Instinct and
   Intel Arc cards (name, video memory, load), shows them on the Status page and to the Mac, and explains that
   training still needs an NVIDIA GPU instead of saying "no GPU found". On those cards it offers a processing runtime

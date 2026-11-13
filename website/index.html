@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SplatWork — Gaussian splats on your own machines</title>
-<meta name="description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux GPU machines. Native Metal trainer and renderer, CUDA worker, multi-device block training. Free and open source.">
+<meta name="description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux or Windows GPU machines. Native Metal trainer and renderer, CUDA worker, multi-device block training. Free and open source.">
 <meta property="og:title" content="SplatWork">
-<meta property="og:description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux GPU machines.">
+<meta property="og:description" content="Make, train, view and edit 3D Gaussian splats on your own Mac, iPhone and Linux or Windows GPU machines.">
 <meta property="og:image" content="images/start-page.png">
 <meta name="theme-color" content="#0d1117">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
@@ -169,14 +169,14 @@
       </a>
       <a class="btn" href="#download">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-        Install on Linux
+        Linux &amp; Windows
       </a>
       <a class="btn" href="https://github.com/Benevision/SplatWork">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2.2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.4 11.4 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .5z"/></svg>
         Source on GitHub
       </a>
     </div>
-    <p class="fineprint">Mac with Apple silicon, macOS 15+ · Linux with an NVIDIA GPU · iPhone with iOS 18+</p>
+    <p class="fineprint">Mac with Apple silicon, macOS 15+ · Linux or Windows with an NVIDIA GPU · iPhone with iOS 18+</p>
     <div class="shot"><img src="images/start-page.png" width="1600" height="1085" alt="SplatWork on the Mac: create a splat from photos, video, 360° video, an iPhone LiDAR capture, stereo footage or a COLMAP / Nerfstudio dataset"></div>
   </div>
 </header>
@@ -194,9 +194,9 @@
       </div>
       <div class="card">
         <div class="ico" style="background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="12" rx="2"/><path d="M7 19h10M9 15v4M15 15v4"/><circle cx="8" cy="9" r="1.2" fill="currentColor"/></svg></div>
-        <h3>SplatWork for Linux</h3>
-        <p>A CUDA worker built on gsplat that trains and processes for your Macs, and a full desktop studio of its own on Linux.</p>
-        <span class="runs">Linux · NVIDIA GPU · Flatpak</span>
+        <h3>SplatWork for Linux &amp; Windows</h3>
+        <p>A CUDA worker built on gsplat that trains and processes for your Macs, and a full desktop studio of its own on the PC.</p>
+        <span class="runs">Linux (Flatpak) or Windows 10/11 · NVIDIA GPU</span>
       </div>
       <div class="card">
         <div class="ico" style="background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--orange)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg></div>
@@ -269,8 +269,8 @@
 <section id="download" class="alt install">
   <div class="wrap">
     <h2>Download</h2>
-    <p class="sub">Both apps update themselves. Release notes are in the <a href="https://github.com/Benevision/SplatWork/blob/main/CHANGELOG.md">changelog</a>.</p>
-    <div class="grid g3">
+    <p class="sub">The Mac, Linux and Windows apps update themselves. Release notes are in the <a href="https://github.com/Benevision/SplatWork/blob/main/CHANGELOG.md">changelog</a>.</p>
+    <div class="grid g4">
       <div class="card">
         <h3>SplatWork for Mac <span class="ver" id="mac-ver2" hidden></span></h3>
         <ul><li>Apple silicon, macOS 15 or later</li><li>Not notarized yet: the first time, right-click the app and choose <b>Open</b></li><li>A developer build with the latest changes is also published</li></ul>
@@ -280,6 +280,11 @@
         <h3>SplatWork for Linux for Linux <span class="ver" id="node-ver" hidden></span></h3>
         <ul><li>Any distribution with Flatpak; NVIDIA GPU for training</li><li>Its setup assistant installs a matching PyTorch and gsplat</li></ul>
         <div class="cmd"><button class="copy" type="button">Copy</button>flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref</div>
+      </div>
+      <div class="card">
+        <h3>SplatWork for Windows <span class="ver" id="win-ver" hidden></span></h3>
+        <ul><li>Windows 10 or 11, x64; NVIDIA GPU for training</li><li>Its setup assistant installs a matching PyTorch and gsplat</li><li id="win-note">Not code-signed yet: if SmartScreen warns, choose <b>More info</b> → <b>Run anyway</b></li></ul>
+        <a class="btn primary" id="win-dl" href="https://github.com/Benevision/SplatWork/releases/latest">Download .msi</a>
       </div>
       <div class="card">
         <h3>SplatWork Capture for iPhone</h3>
@@ -316,7 +321,7 @@
 </footer>
 
 <script>
-// Live versions: the latest Mac release (GitHub API) and the published SplatWork for Linux (flatpak/version.json).
+// Live versions: the latest Mac and Windows release (GitHub API) and the published SplatWork for Linux (flatpak/version.json).
 // Every link already works without them.
 (async () => {
   try {
@@ -326,6 +331,13 @@
       const dmg = (rel.assets || []).find(a => /macos.*\.dmg$/i.test(a.name));
       const v = (rel.tag_name || "").replace(/^v/, "");
       if (dmg) for (const id of ["mac-dl", "mac-dl2"]) document.getElementById(id).href = dmg.browser_download_url;
+      const msi = (rel.assets || []).find(a => /windows.*\.msi$/i.test(a.name));
+      if (msi) {
+        document.getElementById("win-dl").href = msi.browser_download_url;
+        const b = document.getElementById("win-ver"); b.textContent = (rel.tag_name || "").replace(/^v/, ""); b.hidden = false;
+      } else {
+        document.getElementById("win-dl").textContent = "Coming with the next release";
+      }
       if (v) {
         document.getElementById("mac-ver").textContent = v;
         const b = document.getElementById("mac-ver2"); b.textContent = v; b.hidden = false;

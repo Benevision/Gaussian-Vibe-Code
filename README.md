@@ -3,7 +3,7 @@
 # SplatWork
 
 **Make, train, view and edit 3D Gaussian splats on your own machines.** Capture on an iPhone, prepare and view on a
-Mac, and train on whichever of your machines are free: your Mac's GPU, other Macs, and Linux PCs with NVIDIA cards.
+Mac, and train on whichever of your machines are free: your Mac's GPU, other Macs, and Linux or Windows PCs with NVIDIA cards.
 Big scenes are split into blocks that train on several devices at once and are merged back into one splat.
 
 Everything runs locally on your network. No cloud account, no uploads to anyone else.
@@ -21,6 +21,7 @@ Everything runs locally on your network. No cloud account, no uploads to anyone 
 |---|---|---|
 | **SplatWork** | Mac (Apple silicon, macOS 15+) | The main app. Turns photos, video, 360° video, stereo footage, iPhone captures and COLMAP / Nerfstudio datasets into splats. Native Metal renderer and trainer, editor, exporter, and the coordinator for every other device. |
 | **SplatWork for Linux** | Linux PC with an NVIDIA GPU (Flatpak) | A CUDA worker (gsplat) that the Mac and iPhone send training and processing jobs to, and a full desktop studio of its own: viewer, new projects, editing and export on Linux. |
+| **SplatWork for Windows** | Windows 10 / 11 PC (x64) with an NVIDIA GPU | The same worker and studio as SplatWork for Linux, packaged for Windows (MSI installer). |
 | **SplatWork Capture** | iPhone (iOS 18+; LiDAR models record depth) | Records ARKit-posed frames with LiDAR depth and sends them to the Mac. Can also turn its own scans into splats on the phone, or hand the heavy steps to your Mac or PC. |
 | **splatprep** | Mac or Linux (Python) | The processing toolkit inside the apps: learned feature matching and camera solving (COLMAP / GLOMAP), moving-object and sky masks (SAM 2), video splitting and benchmarks. Also usable on its own from the command line. |
 
@@ -68,6 +69,11 @@ flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworke
 Open **SplatWork for Linux**; its setup assistant detects your driver and installs a matching PyTorch and gsplat
 (about 2.7 GB, all inside the app's own folder). Then turn the server on. Details:
 [linux/README.md](linux/README.md).
+
+**SplatWork for Windows** (Windows 10 / 11, x64; NVIDIA GPU for training): download the `.msi` from the next
+release and run it. It asks once for administrator rights to allow Macs on Private networks to find the PC. Its setup
+assistant installs PyTorch, CUDA and gsplat like the Linux app does, and it updates itself from new releases. Details
+and the current state: [windows/README.md](windows/README.md).
 
 **SplatWork Capture for iPhone** isn't on the App Store yet. Build it from source with Xcode: see
 [ios/README.md](ios/README.md).
@@ -124,6 +130,7 @@ block training and the iPhone app have had less real-world use. Expect rough edg
 | Mac app | Xcode 16+ / Swift 6 on Apple silicon | `cd mac && ./scripts/build_app.sh && open build/SplatWork.app` |
 | iPhone app | Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) | `cd ios && xcodegen generate && open SplatCapture.xcodeproj` |
 | SplatWork for Linux | `flatpak-builder` (or Python 3.10+ and CUDA for a native install) | `cd linux/flatpak && bash build.sh` |
+| SplatWork for Windows | GitHub Actions (`windows.yml`: MSYS2 GTK 4 + WiX) | see [windows/README.md](windows/README.md) |
 | splatprep | Python 3.10+ | `cd tools && ./install.sh` |
 
 The Mac app also runs headless, which is handy for scripting and batch jobs:
@@ -144,6 +151,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, code layout and how to send ch
 | [User guide](docs/USER_GUIDE.md) | Creating projects, training, viewing, editing, exporting, troubleshooting |
 | [Settings reference](docs/SETTINGS.md) | Every setting with its default, range and explanation |
 | [SplatWork for Linux](linux/README.md) | Installing and running the Linux worker and studio |
+| [SplatWork for Windows](windows/README.md) | Installing and building the Windows worker and studio |
 | [SplatWork Capture](ios/README.md) | Building and using the iPhone app |
 | [splatprep](tools/README.md) | The processing toolkit and its command line |
 | [Architecture](docs/ARCHITECTURE.md) | How the parts fit together |
