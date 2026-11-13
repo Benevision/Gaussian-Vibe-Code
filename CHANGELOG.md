@@ -4,6 +4,15 @@ Notable changes to SplatWork. The Mac app is released by version tag (see
 [Releases](https://github.com/Benevision/SplatWork/releases)); a rolling *developer build* follows `main`.
 SplatWork for Linux is published to its Flatpak repository on every change and carries its own version number.
 
+## Unreleased
+
+- **Whole pipeline on one worker:** when a project's processing and training both go to the same SplatWork for
+  Linux worker (1.6.0 or later), the Mac uploads the video (or the photos it imported) and every setting once, and
+  the worker runs frames, masks, sky, camera solving, levelling and training by itself — the Mac can sleep, go
+  offline or quit meanwhile. Reopening the app (or *Reconnect to the Worker Job* on the project page) picks the job
+  up and fetches the dataset, with the same per-stage checkpoints a local run leaves, and the result. Older workers,
+  Apple Vision masks, Object Capture and stereo or posed sources keep the step-by-step flow.
+
 ## 1.2.0 — 2026-11-13
 
 SplatWork 1.2.0 for Mac, SplatWork for Linux 1.5.0.

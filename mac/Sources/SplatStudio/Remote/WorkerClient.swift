@@ -38,6 +38,39 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     var canChain: Bool { capabilities?.contains("chain") ?? false }
     /// Worker ≥ 1.4.0: training jobs can be paused (state saved, GPU freed) and resumed.
     var canPause: Bool { capabilities?.contains("pause") ?? false }
+    /// Worker ≥ 1.6.0: whole-pipeline jobs (`POST /v1/pipeline`): every stage runs there without this Mac.
+    var canRunPipeline: Bool { capabilities?.contains("pipeline") ?? false }
+}
+
+/// `pipeline` of `POST /v1/pipeline` (PROTOCOL.md §4, "Whole pipeline jobs").
+struct PipelineSpec: Encodable, Sendable {
+    struct Step: Encodable, Sendable { var request: ProcessingRequest; var dilatePixels: Int? = nil }
+    struct Solve: Encodable, Sendable { var request: ProcessingRequest; var sequential: Bool; var enforceRig: Bool }
+    struct Train: Encodable, Sendable { var config: TrainingConfig }
+    var frames: Step?
+    var staticRegions: Bool
+    /// Circular-fisheye footage gets its fixed lens border masked on the worker (off when the masks are done here).
+    var fisheyeMasks: Bool
+    var masks: Step?
+    var sky: Step?
+    var sfm: Solve
+    var holdoutInterval: Int?
+    var level = true
+    var train: Train?
+    /// This project's checkpoint fingerprints, echoed back in `.pipeline/pipeline.json`.
+    var checkpoints: [String: String]
+}
+
+/// One stage of a whole-pipeline job (`JobStatus.stages`).
+struct PipelineStageStatus: Codable, Hashable, Sendable {
+    var id: String
+    var title: String?
+    /// pending | running | done | skipped | failed | cancelled
+    var state: String
+    var jobId: String?
+    var message: String?
+    /// The Mac checkpoint the stage belongs to (frames / masks / poses / done), nil for training.
+    var prepStage: String?
 }
 
 /// Job state (tolerant: unknown values are preserved).
@@ -76,6 +109,14 @@ struct JobStatus: Codable, Hashable, Sendable, Identifiable {
     var message: String?
     /// Processing jobs on workers ≥ 1.3.8: the output, kept on the worker as a dataset for the next step.
     var outputDatasetId: String?
+    /// Whole-pipeline jobs (`kind` "pipeline"): the current stage, every stage, and the training child job.
+    var stage: String?
+    /// How far the current stage is (0…1).
+    var stageProgress: Double?
+    var stages: [PipelineStageStatus]?
+    var trainJobId: String?
+    /// A step of a whole-pipeline job: that job's id.
+    var parentJobId: String?
     var id: String { jobId }
 
     var fraction: Double {
@@ -213,6 +254,14 @@ final class WorkerClient: @unchecked Sendable {
         return id
     }
 
+    private struct CreatePipeline: Encodable { var datasetId: String; var name: String; var pipeline: PipelineSpec }
+    /// `POST /v1/pipeline` (capability "pipeline"). Returns `jobId`.
+    func createPipeline(datasetId: String, name: String, pipeline: PipelineSpec) async throws -> String {
+        let r: [String: String] = try await json(jsonBody("v1/pipeline", CreatePipeline(datasetId: datasetId, name: name, pipeline: pipeline)))
+        guard let id = r["jobId"] else { throw WorkerError(status: 200, message: "no jobId") }
+        return id
+    }
+
     struct JobCameras: Decodable { var cameras: [DatasetCamera]; var sceneExtent: Float?; var upVector: [Float]? }
     /// `GET /v1/jobs/{id}/cameras` (worker ≥ 1.3.1): the training job's cameras, in its splats' coordinates.
     func jobCameras(_ id: String) async throws -> JobCameras { try await json(request("v1/jobs/\(id)/cameras")) }
@@ -309,12 +358,14 @@ final class WorkerClient: @unchecked Sendable {
     }
 
     /// `GET /v1/datasets/{id}/archive.zip?only=…` (worker ≥ 1.3.8), unzipped into `directory`.
-    func downloadDatasetFiles(_ datasetId: String, only: [String], into directory: URL,
+    func downloadDatasetFiles(_ datasetId: String, only: [String] = [], skip: [String] = [], into directory: URL,
                               progress: (@Sendable (Double) -> Void)? = nil) async throws {
         let zip = FileManager.default.temporaryDirectory.appendingPathComponent("dataset-\(datasetId)-\(UUID().uuidString.prefix(6)).zip")
         defer { try? FileManager.default.removeItem(at: zip) }
-        guard try await download("v1/datasets/\(datasetId)/archive.zip", query: [URLQueryItem(name: "only", value: only.joined(separator: ","))],
-                                 to: zip, progress: progress) else {
+        var q: [URLQueryItem] = []
+        if !only.isEmpty { q.append(URLQueryItem(name: "only", value: only.joined(separator: ","))) }
+        if !skip.isEmpty { q.append(URLQueryItem(name: "skip", value: skip.joined(separator: ","))) }
+        guard try await download("v1/datasets/\(datasetId)/archive.zip", query: q, to: zip, progress: progress) else {
             throw WorkerError(status: 404, message: "dataset \(datasetId) is no longer on the worker")
         }
         try await ZipUtil.unzip(zip, to: directory)

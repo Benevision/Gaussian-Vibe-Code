@@ -262,6 +262,55 @@ enum CLI {
                 sem.wait()
                 exit(exitCode)
             }
+            // [--pipeline [--train-steps N] [--detach]] with --worker: the whole pipeline as one job there (worker ≥ 1.6.0).
+            // --detach exits once the job is accepted; running the same command again picks it up (as the app does
+            // after the Mac was away).
+            if a.contains("--pipeline"), let w = worker {
+                let opts = o, detach = a.contains("--detach")
+                let steps = value("--train-steps").flatMap(Int.init)
+                let dir = out.appendingPathComponent("dataset")
+                try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+                Task.detached {
+                    do {
+                        var last = ""
+                        let p: PipelineProgressHandler = { p in
+                            let line = "\(p.stage) \(p.fraction >= 0 ? String(format: "%3.0f%%", p.fraction * 100) : "  …") \(p.message)"
+                            if line != last { print("  " + line); fflush(stdout); last = line }
+                        }
+                        let info = try await w.info()
+                        var cfg: TrainingConfig? = nil
+                        if let steps { var c = TrainingConfig(); c.iterations = steps; c.depthWeight = 0; cfg = c }
+                        let rec: PipelineJobRecord
+                        if let r = PipelineJobRecord.load(out), r.fingerprints == RemotePipeline.fingerprintStrings(source, opts) {
+                            print("Picking up pipeline job \(r.jobId) on \(r.workerName)"); rec = r
+                        } else {
+                            if let why = RemotePipeline.ineligibility(source: source, options: opts, dir: dir, info: info, trainOnSameWorker: true) {
+                                throw PipelineError.unsupported("can't run as one pipeline job: \(why)")
+                            }
+                            rec = try await RemotePipeline.start(source: source, options: opts, dir: dir, project: out, worker: w,
+                                                                 workerId: w.baseURL.absoluteString, info: info, train: cfg, progress: p)
+                            if detach { print("Pipeline job \(rec.jobId) started on \(info.name); run the command again to pick it up"); sem.signal(); return }
+                        }
+                        let ready = try await RemotePipeline.follow(rec, client: w, source: source, options: opts, dir: dir, project: out, progress: p)
+                        print(String(format: "Dataset ready: %d cameras in %.0f s → %@", ready.dataset.manifest.cameras.count, Date().timeIntervalSince(start), dir.path))
+                        print("Checkpoints: " + PrepCheckpoints(root: dir).saved.map { "\($0.stage.rawValue) (\($0.entry.summary))" }.joined(separator: ", "))
+                        if let t = ready.trainJobId {
+                            let cloud = try await w.finishJob(t, progress: { s in p(PipelineProgress(stage: "Training", fraction: s.fraction, message: "step \(s.step ?? 0)")) })
+                            let res = out.appendingPathComponent("outputs/result.ply")
+                            try? FileManager.default.createDirectory(at: res.deletingLastPathComponent(), withIntermediateDirectories: true)
+                            try PLYCodec.writeGaussians(cloud, to: res, up: ready.dataset.upVectorSIMD)
+                            print("Result: \(cloud.count) splats → \(res.path)")
+                        }
+                        if RemoteStore.load(dir) != nil {
+                            try await RemoteImageFetch.shared.ensure(dir)
+                            print("Frames downloaded from the worker")
+                        }
+                    } catch { fputs("error: \(error.localizedDescription)\n", stderr); exitCode = 1 }
+                    sem.signal()
+                }
+                sem.wait()
+                exit(exitCode)
+            }
             // project.json, as the app writes it: the project then shows its state and can be resumed in the app.
             try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
             var rec = ProjectRecord.load(out) ?? ProjectRecord(name: out.lastPathComponent)

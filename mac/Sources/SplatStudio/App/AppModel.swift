@@ -148,6 +148,13 @@ final class AppModel {
         training.app = self
         remoteWatch.app = self
         prep.app = self
+        // A project processed and trained as one job on a worker while the app was closed: follow it again
+        // (after a moment, so workers are discovered first).
+        Task { @MainActor [weak self] in
+            WorkerBrowser.shared.start()
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            self?.prep.reattachPipelineJob()
+        }
     }
 
     // MARK: open / save

@@ -23,6 +23,9 @@ struct ProjectRecord: Codable, Sendable {
         var stage: PrepStage? = nil
         var message: String? = nil
         var updated = Date()
+        /// A whole-pipeline job on a worker: its name and job id (the details are in `.pipeline-job.json`).
+        var worker: String? = nil
+        var jobId: String? = nil
     }
     var prep: Prep? = nil
 

@@ -312,6 +312,7 @@ any masks it names.
 "pipeline": {
   "frames": {"request": {ProcessingRequest, task "frames"}},          // optional: split the uploaded video here
   "staticRegions": false,                                              // mask parts of the frame that never change
+  "fisheyeMasks": true,            // circular-fisheye footage: mask the fixed lens border (false when masks are done)
   "masks": {"request": {task "masks", "maskModel", …}, "dilatePixels": 4},  // optional
   "sky": {"request": {task "masks", "maskModel": "sky", "invertMask": true}},  // optional; no sky model → skipped
   "sfm": {"request": {features, matching, mapper, cameraModel, resizeMax, maxKeypoints, priorPoses},
@@ -324,7 +325,7 @@ any masks it names.
 }
 ```
 
-Stages, in order: `frames` → `static` (fixed parts of the frame; also run for circular-fisheye footage, else
+Stages, in order: `frames` → `static` (fixed parts of the frame; also run for circular-fisheye footage unless `fisheyeMasks` is false, else
 `skipped`) → `masks` → `sky` → `sfm` (camera solve, then SplatWork's outlier check, 360° rig completion and dataset
 assembly with masks / sky / holdout) → `level` → `train`. The worker fills in what only the frames tell
 (`masksDir`, `skyMasksDir`, `singleCamera`, the 360° `rig`, `cameraModel: "fisheye"` for circular fisheye) and
@@ -338,6 +339,7 @@ the pipeline's priority and origin. The pipeline itself never waits in the queue
 
 ```jsonc
 {"kind": "pipeline", "stage": "sfm",               // current stage id
+ "stageProgress": 0.4,                             // how far the current stage is (0…1)
  "stages": [{"id": "frames", "title": "Extracting frames", "state": "done",   // pending|running|done|skipped|failed|cancelled
              "jobId": "p…", "prepStage": "frames", "summary": {…}, "message": null, "attempts": 1}, …],
  "trainJobId": "j…",                               // the training child, once it exists

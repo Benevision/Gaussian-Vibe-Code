@@ -318,6 +318,8 @@ final class TrainingSession {
         var name: String
         var output: String
         var startedAt: Date
+        /// The training step of a whole-pipeline job (the Mac never uploaded anything for it).
+        var fromPipeline: Bool? = nil
 
         static func file(for output: URL) -> URL { URL(fileURLWithPath: output.path + ".remote-job.json") }
         func save() { try? JSONEncoder().encode(self).write(to: Self.file(for: URL(fileURLWithPath: output)), options: .atomic) }
@@ -413,6 +415,25 @@ final class TrainingSession {
         }
     }
 
+    /// Records the training child of a whole-pipeline job as this project's training run (result file, settings) and
+    /// as a pending worker job, so opening the dataset follows it — now, or after this Mac was away.
+    static func adoptPipelineTraining(project: URL, dataset: PreparedDataset, record rec: PipelineJobRecord, jobId: String, datasetId: String) {
+        let outDir = project.appendingPathComponent("outputs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        if PendingRemoteJob.all(in: outDir).contains(where: { $0.jobId == jobId }) { return }
+        let stamp = ISO8601DateFormatter().string(from: rec.startedAt).replacingOccurrences(of: ":", with: "-")
+        let out = outDir.appendingPathComponent("\(project.lastPathComponent)-\(stamp).ply")
+        let cfg = rec.config ?? TrainingConfig()
+        ProjectLibrary.shared.update(project) { r in
+            var t = ProjectRecord.Training(state: .running, config: cfg, placement: .remote, deviceIds: nil, workerId: rec.workerId,
+                                           output: String(out.path.dropFirst(project.path.count + 1)), totalSteps: cfg.iterations)
+            t.started = rec.startedAt
+            r.training = t
+        }
+        PendingRemoteJob(workerId: rec.workerId, baseURL: rec.baseURL, jobId: jobId, datasetId: datasetId, name: rec.name,
+                         output: out.path, startedAt: rec.startedAt, fromPipeline: true).save()
+    }
+
     /// Re-attaches to worker jobs recorded for this project (the Mac slept, lost the network or the app quit
     /// while they ran): resumes progress and live preview, or downloads the finished result straight away.
     func resumePendingRemote(dataset: PreparedDataset, outputsDir: URL) {
@@ -429,7 +450,9 @@ final class TrainingSession {
         status = TrainerStatus()
         app?.followingTraining = true
         state = .preparing("Re-attaching to “\(p.name)” on \(host)")
-        remoteMessage = "Picked up a job that was running on \(host) when this project was last open."
+        remoteMessage = p.fromPipeline == true
+            ? "Training on \(host) as the last step of this project's pipeline job — this Mac can sleep or go offline; reopen the project to pick up the result."
+            : "Picked up a job that was running on \(host) when this project was last open."
         task = Task { [weak self] in
             var reached: WorkerClient? = nil
             do {
@@ -860,10 +883,30 @@ final class PrepSession {
     /// that processes (nil = this Mac).
     func resume(project dir: URL, redo: PrepStage? = nil, workerId: String?, thenTrain: Bool? = nil) {
         guard !running, let rec = ProjectRecord.load(dir), let src = rec.source, var o = rec.options else { return }
-        if let redo { PrepCheckpoints(root: dir.appendingPathComponent("dataset")).invalidate(from: redo) }
+        if let redo {
+            PrepCheckpoints(root: dir.appendingPathComponent("dataset")).invalidate(from: redo)
+            // Redoing a stage replaces a whole-pipeline job still on the worker: stop it there.
+            if let job = PipelineJobRecord.load(dir) {
+                let client = WorkerBrowser.shared.client(for: job.workerId) ?? URL(string: job.baseURL).map { WorkerClient(baseURL: $0) }
+                if let client { Task.detached { _ = try? await client.cancelJob(job.jobId) } }
+                PipelineJobRecord.remove(dir)
+            }
+        }
         o.remoteWorkerId = workerId
         o.compute = workerId == nil ? .thisMac : .remote
         run(source: src, options: o, projectDir: dir, thenTrain: thenTrain ?? rec.trainAfter)
+    }
+
+    /// At launch: a project whose whole-pipeline job kept running on a worker while the app was closed is followed
+    /// again (the newest one; a second waits for its Reconnect button).
+    func reattachPipelineJob() {
+        guard !running else { return }
+        let found = ProjectLibrary.shared.projects.compactMap { item -> (URL, PipelineJobRecord)? in
+            let u = URL(fileURLWithPath: item.path)
+            return PipelineJobRecord.load(u).map { (u, $0) }
+        }.max { $0.1.startedAt < $1.1.startedAt }
+        guard let (dir, job) = found, ProjectRecord.load(dir)?.prep?.state == .running else { return }
+        resume(project: dir, workerId: job.workerId, thenTrain: job.trains)
     }
 
     func run(source: SourceDescription, options: PrepOptions, projectDir: URL, thenTrain: Bool) {
@@ -906,7 +949,44 @@ final class PrepSession {
                 let cp = PrepCheckpoints(root: dsDir)
                 let doneFP = PrepCheckpoints.fingerprints(source, options)[.done]!
                 var leveled: PreparedDataset
-                if cp.isDone(fingerprint: doneFP), let ready = try? PreparedDataset.load(dsDir) {
+                let report: PipelineProgressHandler = { p in Task { @MainActor in if self?.runID == myRun { self?.ingest(p) } } }
+                // Whole pipeline on the worker (processing and training both there): one job that needs nothing
+                // from this Mac until its result — picked up again here if this Mac was away while it ran.
+                var pipelineTraining: (record: PipelineJobRecord, jobId: String, datasetId: String)? = nil
+                var pipelineReady: RemotePipeline.Ready? = nil
+                let fpStrings = RemotePipeline.fingerprintStrings(source, options)
+                if let rec = PipelineJobRecord.load(projectDir) {
+                    if rec.fingerprints == fpStrings, let client = WorkerBrowser.shared.client(for: rec.workerId) ?? URL(string: rec.baseURL).map({ WorkerClient(baseURL: $0) }) {
+                        self?.ingest(PipelineProgress(stage: "On \(rec.workerName)", fraction: 0.15, message: "picking up the job that kept running on \(rec.workerName)"))
+                        pipelineReady = try await RemotePipeline.follow(rec, client: client, source: source, options: options,
+                                                                        dir: dsDir, project: projectDir, progress: report)
+                        if let t = pipelineReady?.trainJobId, let d = pipelineReady?.status.outputDatasetId { pipelineTraining = (rec, t, d) }
+                    } else {
+                        PipelineJobRecord.remove(projectDir)      // made with other settings: this run starts afresh
+                    }
+                }
+                if pipelineReady == nil, !cp.isDone(fingerprint: doneFP), let w = worker, let id = workerId,
+                   let info = try? await w.info(timeout: 10), let training = self?.app?.training {
+                    let trainWorker = training.workerId ?? WorkerBrowser.shared.workers.first?.id
+                    let same = thenTrain && training.placement == .remote && trainWorker == id
+                    if let why = RemotePipeline.ineligibility(source: source, options: options, dir: dsDir, info: info, trainOnSameWorker: same) {
+                        if same { self?.appendLog("Step by step with \(info.name): \(why)") }
+                    } else {
+                        var cfg = training.config
+                        cfg.depthWeight = 0       // photos and video carry no depth maps
+                        let rec = try await RemotePipeline.start(source: source, options: options, dir: dsDir, project: projectDir, worker: w,
+                                                                 workerId: id, info: info, train: cfg, progress: report)
+                        ProjectLibrary.shared.update(projectDir) { $0.prep?.worker = info.name; $0.prep?.jobId = rec.jobId }
+                        self?.appendLog("Whole pipeline on \(info.name) (job \(rec.jobId)): frames, masks, cameras and training run there")
+                        pipelineReady = try await RemotePipeline.follow(rec, client: w, source: source, options: options,
+                                                                        dir: dsDir, project: projectDir, progress: report)
+                        if let t = pipelineReady?.trainJobId, let d = pipelineReady?.status.outputDatasetId { pipelineTraining = (rec, t, d) }
+                    }
+                }
+                if let ready = pipelineReady {
+                    leveled = ready.dataset
+                    self?.appendLog("Levelled scene on the worker: up = −Y, centred at origin")
+                } else if cp.isDone(fingerprint: doneFP), let ready = try? PreparedDataset.load(dsDir) {
                     // Finished earlier with these settings (e.g. the app quit before training started).
                     leveled = ready
                     self?.ingest(PipelineProgress(stage: "Finalising dataset", fraction: 0.98, message: "the dataset is already prepared — reusing it"))
@@ -926,9 +1006,13 @@ final class PrepSession {
                 self.running = false
                 self.appendLog("Dataset ready: \(leveled.manifest.cameras.count) cameras in \(formatDuration(self.elapsed))")
                 ProjectLibrary.shared.update(projectDir) { $0.prep = .init(state: .finished, stage: .done) }
+                if let pt = pipelineTraining {
+                    // The worker trains it already: follow that job (opening the dataset re-attaches to it).
+                    TrainingSession.adoptPipelineTraining(project: projectDir, dataset: leveled, record: pt.record, jobId: pt.jobId, datasetId: pt.datasetId)
+                }
                 self.app?.openDataset(leveled.root)
                 self.app?.showNewProject = false
-                if thenTrain { self.app?.training.start(dataset: leveled) }
+                if thenTrain && pipelineTraining == nil { self.app?.training.start(dataset: leveled) }
             } catch {
                 guard let self, self.runID == myRun else { return }
                 self.running = false; self.stopping = false

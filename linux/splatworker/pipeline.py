@@ -111,6 +111,7 @@ def validate_spec(body: Dict[str, Any], upload_root: Path) -> Dict[str, Any]:
                 if f.get(k) is not None:
                     _safe_rel(f[k])
     out["staticRegions"] = bool(p.get("staticRegions", False))
+    out["fisheyeMasks"] = bool(p.get("fisheyeMasks", True))
     out["masks"] = req("masks", "masks")
     if out["masks"] is not None:
         out["masks"]["dilatePixels"] = max(0, min(64, int(out["masks"].get("dilatePixels", 4) or 0)))
@@ -746,7 +747,8 @@ class PipelineRunner:
     def _progress(self, st: Dict[str, Any], fraction: float, message: str, **extra) -> None:
         if self.job.cancel_event.is_set():
             return
-        self.job.update(stage=st["id"], step=self._overall(st["id"], fraction), totalSteps=PROGRESS_SCALE,
+        self.job.update(stage=st["id"], stageProgress=round(max(0.0, min(1.0, fraction)), 3),
+                        step=self._overall(st["id"], fraction), totalSteps=PROGRESS_SCALE,
                         message=f"{st['title']}: {message}" if message else st["title"], **extra)
 
     # ------------------------------------------------------------- children
@@ -910,7 +912,7 @@ class PipelineRunner:
         fs = load_frames(work)
         if not any(s["id"] == "frames" for s in self.stages) and not (work / SNAPSHOTS / "frames.frames.json").is_file():
             snapshot_frames(work, fs, "frames")         # frames ingested by the client
-        fisheye = self._fisheye(work, fs)
+        fisheye = self._fisheye(work, fs) and self.spec.get("fisheyeMasks", True)
         if not (self.spec.get("staticRegions") or fisheye):
             return ("skipped", {"reason": "off"})
         from .studio import static_regions

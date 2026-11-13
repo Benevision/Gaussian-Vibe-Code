@@ -50,12 +50,12 @@ struct PrepCheckpoints: Sendable {
     /// (splatprep finds masks by image name), so a checkpoint keeps its own copies and puts them back on restore.
     private func filesURL(_ s: PrepStage) -> URL { dir.appendingPathComponent("\(s.rawValue).files", isDirectory: true) }
 
-    private func snapshot(_ rels: [String], as s: PrepStage) {
+    private func snapshot(_ rels: [String], as s: PrepStage, from source: URL? = nil) {
         let fm = FileManager.default
         let base = filesURL(s)
         try? fm.removeItem(at: base)
         for rel in Set(rels) {
-            let src = root.appendingPathComponent(rel), dst = base.appendingPathComponent(rel)
+            let src = (source ?? root).appendingPathComponent(rel), dst = base.appendingPathComponent(rel)
             guard fm.fileExists(atPath: src.path) else { continue }
             try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.copyItem(at: src, to: dst)
@@ -91,10 +91,12 @@ struct PrepCheckpoints: Sendable {
 
     // MARK: frame lists (photos / video / 360° / stereo sources)
 
-    func save(_ frames: FrameSet, as s: PrepStage, fingerprint fp: String, summary: String) throws {
+    /// - Parameter filesFrom: where the mask files it names are, when not in the dataset folder as they are now
+    ///   (a worker's snapshot of an earlier stage: later stages wrote combined masks under the same names).
+    func save(_ frames: FrameSet, as s: PrepStage, fingerprint fp: String, summary: String, filesFrom: URL? = nil) throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try JSONEncoder().encode(frames).write(to: framesURL(s), options: .atomic)
-        snapshot(frames.frames.flatMap { [$0.mask, $0.sky].compactMap { $0 } }, as: s)
+        snapshot(frames.frames.flatMap { [$0.mask, $0.sky].compactMap { $0 } }, as: s, from: filesFrom)
         try writeEntry(s, fp, summary)
     }
 

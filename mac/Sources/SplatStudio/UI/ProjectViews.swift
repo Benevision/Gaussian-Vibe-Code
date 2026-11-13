@@ -42,6 +42,10 @@ struct ProjectStatus {
             return ProjectStatus(kind: .processing, title: "Processing · \(Int(app.prep.overall * 100)) %", detail: stage)
         }
         if let pr = p.record?.prep, pr.state != .finished {
+            if pr.state == .running, let job = PipelineJobRecord.load(p.url) {
+                return ProjectStatus(kind: .processingStopped, title: "Processing on \(job.workerName)",
+                                     detail: "Every step\(job.trains ? ", training too," : "") runs there as one job (\(job.jobId)), also while this Mac is away. Reconnect to follow it and fetch the result.")
+            }
             let at = pr.stage.map { " at \($0.title.lowercased())" } ?? ""
             switch pr.state {
             case .failed: return ProjectStatus(kind: .processingFailed, title: "Processing failed\(at)", detail: pr.message)
@@ -199,7 +203,8 @@ struct ProjectPage: View {
             Button(model.prep.stopping ? "Stopping…" : "Stop", role: .destructive) { model.prep.cancel() }.disabled(model.prep.stopping)
         case .processingStopped, .processingFailed, .empty:
             if p.canResumeProcessing {
-                Button(st.kind == .empty && p.checkpoints.isEmpty ? "Start Processing" : "Resume Processing") { resumeProcessing(redo: nil) }
+                Button(PipelineJobRecord.load(p.url) != nil ? "Reconnect to the Worker Job"
+                       : st.kind == .empty && p.checkpoints.isEmpty ? "Start Processing" : "Resume Processing") { resumeProcessing(redo: nil) }
                     .buttonStyle(.borderedProminent).disabled(model.prep.running)
                 if st.kind == .processingFailed {
                     Button("Change Settings…") { changeSettings() }.disabled(model.prep.running)

@@ -56,7 +56,7 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep",
-               "pausedAt", "stage", "stages", "trainJobId", "parentJobId")
+               "pausedAt", "stage", "stageProgress", "stages", "trainJobId", "parentJobId")
 REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
 LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
@@ -154,7 +154,7 @@ class Job:
             for k, v in fields.items():
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
-                         "checkpointStep", "pausedAt", "stage", "stages", "trainJobId"):
+                         "checkpointStep", "pausedAt", "stage", "stageProgress", "stages", "trainJobId"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
