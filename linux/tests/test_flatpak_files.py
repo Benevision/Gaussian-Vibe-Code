@@ -6,10 +6,13 @@ import os
 import py_compile
 import re
 import shlex
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Flatpak packaging files (Linux paths, exec bits)")
 
 ROOT = Path(__file__).resolve().parents[1]
 FP = ROOT / "flatpak"

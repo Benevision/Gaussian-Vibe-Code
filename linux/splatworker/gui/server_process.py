@@ -133,10 +133,17 @@ def port_problem(port: int, host: str = "0.0.0.0") -> Optional[str]:
     """None if ``port`` can be bound, else a friendly explanation."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if IS_WINDOWS:   # SO_REUSEADDR on Windows would let us bind a port another program is using
+            s.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+        else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((host, port))
     except OSError as e:
-        if e.errno == errno.EADDRINUSE:
+        winerror = getattr(e, "winerror", None)
+        if IS_WINDOWS and winerror == 10013:   # WSAEACCES: held exclusively by another program, or reserved
+            return (f"Port {port} is already in use or reserved by Windows (Hyper-V / WSL reserve port ranges). "
+                    "Stop the other program or choose a different port in Settings.")
+        if e.errno == errno.EADDRINUSE or winerror == 10048:
             return (f"Port {port} is already in use. Another SplatWork may be running (for example "
                     "the systemd service or Docker container), or another program uses this port. Stop "
                     "it or choose a different port in Settings.")

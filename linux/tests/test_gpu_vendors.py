@@ -1,9 +1,13 @@
 """AMD and Intel GPUs: sysfs detection, setup wording, ROCm / XPU processing runtimes, /v1/info "adapters".
 All with fake sysfs trees: nothing here has run on real AMD or Intel hardware."""
 import os
+import sys
 from pathlib import Path
 
 import pytest
+
+# fake sysfs trees have ":" in their paths (0000:03:00.0), which Windows can't create; Windows uses DXGI instead
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Linux sysfs layout")
 
 from splatworker import gpu_vendors as V
 from splatworker.gui.nvidia import DriverInfo, GpuInfo, GpuMonitor, detect

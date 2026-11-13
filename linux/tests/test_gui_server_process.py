@@ -1,5 +1,6 @@
 """Server lifecycle controller: runs the real ``python -m splatworker serve`` as a child."""
 
+import os
 import socket
 import sys
 import time
@@ -70,7 +71,7 @@ def test_port_problem_and_explain_exit():
 def test_launch_spec_fallback_and_runtime(paths):
     spec = launch_spec(paths, environ={"PYTHONPATH": "/evil", "HOME": "/h"}, fallback_python="/usr/bin/python3")
     assert spec.python == "/usr/bin/python3" and not spec.runtime_ready and spec.warning
-    assert spec.env["PYTHONPATH"].split(":")[0] == str(ROOT) and "/evil" not in spec.env["PYTHONPATH"]
+    assert spec.env["PYTHONPATH"].split(os.pathsep)[0] == str(ROOT) and "/evil" not in spec.env["PYTHONPATH"]
     assert spec.env["PYTHONUNBUFFERED"] == "1" and spec.env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
 
 

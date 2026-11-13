@@ -99,7 +99,8 @@ def test_store_and_registry(tmp_path):
     reg = D.DeviceRegistry(path, own=lambda: [("192.168.0.50", 7878)], own_names=lambda: ["this-pc"])
     d = reg.add_manual("10.1.1.1", 7878, token="secret", check=False)
     assert d.id == "manual:10.1.1.1:7878" and d.token == "secret"
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert reg.found("this-pc", "192.168.0.50", 7878, {}) is None              # our own worker by address
     reg.check = lambda *_a, **_k: None
     reg.found("this-pc", "192.168.0.50", 7900, {})                              # … and by name
@@ -311,7 +312,7 @@ class RecordingBackend(FakeBackend):
 
     def run(self, ctx):
         if ctx.kind == "train":
-            self.files.append({str(f.relative_to(ctx.dataset_dir)) for f in ctx.dataset_dir.rglob("*")
+            self.files.append({f.relative_to(ctx.dataset_dir).as_posix() for f in ctx.dataset_dir.rglob("*")
                                if f.is_file()})
         return super().run(ctx)
 

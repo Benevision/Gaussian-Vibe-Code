@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import sys
 from typing import Dict, Optional
 
 c_uint, c_int, c_float, c_void_p, c_char_p = ctypes.c_uint, ctypes.c_int, ctypes.c_float, ctypes.c_void_p, ctypes.c_char_p
@@ -128,7 +129,19 @@ def _load(names) -> Optional[ctypes.CDLL]:
 
 class _Loader:
     def __init__(self):
-        self._egl = _load(["libEGL.so.1", "libEGL.so", ctypes.util.find_library("EGL") or "libEGL.so.1"])
+        self._wgl = None
+        if sys.platform == "win32":
+            # GTK 4 on Windows makes WGL contexts: core 1.1 functions are exported by opengl32.dll, everything
+            # newer comes from wglGetProcAddress (which returns 0–3 or -1 for "not found" on some drivers)
+            try:
+                self._wgl = ctypes.WinDLL("opengl32")
+                self._wgl.wglGetProcAddress.restype = c_void_p
+                self._wgl.wglGetProcAddress.argtypes = [c_char_p]
+            except OSError:
+                self._wgl = None
+            self._egl = None
+        else:
+            self._egl = _load(["libEGL.so.1", "libEGL.so", ctypes.util.find_library("EGL") or "libEGL.so.1"])
         self._glx = None
         self._direct = None
         self._fns: Dict[str, object] = {}
@@ -143,6 +156,20 @@ class _Loader:
         restype, argtypes = _SIGS[name]
         proto = ctypes.CFUNCTYPE(restype, *argtypes)
         addr = None
+        if self._wgl is not None:
+            addr = self._wgl.wglGetProcAddress(name.encode())
+            if addr in (1, 2, 3, 0xFFFFFFFFFFFFFFFF, -1):
+                addr = None
+            if not addr:
+                try:
+                    addr = ctypes.cast(getattr(self._wgl, name), c_void_p).value
+                except AttributeError:
+                    addr = None
+            if not addr:
+                raise GLError(f"OpenGL function {name} is not available")
+            fn = proto(addr)
+            self._fns[name] = fn
+            return fn
         if self._egl is not None:
             addr = self._egl.eglGetProcAddress(name.encode())
         if not addr:

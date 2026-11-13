@@ -25,6 +25,7 @@ prebuilt gsplat wheels appear.
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -705,4 +706,4 @@ def child_pythonpath(lib_dir: Path, splatprep_dir: Optional[Path]) -> str:
     parts = [str(lib_dir)]
     if splatprep_dir is not None:
         parts.append(str(splatprep_dir))
-    return ":".join(parts)
+    return os.pathsep.join(parts)   # ";" on Windows

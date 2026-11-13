@@ -80,10 +80,10 @@ def test_serve_args_are_accepted_by_the_real_cli(paths):
     assert args.advertise_ip == ["192.168.1.20"] and args.max_upload_gb == 2.5
     assert args.token_file == str(paths.token_file) and args.token is None
     assert args.data_dir == str(paths.default_worker_data_dir)
-    s2 = AppSettings(require_token=False, data_dir="/srv/splats")
+    s2 = AppSettings(require_token=False, data_dir=str(Path("/srv/splats")))
     a2 = build_parser().parse_args(["serve", *s2.serve_args(paths)])
     assert a2.token_file is None or a2.token_file == os.environ.get("SPLATWORKER_TOKEN_FILE")
-    assert a2.gpus is None and a2.data_dir == "/srv/splats" and not a2.no_mdns
+    assert a2.gpus is None and a2.data_dir == str(Path("/srv/splats")) and not a2.no_mdns
     assert "--token" not in s.serve_args(paths)  # never on the command line
 
 
@@ -92,7 +92,8 @@ def test_token_store(tmp_path):
     assert ts.read() is None
     t1 = ts.get_or_create()
     assert len(t1) >= 32 and ts.read() == t1 and ts.get_or_create() == t1
-    assert stat.S_IMODE(os.stat(ts.path).st_mode) == 0o600
+    if os.name == "posix":   # Windows: the file is private through its folder's ACL (%APPDATA%)
+        assert stat.S_IMODE(os.stat(ts.path).st_mode) == 0o600
     t2 = ts.regenerate()
     assert t2 != t1 and ts.read() == t2
     ts.path.write_text("  abc \n\n")
@@ -444,7 +445,7 @@ def test_headless_command(paths, tmp_path):
     args = build_parser().parse_args(argv[3:])
     assert args.port == 9100 and args.name == "Box" and args.no_mdns  # CLI flag overrides settings
     assert TokenStore(paths.token_file).read()  # token created on first headless start
-    assert str(ROOT) in env["PYTHONPATH"].split(":")
+    assert str(ROOT) in env["PYTHONPATH"].split(os.pathsep)
     exe, argv, env, _ = headless_command(["info"], paths=paths, environ={}, fallback_python="py")
     assert argv == ["py", "-m", "splatworker", "info"]
     # with an installed runtime the venv python is used

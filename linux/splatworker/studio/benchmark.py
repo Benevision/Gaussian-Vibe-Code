@@ -279,10 +279,10 @@ def _upload_zip(client, folder: Path, tmp_dir: Path) -> tuple:
                 if p.is_file() and p.name != "spec.json":
                     zf.write(p, p.relative_to(folder).as_posix())
         size = z.stat().st_size
-        t0 = time.monotonic()
+        t0 = time.perf_counter()
         with client._req("POST", "/v1/datasets", z.read_bytes(), "application/zip", timeout=600) as resp:
             did = json.loads(resp.read())["datasetId"]
-        return did, size, time.monotonic() - t0
+        return did, size, time.perf_counter() - t0
     finally:
         try:
             z.unlink()
@@ -315,7 +315,7 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
             body["priority"] = priority
         job = client.post("/v1/jobs", body)["jobId"]
         samples: List[tuple] = []
-        t_start = time.monotonic()
+        t_start = time.perf_counter()
         while True:
             if stop():
                 try:
@@ -328,7 +328,7 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
             if s.get("state") == "training" and step > 0:
                 el = s.get("elapsedSeconds")
                 samples.append((step, float(el) if isinstance(el, (int, float)) else None,
-                                time.monotonic() - t_start))
+                                time.perf_counter() - t_start))
             if s.get("state") in ("completed", "failed", "cancelled"):
                 break
             where = "this PC" if local else (info.get("name") or "the worker")
@@ -344,9 +344,9 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
             import tempfile
 
             with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
-                t0 = time.monotonic()
+                t0 = time.perf_counter()
                 p = client.download(f"/v1/jobs/{job}/result.ply", Path(td) / "r.ply")
-                secs = time.monotonic() - t0
+                secs = time.perf_counter() - t0
                 down_mbps = p.stat().st_size / 1e6 / secs if secs > 0 else None
         gpus = info.get("gpus") or []
         say("Done", 1.0)
