@@ -4,7 +4,7 @@ build container, in the source folder). Fails loudly when setup.py no longer loo
   upstream  nerfstudio gsplat converted by PyTorch's hipify: hipcc gets clang flags instead of nvcc's
             (--use_fast_math, -diag-suppress), glm is copied whole into gsplat/hip/ (hipify copies its headers
             but not the .inl files they include), and the CUDA cooperative-groups calls HIP lacks are replaced
-            (HIP_SHIMS below): cg::reduce, cg::labeled_partition, cg::this_grid().thread_rank(). The shims
+            (HIP_SHIMS below), glm is put in CUDA mode (GLM_FORCE_CUDA: __host__ __device__ functions): cg::reduce, cg::labeled_partition, cg::this_grid().thread_rank(). The shims
             assume 32-wide wavefronts, i.e. Radeon (RDNA) — the only targets this wheel is built for.
   amd       AMD's port: its setup.py always appends +<git hash> to the version and compiles for the one target
             rocminfo reports; use GSPLAT_LOCAL_TAG and PYTORCH_ROCM_ARCH instead
@@ -60,7 +60,7 @@ s = open("setup.py").read()
 if flavor == "upstream":
     anchor = 'extra_compile_args["nvcc"] = nvcc_flags'
     assert anchor in s, "setup.py changed upstream (nvcc flags)"
-    s = s.replace(anchor, anchor + '\n    extra_compile_args["nvcc"] = ["-O3", "-std=c++17", "-ffp-contract=fast"]'
+    s = s.replace(anchor, anchor + '\n    extra_compile_args["nvcc"] = ["-O3", "-std=c++17", "-ffp-contract=fast", "-DGLM_FORCE_CUDA", "-DCUDA_VERSION=12000"]'
                   '  # ROCm: clang flags (SplatWork build)', 1)
     # cooperative-groups calls HIP lacks
     utils = os.path.join("gsplat", "cuda", "include", "Utils.cuh")
