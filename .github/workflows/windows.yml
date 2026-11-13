@@ -1,0 +1,40 @@
+# SplatWork for Windows: tests and smoke tests on the windows-latest runner (no GPU). See docs/dev/WINDOWS.md.
+# Stage A: the shared worker / studio core tests, splatprep tests, and a worker start → /v1/info → mDNS → stop test.
+name: SplatWork for Windows
+
+on:
+  push:
+    branches: [main, "claude/windows-app-*"]
+    paths: ["linux/**", "tools/**", "windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["linux/**", "tools/**", "windows/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install fastapi "uvicorn[standard]" zeroconf numpy pillow httpx pytest pyyaml qrcode scipy opencv-python-headless
+      - name: Worker + studio core tests
+        working-directory: linux
+        env:
+          PYTHONPATH: ../tools
+        run: python -m pytest -q tests -p no:cacheprovider -rs
+      - name: splatprep tests
+        working-directory: tools
+        run: python -m pytest -q tests -p no:cacheprovider -rs
+      - name: Worker smoke test (start, /v1/info, mDNS, stop)
+        run: python windows/scripts/worker_smoke.py

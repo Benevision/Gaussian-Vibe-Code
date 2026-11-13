@@ -15,6 +15,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
+from .platform_compat import is_link, link_path
+
 PROGRESS_SCALE = 1000  # step/totalSteps = progress x 1000
 
 
@@ -93,7 +95,8 @@ def validate_request(request: Any) -> Dict[str, Any]:
 
 
 def prepare_workdir(upload_root: Path, workdir: Path) -> None:
-    """Populate ``workdir`` with symlinks to the (read-only) uploaded dataset.
+    """Populate ``workdir`` with links to the (read-only) uploaded dataset (symlinks; junctions / hard
+    links on Windows, see :func:`platform_compat.link_path`).
 
     Outputs are written into ``workdir`` so the uploaded dataset is never
     modified and can be reused by other jobs.
@@ -101,8 +104,8 @@ def prepare_workdir(upload_root: Path, workdir: Path) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
     for entry in Path(upload_root).iterdir():
         link = workdir / entry.name
-        if not link.exists() and not link.is_symlink():
-            os.symlink(entry.resolve(), link, target_is_directory=entry.is_dir())
+        if not link.exists() and not is_link(link):
+            link_path(entry, link)
 
 
 def _inside(path: Path, roots: List[Path]) -> bool:

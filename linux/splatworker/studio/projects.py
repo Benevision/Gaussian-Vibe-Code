@@ -27,6 +27,10 @@ PROJECT_FILE = "project.json"
 def default_root(env=None) -> Path:
     """``~/Documents/SplatWork`` (the Flatpak has ``xdg-documents/SplatWork:create``)."""
     env = os.environ if env is None else env
+    from ..platform_compat import IS_WINDOWS, documents_dir
+
+    if IS_WINDOWS:
+        return (documents_dir(env) or Path.home() / "Documents") / "SplatWork"
     docs = None
     try:
         import subprocess

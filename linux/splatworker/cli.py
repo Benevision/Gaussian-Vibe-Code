@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .config import LOCAL_SECRET_ENV
+from .platform_compat import default_data_dir
 
 from . import __version__
 
@@ -36,6 +37,26 @@ def _read_token(args) -> Optional[str]:
         return Path(args.token_file).expanduser().read_text(encoding="utf-8").strip() or None
     env = os.environ.get("SPLATWORKER_TOKEN")
     return env.strip() if env and env.strip() else None
+
+
+STOP_ON_STDIN_EOF_ENV = "SPLATWORKER_STOP_ON_STDIN_EOF"
+
+
+def _stop_when_stdin_closes() -> None:
+    """Graceful shutdown when the parent closes our stdin: the desktop app's stop on Windows, where a child
+    without a console can't be sent SIGTERM / Ctrl+Break. SIGINT raised here reaches uvicorn's handler."""
+    import signal
+    import threading
+
+    def watch():
+        try:
+            while sys.stdin.buffer.read(4096):
+                pass
+        except (OSError, ValueError, AttributeError):
+            return
+        signal.raise_signal(signal.SIGINT)
+
+    threading.Thread(target=watch, daemon=True, name="splatworker-stdin-stop").start()
 
 
 def cmd_serve(args) -> int:
@@ -67,6 +88,8 @@ def cmd_serve(args) -> int:
     log.info("SplatWork for Linux %s '%s' on %s:%d, data dir %s", __version__, settings.name,
              settings.host, settings.port, settings.data_dir)
     app = create_app(settings)
+    if os.environ.pop(STOP_ON_STDIN_EOF_ENV, None):
+        _stop_when_stdin_closes()
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=args.log_level,
                 timeout_keep_alive=30)
     return 0
@@ -249,7 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="run the HTTP training server")
     s.add_argument("--host", default=os.environ.get("SPLATWORKER_HOST", "0.0.0.0"))
     s.add_argument("--port", type=int, default=int(os.environ.get("SPLATWORKER_PORT", "7878")))
-    s.add_argument("--data-dir", default=os.environ.get("SPLATWORKER_DATA_DIR", "~/.local/share/splatworker"))
+    s.add_argument("--data-dir", default=os.environ.get("SPLATWORKER_DATA_DIR", default_data_dir()))
     s.add_argument("--token", help="bearer token (prefer --token-file or SPLATWORKER_TOKEN: "
                                    "command lines are visible to other local users)")
     s.add_argument("--token-file", default=os.environ.get("SPLATWORKER_TOKEN_FILE"))

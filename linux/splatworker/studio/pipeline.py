@@ -150,7 +150,9 @@ class LocalPipeline:
             try:
                 os.link(video, dst)
             except OSError:
-                os.symlink(video.resolve(), dst)
+                from ..platform_compat import link_path
+
+                link_path(video, dst)
         return d
 
     def _stereo_frames(self, ds: Path) -> None:

@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Mapping, Optional, Sequence
 
+from ..platform_compat import IS_WINDOWS, kill_tree, new_group_kwargs
+
 STOPPED, STARTING, RUNNING, STOPPING, FAILED = "stopped", "starting", "running", "stopping", "failed"
 
 _ACCESS_RE = re.compile(
@@ -223,11 +225,14 @@ class ServerProcess:
                 return False
             argv = [python, "-m", "splatworker", "serve", *serve_args]
             self.log.append(f"$ {' '.join(argv)}")
+            env = dict(env)
+            if IS_WINDOWS:  # stop = close stdin (no SIGTERM for a child without a console)
+                env["SPLATWORKER_STOP_ON_STDIN_EOF"] = "1"
             try:
                 self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                              stdin=subprocess.DEVNULL, env=dict(env), text=True,
-                                              bufsize=1, errors="replace", start_new_session=True,
-                                              cwd=cwd)
+                                              stdin=subprocess.PIPE if IS_WINDOWS else subprocess.DEVNULL,
+                                              env=env, text=True, bufsize=1, errors="replace",
+                                              cwd=cwd, **new_group_kwargs())
             except OSError as e:
                 self._proc = None
                 self._set(FAILED, f"Could not start the worker: {e}")
@@ -251,7 +256,10 @@ class ServerProcess:
             # SIGTERM only the server: it cancels its trainer processes itself (they are
             # in the same process group, which is SIGKILLed only if shutdown hangs).
             try:
-                proc.terminate()
+                if IS_WINDOWS and proc.stdin is not None:
+                    proc.stdin.close()
+                else:
+                    proc.terminate()
             except OSError:
                 pass
 
@@ -261,7 +269,7 @@ class ServerProcess:
             except subprocess.TimeoutExpired:
                 self.log.append("worker did not stop in time; killing it")
                 try:
-                    os.killpg(proc.pid, signal.SIGKILL) if _own_group(proc) else proc.kill()
+                    kill_tree(proc, force=True)
                 except OSError:
                     pass
 
@@ -318,13 +326,6 @@ class ServerProcess:
             else:
                 self._set(FAILED, explain_exit(list(self._recent), rc, self._port))
         self.log.append(f"worker exited with code {rc}")
-
-
-def _own_group(proc: subprocess.Popen) -> bool:
-    try:
-        return os.getpgid(proc.pid) == proc.pid
-    except OSError:
-        return False
 
 
 def find_free_port() -> int:

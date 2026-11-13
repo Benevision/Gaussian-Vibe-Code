@@ -21,18 +21,15 @@ GPU_BUDGET = 3 * 1024 ** 3
 
 
 def available_ram() -> int:
-    """MemAvailable (Linux), else physical RAM / 2, else 16 GB."""
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024
-    except OSError:
-        pass
-    try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // 2
-    except (ValueError, OSError, AttributeError):
-        return 16 * 1024 ** 3
+    """Available RAM (Linux MemAvailable, Windows ullAvailPhys), else physical RAM / 2, else 16 GB."""
+    from .platform_compat import memory
+
+    m = memory()
+    if "available" in m:
+        return m["available"]
+    if "total" in m:
+        return m["total"] // 2
+    return 16 * 1024 ** 3
 
 
 def view_bytes(v) -> int:

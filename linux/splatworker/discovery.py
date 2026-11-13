@@ -23,7 +23,10 @@ def interface_kind(name: str, sys_net: str = "/sys/class/net") -> str:
             return "virtual"
         return "ethernet"
     n = name.lower()
-    if n.startswith(("wl", "wifi", "wlan")):
+    # Windows adapter names ("Ethernet 2", "Wi-Fi", "vEthernet (WSL)", "Bluetooth Network Connection")
+    if n.startswith(("vethernet", "bluetooth", "loopback", "vmware", "virtualbox", "tailscale", "zerotier")):
+        return "virtual"
+    if n.startswith(("wl", "wifi", "wlan", "wi-fi", "wireless")):
         return "wifi"
     if n.startswith(("en", "eth")):
         return "ethernet"

@@ -87,17 +87,11 @@ def _lan_interfaces() -> list:
 
 
 def _host_memory() -> dict:
-    """{"totalMB", "availableMB"} from /proc/meminfo (empty off Linux)."""
-    out = {}
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                k, v = line.split(":", 1)
-                if k in ("MemTotal", "MemAvailable"):
-                    out["totalMB" if k == "MemTotal" else "availableMB"] = int(v.split()[0]) // 1024
-    except OSError:
-        pass
-    return out
+    """{"totalMB", "availableMB"} (/proc/meminfo on Linux, GlobalMemoryStatusEx on Windows; empty if unknown)."""
+    from .platform_compat import memory
+
+    m = memory()
+    return {("totalMB" if k == "total" else "availableMB"): v // (1024 * 1024) for k, v in m.items()}
 
 
 def _now_iso() -> str:

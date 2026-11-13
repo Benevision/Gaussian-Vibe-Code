@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from ..platform_compat import kill_tree, new_group_kwargs
+
 from .paths import AppPaths, worker_lib_dir
 from .pip_progress import PipProgressParser, human_bytes
 from .runtime_plan import PYTHON_RUNTIME, Plan, Step, child_pythonpath, verify_problems
@@ -439,7 +441,7 @@ class Installer:
         try:
             proc = subprocess.Popen(step.argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, env=env or self._env(), text=True,
-                                    bufsize=1, errors="replace", start_new_session=True)
+                                    bufsize=1, errors="replace", **new_group_kwargs())
         except OSError as e:
             raise InstallError(f"{step.title} could not start", str(e),
                                "The runtime looks damaged. Remove it in Settings and run the setup again.")
@@ -523,19 +525,16 @@ def _safe_untar(archive: Path, dest: Path) -> None:
 
 def _terminate(proc: subprocess.Popen) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
-        try:
-            proc.terminate()
-        except OSError:
-            pass
+        kill_tree(proc)
+    except OSError:
+        pass
 
     def reaper():
         try:
             proc.wait(5)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                kill_tree(proc, force=True)
             except OSError:
                 proc.kill()
 
