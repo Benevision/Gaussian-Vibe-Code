@@ -15,9 +15,10 @@ struct Frame {
     vec4 campos;       // xyz camera centre in world space
     vec4 bg;           // rgb background
     uint width; uint height; uint tilesX; uint tilesY;
-    uint count; uint shDegree; uint flags; uint absGrad;   // flags bit0: Mip-Splatting opacity compensation
+    uint count; uint shDegree; uint flags; uint absGrad;   // flags bit0: Mip-Splatting opacity compensation,
+                                                           // bit1: SSIM over the valid window positions only
     uint hasDepth; uint pad0; uint pad1; uint pad2;
-    float ssimWeight; float invNumPixels; float depthWeight; float pad3;
+    float ssimWeight; float invNumPixels; float depthWeight; float invSsimPixels;   // 1 / pixels the SSIM mean is over
 };
 
 const float SH_C0 = 0.28209479177387814;
@@ -91,6 +92,24 @@ void quat_rot(vec4 q, out float R[3][3]) {
 // Row-major world → camera rotation W[r][c] of the frame.
 void frame_rot(Frame F, out float W[3][3]) {
     for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) W[r][c] = F.w2c[c][r];
+}
+
+// Counter-based random numbers (PCG hash), identical to vkt::hashNormal on the host: a random number is a
+// function of (seed, step, index, k) only, so there is no generator state to save for pause / resume.
+uint pcg_hash(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+uint rng_key(uint seed, uint step, uint idx, uint k) {
+    return pcg_hash(seed ^ pcg_hash(step ^ pcg_hash(idx * 8u + k)));
+}
+// Standard normal by Box-Muller from two hashed uniforms.
+float hash_normal(uint seed, uint step, uint idx, uint k) {
+    uint a = rng_key(seed, step, idx, 2u * k), b = rng_key(seed, step, idx, 2u * k + 1u);
+    float u1 = (float(a >> 8u) + 1.0) * (1.0 / 16777216.0);   // (0, 1]
+    float u2 = float(b >> 8u) * (1.0 / 16777216.0);           // [0, 1)
+    return sqrt(-2.0 * log(u1)) * cos(6.283185307179586 * u2);
 }
 
 #endif

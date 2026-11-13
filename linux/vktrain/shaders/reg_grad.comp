@@ -1,0 +1,43 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Regulariser gradients added to the splat gradients after preprocess_bwd, before Adam (trainer.py's loss terms):
+//   opacityReg · mean σ(opacity logit)             → d/dlogit  = w_o · σ(1 − σ)               (w_o = reg / N)
+//   scaleReg · mean exp(log-scale) (over N·3)       → d/dlog s  = w_s · s                     (w_s = reg / 3N)
+//   flatnessReg · mean s_min² / Σ s²                → d/dlog s_j = w_f · 2f(δ_j,min − s_j²/Σ s²) (w_f = reg / N)
+//   anisotropyReg · mean max(exp(l_max − l_mid) − r, 0), the middle axis detached
+//                                                   → d/dl_max = w_a · ratio when ratio > r  (w_a = reg / N)
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer ScaleBuf { float logScale[]; };
+layout(std430, binding = 1) readonly buffer OpBuf { float opLogit[]; };
+layout(std430, binding = 2) buffer GScaleBuf { float gScale[]; };
+layout(std430, binding = 3) buffer GOpBuf { float gOp[]; };
+layout(push_constant) uniform PC { float wOp; float wScale; float wFlat; float wAniso; float maxRatio; uint n; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.n) return;
+    if (pc.wOp != 0.0) {
+        float o = 1.0 / (1.0 + exp(-opLogit[i]));
+        gOp[i] += pc.wOp * o * (1.0 - o);
+    }
+    vec3 l = vec3(logScale[i * 3], logScale[i * 3 + 1], logScale[i * 3 + 2]);
+    vec3 g = vec3(0.0);
+    if (pc.wScale != 0.0) g += pc.wScale * exp(l);
+    if (pc.wFlat != 0.0) {
+        vec3 e2 = exp(2.0 * l);
+        float S = max(e2.x + e2.y + e2.z, 1e-30);
+        int m = e2.x <= e2.y ? (e2.x <= e2.z ? 0 : 2) : (e2.y <= e2.z ? 1 : 2);
+        float f = e2[m] / S;
+        vec3 d = -e2 / S;
+        d[m] += 1.0;
+        g += pc.wFlat * 2.0 * f * d;
+    }
+    if (pc.wAniso != 0.0) {
+        int imax = l.x >= l.y ? (l.x >= l.z ? 0 : 2) : (l.y >= l.z ? 1 : 2);
+        int imin = l.x < l.y ? (l.x < l.z ? 0 : 2) : (l.y < l.z ? 1 : 2);
+        if (imin == imax) imin = (imax + 1) % 3;
+        int imid = 3 - imax - imin;
+        float ratio = exp(l[imax] - l[imid]);
+        if (ratio > pc.maxRatio) g[imax] += pc.wAniso * ratio;
+    }
+    gScale[i * 3] += g.x; gScale[i * 3 + 1] += g.y; gScale[i * 3 + 2] += g.z;
+}

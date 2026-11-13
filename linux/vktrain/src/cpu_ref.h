@@ -56,7 +56,8 @@ void rasterDecide(const std::vector<Proj>& pr, const Cam& cam, std::vector<doubl
 void rasterFrozen(const std::vector<Proj>& pr, const Structure& st, const Cam& cam, std::vector<double>& img);
 
 // L = (1−λ)·mean|x−y| + λ·(1 − mean SSIM) over 3 channels; img has ≥ 3 planes, target 3 planes in [0, 1].
+// valid = true: the SSIM mean only over window positions wholly inside the image (fused-ssim padding="valid").
 double loss(const std::vector<double>& img, const std::vector<double>& target, int w, int h, double lam,
-            double* l1 = nullptr, double* ssim = nullptr);
+            double* l1 = nullptr, double* ssim = nullptr, bool valid = false);
 
 }  // namespace vkt::ref

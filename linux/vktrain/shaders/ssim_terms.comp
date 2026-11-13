@@ -7,7 +7,9 @@
 #extension GL_KHR_shader_subgroup_arithmetic : require
 // Loss, step 3 (Mac: ssim_terms): SSIM map from the blurred moments, its three derivative maps per
 // channel (w.r.t. μx, E[x²], E[xy]), and the loss sums: stats[0] += Σ|x−y|, stats[1] += Σ SSIM,
-// stats[2] += Σ(x−y)².
+// stats[2] += Σ(clamp(x, 0, 1) − y)² (trainer.py's PSNR: the clamped render against the masked target).
+// With Frame.flags bit 1 ("valid" SSIM, as fused-ssim's padding="valid" in trainer.py) only window positions
+// that lie wholly inside the image count: elsewhere S is not summed and the derivative maps are zero.
 #include "common.glsl"
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
@@ -35,6 +37,8 @@ void main() {
     uint hw = F.width * F.height, pid = p.y * F.width + p.x;
     const float C1 = 0.0001, C2 = 0.0009;
     float sumS = 0.0, sumL1 = 0.0, sumL2 = 0.0;
+    bool validWin = (F.flags & 2u) == 0u ||
+        (p.x >= 5u && p.y >= 5u && p.x + 5u < F.width && p.y + 5u < F.height);
     if (inb) {
         for (uint c = 0u; c < 3u; c++) {
             float mx = mu[(c * 5u + 0u) * hw + pid], my = mu[(c * 5u + 1u) * hw + pid];
@@ -44,12 +48,14 @@ void main() {
             float Q = 1.0 / (B1 * B2);
             float S = A1 * A2 * Q;
             // S/A1 and S/A2 written without dividing by A1, A2 (either can be exactly 0).
-            dmaps[(c * 3u + 0u) * hw + pid] = 2.0 * my * A2 * Q - 2.0 * my * A1 * Q - 2.0 * mx * S / B1 + 2.0 * mx * S / B2;
-            dmaps[(c * 3u + 1u) * hw + pid] = -S / B2;
-            dmaps[(c * 3u + 2u) * hw + pid] = 2.0 * A1 * Q;
-            sumS += S;
+            float vw = validWin ? 1.0 : 0.0;
+            dmaps[(c * 3u + 0u) * hw + pid] = vw * (2.0 * my * A2 * Q - 2.0 * my * A1 * Q - 2.0 * mx * S / B1 + 2.0 * mx * S / B2);
+            dmaps[(c * 3u + 1u) * hw + pid] = vw * (-S / B2);
+            dmaps[(c * 3u + 2u) * hw + pid] = vw * (2.0 * A1 * Q);
+            sumS += vw * S;
             float x = planes[(c * 5u) * hw + pid], y = planes[(c * 5u + 1u) * hw + pid];
-            sumL1 += abs(x - y); sumL2 += (x - y) * (x - y);
+            float xc = clamp(x, 0.0, 1.0);
+            sumL1 += abs(x - y); sumL2 += (xc - y) * (xc - y);
         }
     }
     sumS = subgroupAdd(sumS); sumL1 = subgroupAdd(sumL1); sumL2 = subgroupAdd(sumL2);
