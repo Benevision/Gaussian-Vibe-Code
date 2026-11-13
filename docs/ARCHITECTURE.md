@@ -32,8 +32,9 @@ SplatWork has four parts that share the formats and protocols in [PROTOCOL.md](P
 ## Mac app (`mac/Sources/SplatStudio`)
 
 ```
-App/        SplatStudioApp (menus), AppModel (document, editing, camera, inspector tabs), Sessions (TrainingSession,
-            PrepSession, PendingRemoteJob), CLI (headless prepare/train/render/eval/benchmark/fetch-job), UISnapshots
+App/        SplatStudioApp (menus), AppModel (document, editing, camera, inspector tabs, Show Live View), Sessions
+            (TrainingSession, PrepSession, PendingRemoteJob), ProjectLibrary (project.json, the Projects list), CLI
+            (headless prepare/train/render/eval/benchmark/fetch-job), UISnapshots
 Core/       GaussianCloud, PreparedDataset (dataset.json), TrainingConfig (+presets), Orientation, SettingsCatalog
             (single source of every setting's help text; --dump-settings writes SETTINGS.md)
 Formats/    PLY (any PLY, 3DGS PLY r/w), .splat, SPZ (gzip via the Compression framework)
@@ -41,11 +42,13 @@ Shaders/    Metal sources as Swift strings, compiled at launch (no offline metal
 Render/     MetalContext, GPU radix sort, SplatScene, SplatRenderer, ViewerCamera, Coverage, MediaExport
 Train/      MetalTrainer (optimisation loop, densification, peak/census passes), TrainingData, AutoClean
 Pipeline/   Sources (photos, video, 360, stereo, stereo depth, RemoteFrameExtraction), Poses (Object Capture,
-            SplatPrepRunner local/remote), Importers (capture bundle, COLMAP, Nerfstudio), Masking, DatasetBuilder
+            SplatPrepRunner local/remote), Importers (capture bundle, COLMAP, Nerfstudio), Masking, DatasetBuilder,
+            PrepCheckpoints
 Remote/     WorkerClient, WorkerBrowser (Bonjour + manual), RemoteJobWatcher, RemoteStore, ComputeScheduler,
-            BlockTraining, SystemBenchmark (+BenchmarkStore, TrainingTimeEstimate), CaptureReceiver
-UI/         ContentView (sidebar: Viewer, iPhone Inbox, Compute, Models & Benchmarks, Settings Reference),
-            ViewerView (MTKView + input), InspectorView (View/Edit/Train/Export), NewProjectSheet, MaskEditor, AuxViews
+            BlockTraining, PauseController, SystemBenchmark (+BenchmarkStore, TrainingTimeEstimate), CaptureReceiver
+UI/         ContentView (sidebar: Viewer, iPhone Inbox, Compute, Models & Benchmarks, Settings Reference, Projects,
+            Files), ProjectViews (project page, status), ViewerView (MTKView + input), InspectorView
+            (View/Edit/Train/Export), NewProjectSheet, MaskEditor, AuxViews
 ```
 
 **Data flow:** any source → `DatasetBuilder` (ingest → masks → poses → rig constraints) → `PreparedDataset` on disk (PROTOCOL §2) → `MetalTrainer` *or* `WorkerClient` *or* `ComputeScheduler.trainBlockParallel` → `GaussianCloud` → `SplatScene` (GPU) → `SplatRenderer`.
@@ -58,10 +61,22 @@ A prepared dataset is a directory holding:
 - `dataset.json`: OpenCV camera convention, row-major `cameraToWorld`, intrinsics, and optional per-camera `depth`, `mask`, `holdout`, `exposure`, `time` and `group`;
 - the `images/` folder, plus optional `depth/`, `masks/` and `points3d.ply`.
 
-The layout is identical on the Mac, in uploads and on the worker. `PreparedDataset.normalizeOrientation()` levels a built dataset to −Y up and centres it, using `gravityUp` when the dataset has one (ARKit gravity, or the +Z of a GPS-georeferenced splatprep solve) and `Orientation.estimateUp` otherwise. Next to the dataset, a project may hold:
-- `frames.json`: an intermediate FrameSet;
-- `.remote-store.json`: see [Remote execution](#remote-execution);
-- `outputs/*.ply`, and `<output>.remote-job.json` for a remote job still in flight.
+The layout is identical on the Mac, in uploads and on the worker. `PreparedDataset.normalizeOrientation()` levels a built dataset to −Y up and centres it, using `gravityUp` when the dataset has one (ARKit gravity, or the +Z of a GPS-georeferenced splatprep solve) and `Orientation.estimateUp` otherwise.
+
+A project folder holds:
+- `project.json` (`ProjectRecord`): the source, the `PrepOptions`, and the state of processing and of the latest training run (settings, devices, step, checkpoint, block count);
+- `dataset/`: the prepared dataset, plus `frames.json` (an intermediate FrameSet), `.remote-store.json` (see [Remote execution](#remote-execution)) and `.prep/` (stage checkpoints, below);
+- `outputs/*.ply` results; `<output>.remote-job.json` for a worker job still in flight; `.resume/` (this Mac's training checkpoints) and `.blocks/` (finished blocks of an unfinished block run);
+- `prep.log`.
+
+### Projects, checkpoints and resume
+
+`ProjectLibrary` keeps the list of projects and loose splat files (`~/Library/Application Support/SplatWork/library.json`); everything else about a project lives in its own folder, so a project can be moved or opened on another machine.
+
+- **Processing** (`PrepCheckpoints`): after each stage `DatasetBuilder` saves its output in `dataset/.prep/` (the FrameSet after frames and after masks; a copy of `dataset.json` and its point cloud after camera solving; a marker once levelled). Each checkpoint carries a SHA-256 fingerprint of the source files (path, size, modification time) and of the settings of that stage and every earlier one. A run restores the latest stage whose fingerprint matches and continues from there, so a changed setting redoes exactly that stage onward. *Redo from Here* deletes the checkpoints from a stage on, together with the matching worker-job ledger entries.
+- **Training on this Mac**: every 10 minutes and on Stop, `MetalTrainer.checkpoint()` is written to `outputs/.resume/`; `MetalTrainer.resume(from:step:)` loads it after `prepare` and continues the step-driven schedules (learning rates, SH degree, densification) from that step with fresh optimizer moments.
+- **Block runs**: each finished block is written to `outputs/.blocks/<settings>/block-<i>-<hash>.ply`, keyed by the block's cameras, region and config; a resumed run uses the recorded block count (the partition is deterministic) and skips finished blocks. A failed block waits on a `BlockRetryGate` for Retry (on any device; `DeviceLocks` keep one block per device) or Leave Out.
+- **Pause** (`PauseController`) holds every Metal trainer of the run and pauses every worker job (`POST /v1/jobs/{id}/pause|resume`); jobs that start while paused start paused.
 
 ### Pipeline stages (`Pipeline/DatasetBuilder.swift`)
 
@@ -173,8 +188,9 @@ The CLI's `--eval` reports held-out PSNR, per view if asked; the measured result
   - Outputs are `preview.splat` (≤ 400 k most visible splats), `result.ply` with `comment splatstudio_up`, and train and held-out PSNR reported separately.
 - **`processing.py`**: runs splatprep requests in the subprocess backend and zips outputs (built on request, with `skip` / `only`).
 - **`runtime_install.py`**: remote install of the processing models into the GPU runtime (`/v1/runtime`), keeping torch pinned.
+- **Studio** (`splatworker/studio/`, GTK-free and unit tested; pages in `splatworker/gui/gtk/studio/`): the Linux SplatWork app (OpenGL viewer, New Project, editing, export, iPhone Inbox, compute devices). Its GPU work runs as jobs of the same server. See [dev/LINUX_STUDIO.md](dev/LINUX_STUDIO.md).
 - **GUI** (`splatworker/gui/`, GTK 4 + libadwaita):
-  - pages: Status, Jobs, Log, Connect and Settings;
+  - worker pages (Queue & Worker: status, jobs, log, connect) and Settings;
   - the setup assistant: `runtime_plan.py` picks a GPU profile from the driver (cu128 → PyTorch 2.7.1 + gsplat 1.6 dev build; cu124/121/118 → PyTorch 2.4.1 + gsplat 1.5.3), and `installer.py` installs a pinned standalone CPython 3.10, torch and gsplat. The runtime is built in `venv.new` and swapped in only after verification. Profiles whose gsplat wheel isn't published are skipped, and local wheels in `wheels/` are preferred;
   - `server_process.py` runs `python -m splatworker serve` as a child process;
   - `updates.py` checks the published Flatpak repository and shows an update banner.
@@ -226,7 +242,7 @@ On pushes that touch `linux/` or `tools/`:
 - Densification on the CPU is O(N) every 100 steps, which is fine up to about 3 M splats.
 - The SH-direction gradient with respect to position is not propagated. This is a common simplification with negligible effect on quality.
 
-## Extension points reserved for planned features
+## Extension points for planned features
 
 | Planned | Hook already in place |
 |---|---|

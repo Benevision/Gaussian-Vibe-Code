@@ -299,7 +299,7 @@ struct NewProjectSheet: View {
                     Text("Isolate one object — SAM 2 (Models pack; objects, not rooms)").tag(MaskKind.sam2)
                 }.labelsHidden().fixedSize().frame(maxWidth: 380, alignment: .trailing)
             }
-            Label("Training also ignores moving objects automatically (Ignore moving objects, on by default); masks are for removing them reliably from the start.", systemImage: "info.circle")
+            Label("Training can also ignore moving objects by itself (Ignore moving objects in the Train settings, off by default); masks remove them reliably from the start.", systemImage: "info.circle")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if maskKind == .sam2 {
                 Label("Keeps only the object in the middle of the first frame and masks out everything else — for scanning a single item. For rooms and scenes use “Remove moving things”.", systemImage: "exclamationmark.triangle")

@@ -1,0 +1,22 @@
+SplatWork
+Copyright 2026 The SplatWork contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party software
+--------------------
+SplatWork does not bundle third-party source code in this repository. At run time, SplatWork Node and splatprep
+download and use third-party packages under their own licences, including:
+
+  * gsplat (Apache-2.0)                     https://github.com/nerfstudio-project/gsplat
+  * PyTorch (BSD-3-Clause)                  https://pytorch.org
+  * COLMAP / pycolmap (BSD-3-Clause)        https://colmap.github.io
+  * GLOMAP (BSD-3-Clause)                   https://github.com/colmap/glomap
+  * LightGlue (Apache-2.0)                  https://github.com/cvg/LightGlue
+  * SAM 2 (Apache-2.0)                      https://github.com/facebookresearch/sam2
+  * FastAPI (MIT), zeroconf (LGPL-2.1), numpy (BSD-3-Clause), Pillow (MIT-CMU)
+
+Model weights
+-------------
+Optional models are downloaded on request, each under its own licence, which SplatWork shows before installing.
+Some of them, including SuperPoint, MASt3R and the VGGT-1B weights, are licensed for NON-COMMERCIAL use only.

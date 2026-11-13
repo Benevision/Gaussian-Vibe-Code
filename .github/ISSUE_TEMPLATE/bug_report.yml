@@ -1,0 +1,40 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: dropdown
+    id: app
+    attributes:
+      label: Which app?
+      options:
+        - SplatWork (Mac)
+        - SplatWork Node (Linux)
+        - SplatWork Capture (iPhone)
+        - splatprep (command line)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: SplatWork → About on the Mac; Preferences in SplatWork Node; Settings in SplatWork Capture.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The project's prep.log, the worker log (Queue & Worker → Log), or terminal output.
+      render: text
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup
+      description: Mac model and macOS version; GPU, driver and distribution for Linux; the source (photos, video, 360°, iPhone capture…) and roughly how many images.

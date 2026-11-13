@@ -1,6 +1,8 @@
 # SplatWork Capture (iOS)
 
-SplatWork Capture is an iPhone app that records ARKit-posed image sequences, with LiDAR depth when the phone has it, for training Gaussian splats in **SplatWork** on the Mac. It writes the `.splatcapture` bundle described in `docs/PROTOCOL.md` §1 and sends it to the Mac over the local network as described in §5.
+SplatWork Capture is the iPhone member of the SplatWork suite. It records ARKit-posed image sequences, with LiDAR depth when the phone has it, and either sends them to **SplatWork** on a Mac or turns them into a splat on the phone itself. It writes the `.splatcapture` bundle described in [docs/PROTOCOL.md](../docs/PROTOCOL.md) §1 and sends it over the local network as described in §5.
+
+The app isn't on the App Store or TestFlight yet; build it from source as described below.
 
 - **Requirements:** iPhone with an A12 chip or newer, running iOS 18 or later. LiDAR models (Pro iPhones from the 12 Pro on) also record depth and a fused point cloud.
 - **Build tools:** Xcode 26 or later, plus [XcodeGen](https://github.com/yonaskolb/XcodeGen).
@@ -34,7 +36,7 @@ ios/
 
 1. In Xcode, select the **SplatCapture** target, then **Signing & Capabilities**.
 2. Tick **Automatically manage signing** and choose your **Team**. You can instead set `DEVELOPMENT_TEAM` in `project.yml` and regenerate.
-3. Change the bundle identifier from `com.example.splatcapture` to one you own, such as `com.yourname.splatcapture`. Change it in `project.yml` too so it survives regeneration.
+3. Change the bundle identifier (`PRODUCT_BUNDLE_IDENTIFIER` and `bundleIdPrefix` in `project.yml`) to one you own, such as `com.yourname.splatcapture`, and regenerate. Set `DEVELOPMENT_TEAM` to your own team too.
 4. Connect the iPhone, select it as the run destination, and press **Run** (⌘R). The first time, enable **Developer Mode** on the phone (Settings › Privacy & Security › Developer Mode).
 5. Allow **Camera** when asked. Also allow **Local Network**: it is requested the first time you open "Send to Mac".
 
@@ -80,10 +82,10 @@ xcrun altool --upload-app -f build/export/SplatCapture.ipa -t ios --apiKey <KEY>
 3. **View** the result (drag to orbit, two fingers to pan, pinch to zoom, double-tap to reset) or share the `.ply`. Splats are saved in *Files › On My iPhone › SplatWork Capture › Splats*.
 
 When other devices are on the network, tick them under **Train on**:
-- **Macs** running SplatWork with *Compute › Act as a worker* on, **PCs** running SplatWork Node, and **iPhones** with Compute on. One device trains the whole scene. Several devices split scenes of 400 or more photos into blocks that train in parallel and are merged on the phone.
+- **Macs** running SplatWork with *Compute › Act as a worker* on, and **PCs** running SplatWork Node. One device trains the whole scene. Several devices split scenes of 400 or more photos into blocks that train in parallel and are merged on the phone.
 - A **SplatWork Node PC** also runs the steps that need Python: camera-pose refinement, learned moving-object masks (SAM 2) and sky masks with a learned skybox. Without one, these steps are skipped, which the result's *What happened* list shows.
 
-Debug builds can run the whole flow without the UI, for example in the Simulator: `xcrun simctl launch <device> com.gunntower.splatcapture -splatSelfTest`. The options are documented in `Splat/SplatSelfTest.swift`.
+Debug builds can run the whole flow without the UI, for example in the Simulator: `xcrun simctl launch <device> <bundle id> -splatSelfTest`. The options are documented in `Splat/SplatSelfTest.swift`.
 
 ### Tips for great captures
 

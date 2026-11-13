@@ -1,9 +1,9 @@
-# SplatWork Node (Linux) — parity plan
+# SplatWork Node studio — design and feature parity
 
-The Linux desktop app (`linux/`, Flatpak `com.example.SplatWorker`) grows from a GPU **worker** with a status
-window into a full **SplatWork** studio, while the worker server keeps running for the Mac and the iPhone.
-This file is the checklist: every user-facing feature of the Mac app (`mac/`), how it maps onto Linux, and its
-status.
+*Developer notes.* The Linux desktop app (`linux/`, Flatpak `com.example.SplatWorker`) is both a GPU **worker** for
+other devices and a full **SplatWork** studio. This page explains how the studio is built and tracks, feature by
+feature, how the Mac app (`mac/`) maps onto Linux. For installing and using it, see
+[linux/README.md](../../linux/README.md).
 
 Status: ✅ done · 🟡 partial (what is missing is said) · ⏳ not yet · ➖ not applicable on Linux
 
@@ -176,9 +176,9 @@ Code locations: GTK-free core `linux/splatworker/studio/` (tested in `linux/test
 * The Flatpak's app id stays `com.example.SplatWorker` so existing installs update in place; the window and
   launcher are called **SplatWork Node** (the suite was renamed from "Splat Studio" to SplatWork).
 
-## What needs testing on the PC (RTX 4080, CachyOS, fish)
+## Manual test plan (needs an NVIDIA GPU)
 
-Nothing below could run on the Mac (no NVIDIA GPU). The GL viewer was tested with Mesa llvmpipe in a Debian
+These checks need real NVIDIA hardware, so CI can't run them. The GL viewer was tested with Mesa llvmpipe in a Debian
 container (render tests + the real GTK window driven by `linux/scripts/gui_smoke.py`); the pipeline was tested
 end to end against a real HTTP server with a fake trainer and a stand-in splatprep.
 
@@ -206,37 +206,36 @@ Install the build from the branch (after the CI build or a local `linux/flatpak/
 7. **iPhone Inbox.** Turn it on (Inbox page or Preferences → Studio — it's off by default), send a capture from
    SplatWork Capture (pairing code), then *New splat…* on it. Five wrong codes from the phone should give
    "try again in 10 minutes".
-8. **Fish / paths.** Nothing in the app uses the shell; `flatpak run …` commands above work as is in fish.
-9. **Local-only endpoints.** From the Mac, `curl -H "Authorization: Bearer <token>" http://<pc>:7878/v1/datasets`
+8. **Local-only endpoints.** From the Mac, `curl -H "Authorization: Bearer <token>" http://<pc>:7878/v1/datasets`
    must not list the Studio's project folders, and `POST /v1/datasets/local` must answer 403. Same through an
    SSH tunnel (`ssh -L 7878:localhost:7878 pc`, then `curl localhost:7878/…`).
-10. **Pause / checkpoint.** While a project trains: *Save checkpoint* (a `…-stepN.ply` appears under Results and
+9. **Pause / checkpoint.** While a project trains: *Save checkpoint* (a `…-stepN.ply` appears under Results and
     opens), *Pause* ("Paused at step N", `nvidia-smi` shows the memory freed), queue another job (it runs),
     *Resume* (log: "resuming from the state saved at step N"; PSNR and splat count continue without a jump).
     Repeat with `optimizerPrecision` compact and fp32, with skybox + bilateral grid + pose refinement, MCMC and
     default strategies; pause, quit, restart, resume. Torch test: `tests/test_compact_adam.py` with the GPU
     runtime's python.
-11. **Compute devices.** Turn on "Act as a worker" on the Mac: it appears under Compute Devices within ~15 s
+10. **Compute devices.** Turn on "Act as a worker" on the Mac: it appears under Compute Devices within ~15 s
     (this PC's own worker must not). Add another worker by address (+ token). New Project with *Train on* = the
     Mac; then *Train again* on another SplatWork Node (its log should say it still has the photos). A 400+ photo
     scene with *All devices*: per-device block lists and "merged N blocks" in `prep.log`, no seams at block
     borders; kill the Mac worker mid-run (its blocks are retried here); Cancel cancels the remote job.
-12. **Benchmark.** Models & Benchmarks → Run benchmark (a job in Queue & Worker, then a steps/s row); compare with
+11. **Benchmark.** Models & Benchmarks → Run benchmark (a job in Queue & Worker, then a steps/s row); compare with
     the Mac's Compute → Benchmark of this PC. `flatpak run --command=splatworker com.example.SplatWorker benchmark`
     with the app's server running.
-13. **Coverage.** Open a project output and press 6: spinner, then colours and the summary; time it on a 3–6 M
+12. **Coverage.** Open a project output and press 6: spinner, then colours and the summary; time it on a 3–6 M
     splat scene with ~300 cameras. A loose `.ply` leaves Coverage greyed out.
-14. **Turntable.** Export → Render video, 1080p 8 s: the row names the encoder (openh264enc from the Flatpak's
+13. **Turntable.** Export → Render video, 1080p 8 s: the row names the encoder (openh264enc from the Flatpak's
     openh264 extension, or vp9enc); the file plays; Cancel works; memory stays flat at 4K.
-16. **360° photos.** New Project → 360° photos folder with 2–3 equirect photos: 8+4+4 views each, the solve log
+14. **360° photos.** New Project → 360° photos folder with 2–3 equirect photos: 8+4+4 views each, the solve log
     says it used the rig.
-17. **Stereo.** New Project → Stereo footage → `Arcturus Vision.mp4` with ~150 target frames: "left eye = stream
+15. **Stereo.** New Project → Stereo footage → `Arcturus Vision.mp4` with ~150 target frames: "left eye = stream
     1", baseline 63.8 mm, fisheye lens, a "metric scale … ×" line; the circle edges masked in Edit masks. A
     side-by-side clip with a baseline and Stereo depth on: the rig in the solve log (COLMAP / pycolmap ≥ 3.12),
     `depth/*.bin` written and used in training.
-18. **Mask editor.** On a video project: click an object (a SAM 2 job on Queue & Worker, the mask in seconds),
+16. **Mask editor.** On a video project: click an object (a SAM 2 job on Queue & Worker, the mask in seconds),
     Track through all frames, Save, Prepare again (edits kept); "Mask fixed parts of the frame" on drone footage.
-15. **Preferences → Studio.** Receiver on/off and port follow on the Inbox page; a navigation speed follows in the
+17. **Preferences → Studio.** Receiver on/off and port follow on the Inbox page; a navigation speed follows in the
     viewer inspector.
 
 Logs: Queue & Worker → Log, `~/.var/app/com.example.SplatWorker/data/splatworker/data/jobs/<id>/train.log`, and

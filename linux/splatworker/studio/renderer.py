@@ -1,4 +1,4 @@
-"""OpenGL 4.3 splat renderer (the viewer's engine; see docs/LINUX_APP.md "Renderer choice").
+"""OpenGL 4.3 splat renderer (the viewer's engine; see docs/dev/LINUX_STUDIO.md "Renderer choice").
 
 Same pipeline and math as the Mac's Metal viewer (``RenderShaders.swift``):
 

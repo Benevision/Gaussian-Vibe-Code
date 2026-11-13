@@ -1,46 +1,55 @@
 # SplatWork Node
 
-A Linux CUDA training server that SplatWork (macOS) can offload Gaussian-splat training, and optionally
-dataset processing, to over the LAN. It implements `docs/PROTOCOL.md` §2–§4, §6 and §7. The training
-backend is [gsplat](https://github.com/nerfstudio-project/gsplat), nerfstudio's CUDA rasterizer.
+SplatWork Node is the Linux member of the SplatWork suite. It does two jobs in one app:
+
+- **A GPU worker.** SplatWork on the Mac (and SplatWork Capture on the iPhone) send it training and dataset
+  processing jobs over the local network. Training uses [gsplat](https://github.com/nerfstudio-project/gsplat), the
+  CUDA rasterizer from nerfstudio; processing uses [splatprep](../tools/README.md) for video splitting, learned
+  camera solving and masks.
+- **A desktop studio.** A complete SplatWork for Linux: a viewer (PLY, compressed PLY, `.splat`, `.spz`, learned
+  skybox), New Project (photos, video, 360° video and photos, stereo footage, iPhone captures, COLMAP, Nerfstudio),
+  editing (brush, crop, thresholds, Auto clean, mask editor), export and turntable videos, an iPhone Inbox, and
+  training on this PC or across several machines.
+
+Everything GPU-heavy runs as jobs of one server with one queue per GPU, so work started at the PC and work sent from
+a Mac share the GPU fairly (the person at the PC goes first among waiting jobs; nothing running is interrupted).
+Projects are saved in `~/Documents/SplatWork`, in the same layout as the Mac, so a project opens on either.
 
 ```
-SplatWork (Mac) ──Bonjour _splatworker._tcp──▶ discovers worker
-                   ──POST /v1/datasets (zip)────▶ datasets/<id>/
-                   ──POST /v1/jobs {config}─────▶ queue ─▶ GPU slot ─▶ spawned trainer process
-                   ◀─GET /v1/jobs/{id} (poll)───   JobStatus (step, loss, psnr, numGaussians, eta)
-                   ◀─GET preview.ply / result.ply
+SplatWork (Mac) ──Bonjour _splatworker._tcp──▶ discovers the worker
+                 ──POST /v1/datasets (zip)────▶ datasets/<id>/
+                 ──POST /v1/jobs {config}─────▶ queue ─▶ GPU slot ─▶ trainer process
+                 ◀─GET /v1/jobs/{id} (poll)───   JobStatus (step, loss, psnr, numGaussians, eta)
+                 ◀─GET preview.splat / result.ply
 ```
 
-## SplatWork Node studio (1.4.0)
+The API is documented in [docs/PROTOCOL.md](../docs/PROTOCOL.md) §2–§4, §6 and §7. How the studio is built:
+[docs/dev/LINUX_STUDIO.md](../docs/dev/LINUX_STUDIO.md).
 
-Since 1.4.0 the desktop app is a full **SplatWork** studio — viewer (PLY, compressed PLY, .splat, .spz with the learned
-skybox), New Project (photos, video, 360° video, iPhone captures, COLMAP, Nerfstudio → frames, stacked masks, sky,
-camera solving, training), editing (brush, crop, thresholds, Auto clean), export and an iPhone Inbox — and it is
-still the worker your Mac uses. Its old Status / Jobs / Log / Connect pages are the **Queue & Worker** page.
-Everything GPU-heavy the Studio does runs as ordinary jobs of the same server, so jobs from this PC and from the
-Mac share one queue per GPU (this PC's go first among the *waiting* ones; see docs/PROTOCOL.md §4).
-Projects are saved in `~/Documents/SplatWork`. Feature checklist and status: [docs/LINUX_APP.md](../docs/LINUX_APP.md).
+**Requirements:** a Linux desktop with Flatpak, and an NVIDIA GPU with 8 GB or more of memory for training
+(24 GB for very large scenes). Without an NVIDIA GPU it can still view, edit and process datasets.
 
-CLI extras: `splatworker convert in.ply out.spz [--sh 0]`, `splatworker splat-info scene.ply`.
+## Install
 
-## Install the Flatpak (recommended)
-
-The Flatpak is a desktop app (GTK 4 + libadwaita) around the same server. It suits GNOME, KDE, the
-Steam Deck's desktop mode and any distribution with Flatpak. You get a big on/off switch, the
-connection details for the Mac, live GPU statistics and the job list. You don't need a terminal.
+Install from the project's Flatpak repository, so updates arrive like any other Flatpak app:
 
 ```bash
-# from a bundle someone shared with you
-flatpak install --user SplatWorker-1.0.0-x86_64.flatpak
-
-# or build it from this repository (needs flatpak-builder; pulls org.gnome.Platform//51 from Flathub).
-# Copy the whole project (linux/ and tools/) to a normal folder in your home directory first —
-# USB/external drives are usually mounted "noexec", where the build can't run.
-cd ~/splat-studio/linux/flatpak
-bash build.sh         # builds and installs for your user ("bash" works even if copying lost the +x bit)
-bash make-bundle.sh   # optional: dist/SplatWorker-<version>-x86_64.flatpak to share
+flatpak install --user https://benevision.github.io/SplatWork/flatpak/splatworker.flatpakref
 ```
+
+Or build it from this repository (needs `flatpak-builder`; it pulls `org.gnome.Platform//51` from Flathub). Copy
+the project to a normal folder in your home directory first: USB and external drives are usually mounted
+"noexec", where the build can't run.
+
+```bash
+cd linux/flatpak
+bash build.sh         # builds and installs for your user
+bash make-bundle.sh   # optional: a single-file dist/SplatWorker-<version>-x86_64.flatpak to share
+```
+
+A shared single-file bundle installs with `flatpak install --user SplatWorker-<version>-x86_64.flatpak`.
+
+## First launch
 
 Open **SplatWork Node** from the app grid. On first launch the setup assistant runs:
 
@@ -57,7 +66,7 @@ Open **SplatWork Node** from the app grid. On first launch the setup assistant r
 Without an NVIDIA GPU, the assistant explains that training is not possible on the CPU. It then offers
 the processing-only runtime, so the Mac can still send dataset processing jobs (§6).
 
-After setup:
+After setup, the **Queue & Worker** page holds the worker side of the app:
 
 * **Status**: the server switch, the address(es) and port, the Bonjour name, and the access token
   (copy, regenerate, optional QR code). It also shows what the worker can do, a live GPU card (memory
@@ -71,9 +80,6 @@ After setup:
   to use, start the server when the app opens, keep running when the window is closed, start at login
   (through the XDG Background portal), log detail, and repair/remove the GPU runtime. Each setting is
   explained right under it.
-
-> **Screenshots: TODO.** Capture Status, Jobs and the setup assistant at 1280×800 and replace the
-> placeholder URLs in `flatpak/com.example.SplatWorker.metainfo.xml`.
 
 ### Headless / without the window
 
