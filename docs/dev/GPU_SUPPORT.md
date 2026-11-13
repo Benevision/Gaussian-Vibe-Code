@@ -320,7 +320,10 @@ pixel that raster_bwd adds to the background term (sky colour, sky penalty, the 
   moving objects in 6 photos (`--transients 6`): 5.6 % of those photos' pixels dropped (the object covers 8.3 %),
   0.4 % of the others'; poses perturbed by ~1 cm / 0.6° (`--pose-noise 0.01`): 21.6 vs 19.4 dB, mean correction
   3 cm / 0.7°; compact Adam within 0.2 dB of fp32 (adaptive and MCMC); a resumed run with sky + appearance + transient
-  + pose + compact follows the uninterrupted one within 2e-5 (relative loss, 70 steps).
+  + pose + compact follows the uninterrupted one within 5e-5 (relative loss, 70 steps). The whole file takes ~11 min
+  on the aarch64 colima VM (16 tests; the 2b ones ~8 min). Lavapipe there advertises float atomic add but loses
+  updates; the start-up probe catches it almost always, but a run that slips through trains with wrong sums (seen
+  once in a resume comparison) — `--atomics cas` would pin it if that becomes a CI problem.
 - **Deviations from trainer.py**: the median error comes from a 2048-bin histogram of every pixel (trainer.py:
   the median of 65 536 random pixels); photos with an alpha channel are composited over black when the skybox is on
   (trainer.py: over the sky, with a gradient through the target); the sky's viewing directions use the corrected
