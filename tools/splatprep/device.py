@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import resource
+try:
+    import resource
+except ImportError:  # Windows
+    resource = None
 import sys
 
 # Ops without an MPS kernel (e.g. torchvision deform_conv2d used by ALIKED) fall back to CPU.
@@ -85,10 +88,36 @@ def torch_device(preferred: str | None = None):
 
 def peak_rss_mb() -> float:
     """Peak resident set size of this process and its waited-for children (MB)."""
+    if resource is None:
+        return round(_windows_peak_working_set() / (1024 * 1024), 1)
     scale = 1.0 if sys.platform == "darwin" else 1024.0  # bytes on macOS, KiB on Linux
     own = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
     kids = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * scale
     return round(max(own, kids) / (1024 * 1024), 1)
+
+
+def _windows_peak_working_set() -> float:
+    """PeakWorkingSetSize of this process (children aren't tracked on Windows); 0 if unavailable."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+        pmc = PMC()
+        pmc.cb = ctypes.sizeof(PMC)
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        if ctypes.windll.psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+            return float(pmc.PeakWorkingSetSize)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
 
 
 def peak_gpu_mb() -> float | None:

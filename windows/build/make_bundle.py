@@ -40,7 +40,7 @@ GST_PLUGINS = ["libgstcoreelements.dll", "libgstapp.dll", "libgstvideoconvertsca
                "libgstvpx.dll", "libgstmatroska.dll", "libgstisomp4.dll", "libgstopenh264.dll",
                "libgstvideoparsersbad.dll"]
 # site-packages to leave out (big and unused by the app's own Python; the GPU runtime has its own)
-SKIP_SITE = ["pip", "pip-*", "setuptools", "setuptools-*", "_distutils_hack", "*.dist-info/RECORD"]
+SKIP_SITE = ["pip", "pip-*", "setuptools", "setuptools-*", "_distutils_hack", "distutils-precedence.pth"]
 SKIP_STDLIB = ["test", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3", "__pycache__"]
 
 
@@ -170,7 +170,7 @@ def main() -> int:
     # the GPU runtime's Python 3.10)
     copytree(REPO / "linux" / "splatworker", out / "app" / "splatworker", skip=["__pycache__"])
     copytree(REPO / "tools" / "splatprep", out / "tools" / "splatprep", skip=["__pycache__"])
-    (out / "lib" / f"python{PY_VER}" / "site-packages" / "splatwork.pth").write_text("../../../app\n")
+    (out / "lib" / f"python{PY_VER}" / "site-packages" / "splatwork.pth").write_text("../../../app\n../../../tools\n")
     for f in ("LICENSE", "NOTICE"):
         shutil.copy2(REPO / f, out / f)
     (out / "bundle.json").write_text(json.dumps({"version": a.version, "python": PY_VER}, indent=1))
