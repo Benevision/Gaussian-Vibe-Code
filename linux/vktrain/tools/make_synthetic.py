@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic synthetic training dataset (docs/PROTOCOL.md §2) for the Vulkan trainer's end-to-end tests.
 
-A ray-cast scene — checkered ground, three striped and shaded spheres, a smooth backdrop sphere around it all —
+A ray-cast scene — a round checkered ground plate, three striped and shaded spheres, a smooth backdrop sphere around it all —
 seen by cameras on a ring, written as images/*.png, dataset.json and a noisy coloured points3d.ply (as a
 camera solve would give). Every ``--holdout-every``-th camera is a holdout; camera 1 has a "moving object"
 (a magenta block in its photo only) and a mask that removes it. numpy + Pillow only.
@@ -26,6 +26,7 @@ SPHERES = [  # centre, radius, base colour, stripe frequency
     ((1.0, 0.55, -0.5), 0.45, (0.3, 0.8, 0.3), 6.0),
 ]
 GROUND_Y = 1.0          # OpenCV-style world: +y is down, the ground is below the spheres
+GROUND_R = 3.0          # a round ground plate; beyond it the backdrop
 BACKDROP_R = 7.0
 LIGHT = np.array([0.4, -1.0, 0.3]) / np.linalg.norm([0.4, -1.0, 0.3])
 
@@ -83,7 +84,7 @@ def trace(o, d):
     hit = (d[:, 1] > 1e-6) & (t > 0) & (t < best)
     if hit.any():
         p = o + t[hit, None] * d[hit]
-        g = np.hypot(p[:, 0], p[:, 2]) < BACKDROP_R * 0.95
+        g = np.hypot(p[:, 0], p[:, 2]) < GROUND_R
         idx = np.nonzero(hit)[0][g]
         col[idx] = shade_ground(p[g])
         best[idx] = t[hit][g]
@@ -128,7 +129,7 @@ def surface_points(rng, n):
         pts.append(p)
         cols.append(shade_sphere(p, k))
     m = int(n * 0.4)
-    r = 3.0 * np.sqrt(rng.random(m))
+    r = GROUND_R * np.sqrt(rng.random(m))
     a = rng.random(m) * 2 * np.pi
     p = np.stack([r * np.cos(a), np.full(m, GROUND_Y), r * np.sin(a)], 1)
     pts.append(p)
@@ -136,7 +137,6 @@ def surface_points(rng, n):
     m = n - sum(len(x) for x in pts)
     v = rng.normal(size=(m, 3))
     v /= np.linalg.norm(v, axis=1, keepdims=True)
-    v = v[v[:, 1] < 0.1]   # the backdrop above the ground
     pts.append(v * BACKDROP_R * 0.98)
     cols.append(shade_backdrop(v))
     p = np.concatenate(pts)

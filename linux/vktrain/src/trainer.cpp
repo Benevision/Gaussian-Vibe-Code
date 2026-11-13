@@ -450,10 +450,34 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
         int shDeg = 0;
         double sumForward = 0, sumBackward = 0, sumDensify = 0;
 
+        // Everything the loop needs to carry on exactly where it stopped (trainer.py save_state).
+        auto saveTo = [&](const std::string& path, int64_t step) {
+            Saved s;
+            s.trainViews = uint32_t(nTrain); s.evalViews = uint32_t(nEval);
+            s.step = step; s.adamSteps = gs.adamSteps;
+            download(s.s);
+            if (!mcmc) {
+                s.grad2d = gs.read<float>(grad2dBuf, size_t(gs.n));
+                s.count = gs.read<float>(countBuf, size_t(gs.n));
+            }
+            s.order = order;
+            s.rng = rng.save();
+            s.strategy = cfg.strategy;
+            s.psnrEma = psnrEma; s.lossEma = lossEma; s.evalPsnr = lastEval;
+            s.elapsed = elapsedBefore + seconds(tStart, Clock::now());
+            s.previewStep = previewStep;
+            s.capLogged = capLogged;
+            saveState(path, s);
+        };
+
         for (int64_t step = startStep; step < cfg.iterations; step++) {
             if (ctl.cancel) throw Cancelled{};
             if (step == opt.pauseAt && step != startStep) ctl.pause = true;
             if (ctl.checkpoint.exchange(false)) writeCheckpoint(step);
+            if (step == opt.snapshotAt) {   // tests: the state a pause would save, without stopping
+                saveTo((fs::path(opt.jobDir.empty() ? "." : opt.jobDir) / "snapshot.vkstate").string(), step);
+                em.emit({{"type", "snapshot"}, {"step", step}});
+            }
             if (ctl.pause) {
                 std::string rp = opt.resumePath();
                 if (rp.empty()) {
@@ -462,22 +486,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                 } else {
                     writeCheckpoint(step);   // a paused job always has a downloadable checkpoint
                     em.status({{"message", "saving the training state"}});
-                    Saved s;
-                    s.trainViews = uint32_t(nTrain); s.evalViews = uint32_t(nEval);
-                    s.step = step; s.adamSteps = gs.adamSteps;
-                    download(s.s);
-                    if (!mcmc) {
-                        s.grad2d = gs.read<float>(grad2dBuf, size_t(gs.n));
-                        s.count = gs.read<float>(countBuf, size_t(gs.n));
-                    }
-                    s.order = order;
-                    s.rng = rng.save();
-                    s.strategy = cfg.strategy;
-                    s.psnrEma = psnrEma; s.lossEma = lossEma; s.evalPsnr = lastEval;
-                    s.elapsed = elapsedBefore + seconds(tStart, Clock::now());
-                    s.previewStep = previewStep;
-                    s.capLogged = capLogged;
-                    saveState(rp, s);
+                    saveTo(rp, step);
                     em.log(fmt("paused at step %lld: training state saved", (long long)step));
                     em.emit({{"type", "paused"}, {"step", step}, {"resumeFile", rp}});
                     return EXIT_PAUSED;
