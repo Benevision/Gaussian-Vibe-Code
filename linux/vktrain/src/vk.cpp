@@ -180,9 +180,16 @@ Context::Context(const ContextOptions& opt) {
 
     // Trust but verify: some drivers advertise float atomic add and lose updates under contention (seen on
     // Mesa lavapipe 25.0 / aarch64). In auto mode a failed probe falls back to the compare-and-swap kernels.
-    if (nativeAtomics && opt.atomics == ContextOptions::Atomics::Auto && probeFloatAtomics(100003) != 0) {
-        nativeAtomics = false;
-        info.nativeAtomicsBroken = true;
+    // The lost updates are intermittent (one probe passed in about 25 runs on lavapipe), so it runs several
+    // rounds and any wrong sum counts; each round is two small dispatches.
+    if (nativeAtomics && opt.atomics == ContextOptions::Atomics::Auto) {
+        for (int round = 0; round < 6; round++) {
+            if (probeFloatAtomics(round % 2 ? 4096 : 100003) != 0) {
+                nativeAtomics = false;
+                info.nativeAtomicsBroken = true;
+                break;
+            }
+        }
     }
 }
 
