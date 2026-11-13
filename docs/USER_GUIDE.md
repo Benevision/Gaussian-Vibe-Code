@@ -233,12 +233,13 @@ In **Compute**, click **Watch** next to a running training job on a worker. The 
 shows the job's live preview and cameras with the full dashboard; press **F** to look from the job's central camera.
 Opening another project stops watching.
 
-### Long drone flights: local colour correction
+### Changing light: local colour correction
 
-**Local colour correction (PC)** (Advanced, off by default, Linux workers only) gives each photo its own coarse grid
-of colour adjustments. Use it when the sun moved during the capture. On a 96-minute, 1,258-photo flight it raised
-held-out PSNR from 17.16 to 17.91 dB and removed smeared shadows, but training took about 50 % longer. While it is on,
-it replaces per-photo colour correction.
+**Local colour correction** (Advanced, on by default, on the Mac and on workers) gives each photo its own coarse
+grid of colour adjustments instead of one correction for the whole photo, so shadows and sunlight that moved
+during the capture don't smear. On a 1,258-photo drone flight it raised held-out PSNR by about 0.8 dB (16.37 →
+17.18 dB on the Mac, 17.16 → 17.91 dB on a worker); on an indoor scan it made no difference. Turn it off to save
+some training time on captures with steady light.
 
 ## 6. Viewing
 
@@ -380,8 +381,8 @@ SplatWork Node updates itself when no job is running, keeping its settings, toke
 - **Camera solving placed only a few photos:** use more overlapping images, try another camera solver, or try without
   masks (masks can hide most of each photo).
 - **The scene is upside down or tilted:** use Orientation → Level to current view, or pick an axis.
-- **Training looks hazy or blotchy across photos:** leave per-photo colour correction on for video, drone and
-  handheld photos. For long outdoor flights on a worker, try Local colour correction.
+- **Training looks hazy or blotchy across photos:** leave per-photo and local colour correction on for video, drone
+  and handheld photos.
 - **360° video uses a lot of disk:** an 8K 360° clip decodes to about 10,000 frames, each cut into several views (one
   test produced 4.4 GB of frames). Leave room on both machines. A worker keeps uploaded datasets until they are
   deleted, and limits uploads to 20 GB (40 GB once unpacked) by default; change that in the worker's Settings.

@@ -1,3 +1,4 @@
+import time
 import io
 import json
 import zipfile
@@ -221,6 +222,12 @@ def test_status_transitions_and_cancel_running(client, dataset_zip):
     j2 = client.post("/v1/jobs", headers=AUTH, json={"datasetId": ds}).json()["jobId"]
 
     s1 = wait_state(client, j1, "loading")
+    # the job is "starting" for a moment before the backend reports "loading dataset"
+    for _ in range(100):
+        if s1["message"] != "starting":
+            break
+        time.sleep(0.02)
+        s1 = client.get(f"/v1/jobs/{j1}", headers=AUTH).json()
     assert s1["message"] == "loading dataset"
     # single device slot: second job waits in the queue
     s2 = client.get(f"/v1/jobs/{j2}", headers=AUTH).json()
