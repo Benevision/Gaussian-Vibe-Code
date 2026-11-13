@@ -244,6 +244,7 @@ struct ComputeScheduler: Sendable {
                             retryGate: BlockRetryGate? = nil,
                             pause: PauseController? = nil,
                             blockStore: URL? = nil,
+                            preview: (@Sendable (Int, GaussianCloud) -> Void)? = nil,
                             progress: (@Sendable (BlockProgress) -> Void)? = nil) async throws -> GaussianCloud {
         guard !blocks.isEmpty else { throw PipelineError.noInput("no blocks") }
         var assignment = distribute(blocks, fits: fits)
@@ -281,7 +282,8 @@ struct ComputeScheduler: Sendable {
             if dev == "local", let local {
                 stageOnly(.loading)
                 return try await local.train(dataset: dataset.restricted(to: Set(b.cameraIds)), config: cfg,
-                                             progress: { report($0, .training) })
+                                             progress: { report($0, .training) },
+                                             preview: preview.map { p in { g in p(b.index, g) } })
             } else if let client = clients[dev] {
                 // the worker may already hold the photos (split / masked / solved there): send only the rest
                 var datasetId = datasetIds.get(dev)
@@ -294,9 +296,16 @@ struct ComputeScheduler: Sendable {
                 stageOnly(.queued)
                 let jobId = LockedValue<String?>(nil)
                 defer { if let j = jobId.get() { pause?.remove(job: j) } }
+                // live view: the worker's compact preview of this block, at most every 30 s
+                let lastPreview = LockedValue<(step: Int?, at: Date)>((nil, .distantPast))
                 return try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
                                               datasetId: datasetId, progress: { js in
                     pause?.jobUpdated(js.jobId, state: js.state)
+                    if let preview, let ps = js.previewStep, ps != lastPreview.get().step, Date().timeIntervalSince(lastPreview.get().at) > 30 {
+                        lastPreview.set((ps, Date()))
+                        let id = js.jobId
+                        Task.detached(priority: .utility) { if let g = try? await client.previewSplat(id) { preview(b.index, g) } }
+                    }
                     let stage: BlockStage = js.state == .paused ? .paused : js.state == .queued ? .queued : js.state == .loading ? .loading
                         : js.state == .completed ? .downloading : .training
                     report(TrainingProgressSnapshot(js), stage)
@@ -318,6 +327,7 @@ struct ComputeScheduler: Sendable {
                            FileManager.default.fileExists(atPath: file.path), let cloud = try? SplatFileFormat.load(url: file) {
                             let snap = TrainingProgressSnapshot(step: config.iterations, totalSteps: config.iterations, numGaussians: cloud.count)
                             progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: snap, overall: tracker.update(b.index, 1), stage: .done))
+                            preview?(b.index, cloud)
                             results.append((b, cloud))
                             continue
                         }
@@ -339,6 +349,7 @@ struct ComputeScheduler: Sendable {
                                 _ = tracker.update(b.index, 1)
                                 var done = last.get(); done.step = max(done.step, done.totalSteps)
                                 progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: done, overall: tracker.update(b.index, 1), stage: .done))
+                                preview?(b.index, cloud)
                                 results.append((b, cloud))
                                 break attempts
                             } catch {

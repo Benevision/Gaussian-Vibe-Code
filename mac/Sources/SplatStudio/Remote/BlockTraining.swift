@@ -27,8 +27,10 @@ struct TrainingProgressSnapshot: Sendable, Hashable {
 /// Implemented by the Metal trainer. Must honour `config.region` (keep/densify only gaussians inside the
 /// expanded box) and `config.cameraIds` (train only on those cameras) for block-parallel training (§7).
 protocol LocalTrainingRunner: Sendable {
+    /// `preview`: the block's current splats now and then (≈ every 30 s), for the live view.
     func train(dataset: PreparedDataset, config: TrainingConfig,
-               progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud
+               progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void,
+               preview: (@Sendable (GaussianCloud) -> Void)?) async throws -> GaussianCloud
 }
 
 extension PreparedDataset {

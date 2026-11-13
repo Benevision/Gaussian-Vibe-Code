@@ -8,7 +8,8 @@ struct MetalTrainingRunner: LocalTrainingRunner {
     /// The run's Pause / Resume (blocks started while paused start held).
     var pause: PauseController? = nil
     func train(dataset: PreparedDataset, config: TrainingConfig,
-               progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud {
+               progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void,
+               preview: (@Sendable (GaussianCloud) -> Void)? = nil) async throws -> GaussianCloud {
         try await RemoteImageFetch.shared.ensure(dataset.root)
         // Stop (task cancellation) must reach the trainer, which runs on its own thread.
         let t = MetalTrainer(dataset: dataset, config: config)
@@ -18,9 +19,14 @@ struct MetalTrainingRunner: LocalTrainingRunner {
             return try await withTaskCancellationHandler {
                 try await Task.detached(priority: .userInitiated) {
                     try t.prepare { _ in }
+                    let lastPreview = LockedValue(Date())
                     return try t.run(previewEvery: 0, onStatus: { s in
                         progress(TrainingProgressSnapshot(step: s.step, totalSteps: s.totalSteps, loss: Double(s.loss), psnr: Double(s.psnr),
                                                           numGaussians: s.numGaussians, elapsed: s.elapsed, eta: s.eta))
+                        // between steps (the parameter lock is free here): a copy for the live view every 30 s
+                        if let preview, Date().timeIntervalSince(lastPreview.get()) > 30 {
+                            lastPreview.set(Date()); preview(t.snapshot())
+                        }
                     })
                 }.value
             } onCancel: { t.cancel() }
@@ -486,6 +492,28 @@ final class TrainingSession {
                 var blockSamples: [Int: [(Date, Int)]] = [:]
                 let finalBlocks = blocks
                 let nDevices = devices.count
+                // Names as they were at the start: a worker that drops off the network keeps its name here.
+                let names = Dictionary(devices.map { ($0.id, $0.isLocal ? "This Mac" : $0.name) }, uniquingKeysWith: { a, _ in a })
+                // Live view: every block's latest preview (or result), merged, at most every 15 s.
+                var parts: [Int: GaussianCloud] = [:]
+                var merging = false, lastMerge = Date.distantPast, pending = false
+                @MainActor func mergePreviews() {
+                    guard let s = self, s.livePreview, !merging, !parts.isEmpty else { return }
+                    guard Date().timeIntervalSince(lastMerge) > 15 else {
+                        if !pending { pending = true; Task { @MainActor in try? await Task.sleep(nanoseconds: 15_000_000_000); pending = false; mergePreviews() } }
+                        return
+                    }
+                    merging = true; lastMerge = Date()
+                    let input = parts.sorted { $0.key < $1.key }.compactMap { k, g in finalBlocks.first { $0.index == k }.map { (block: $0, cloud: g) } }
+                    Task.detached(priority: .utility) {
+                        let merged = BlockMerger.merge(input)
+                        await MainActor.run {
+                            merging = false
+                            guard let s = self, s.isActive else { return }
+                            s.present(SplatScene(cloud: merged))
+                        }
+                    }
+                }
                 self?.blockRows = []
                 let gate = BlockRetryGate()
                 let pause = self?.pauseControl
@@ -495,7 +523,10 @@ final class TrainingSession {
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
                                                                    local: useLocal ? MetalTrainingRunner(pause: pause) : nil, clients: clients,
                                                                    fits: { fits($0, $1, finalBlocks) }, retryGate: gate, pause: pause,
-                                                                   blockStore: store) { bp in
+                                                                   blockStore: store,
+                                                                   preview: { idx, g in
+                                                                       Task { @MainActor in parts[idx] = g; mergePreviews() }
+                                                                   }) { bp in
                     Task { @MainActor in
                         guard let self else { return }
                         if case .preparing = self.state, bp.stage != .waiting { self.state = .training }
@@ -510,7 +541,7 @@ final class TrainingSession {
                             guard let f = bs.first, let l = bs.last, l.0.timeIntervalSince(f.0) > 1 else { return 0 }
                             return Double(l.1 - f.1) / l.0.timeIntervalSince(f.0)
                         }()
-                        let dev = bp.deviceId == "local" ? "This Mac" : (browser.workers.first { $0.id == bp.deviceId }?.name ?? bp.deviceId)
+                        let dev = names[bp.deviceId] ?? browser.workers.first { $0.id == bp.deviceId }?.name ?? bp.deviceId
                         var row = BlockRow(id: bp.blockIndex, deviceId: bp.deviceId, device: dev, stage: bp.stage, snapshot: bp.snapshot,
                                            stepsPerSecond: rate)
                         if let i = self.blockRows.firstIndex(where: { $0.id == bp.blockIndex }) {
@@ -563,6 +594,11 @@ final class TrainingSession {
 
     private func update(_ s: TrainerStatus) {
         status = s
+        // Steps went back (a block or worker job started again from its beginning, e.g. after the worker was
+        // lost): drop the samples beyond it, or the chart draws a line from the old end back to the start.
+        if let last = history.last, s.step < last.step {
+            history.removeAll { $0.step >= s.step }; evalHistory.removeAll { $0.step >= s.step }
+        }
         if Date().timeIntervalSince(lastRecorded) > 30 {
             lastRecorded = Date()
             let (st, tot) = (s.step, s.totalSteps)
