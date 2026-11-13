@@ -2,9 +2,24 @@
 
 Notable changes to SplatWork. The Mac app is released by version tag (see
 [Releases](https://github.com/Benevision/SplatWork/releases)); a rolling *developer build* follows `main`.
-SplatWork for Linux (Linux) is published to its Flatpak repository on every change and carries its own version number.
+SplatWork for Linux is published to its Flatpak repository on every change and carries its own version number.
 
-## Unreleased
+## 1.2.0 — 2026-11-13
+
+SplatWork 1.2.0 for Mac, SplatWork for Linux 1.5.0.
+
+### Highlights
+- **Never start over:** every processing stage is checkpointed and training saves checkpoints and finished blocks,
+  so quitting, a crash or Stop costs at most the step that was running. A new **Projects** list shows where every
+  project stands and resumes or redoes it from any stage.
+- **Drone footage and photo locations:** imported photos keep their GPS (only that), so camera solving checks the
+  cameras against it and puts the scene in metres. Drone photos are recognised by the drone's own markers — not by
+  GPS, so phone photos stay ordinary — and get aerial settings; there's a new **Drone / aerial** tile.
+- **Training on several devices, sturdier:** Retry or leave out a failed block without stopping the rest, Pause and
+  Stop reach every device, a live view of block runs, and Show Live View to get back to a run from anywhere.
+- **SplatWork for Linux:** the Linux app (formerly SplatWork Node) now has the Mac's layout and wording, and keeps
+  training jobs' saved state when it is stopped.
+- **New look:** the hex mesh logo on every app, the website and the docs.
 
 ### Projects and resuming
 - **Projects list** in the sidebar replaces Recent: every project you've worked on, including ones made with New
@@ -16,7 +31,17 @@ SplatWork for Linux (Linux) is published to its Flatpak repository on every chan
   that was running. *Try Again* after a failure continues where it failed.
 - **Training resume**: this Mac checkpoints every 10 minutes and on Stop; block runs keep every finished block and
   reuse it.
-- **Choose the processing device** in New Project and when resuming, separately from the training devices.
+- **Choose the processing device** in New Project (Cameras & masks page) and when resuming, separately from the
+  training devices; the training devices you tick are remembered.
+
+### Photo locations and drone footage
+- Imported photos keep only their location (GPS, and a drone's height above take-off), on the Mac and on Linux,
+  under a new **Use photo locations** switch; off strips locations from the project's photos.
+- Drone footage (camera maker, DJI flight / gimbal tags, DJI file names) gets **Aerial settings**: learned camera
+  solving with GPS checks, the sky as a learned skybox, the High quality preset.
+- The Maximum preset stores photos at its 2400 px training resolution.
+- Sky masking is on for video, photos and 360° whichever way the project is started, and is skipped with a note
+  (not a failed run) when no sky model is available.
 
 ### Training on several devices
 - A failed block waits for **Retry** (on any device) or **Leave This Block Out** instead of failing the whole run.
@@ -34,19 +59,31 @@ SplatWork for Linux (Linux) is published to its Flatpak repository on every chan
 - **Fisheye footage**: solved with a fisheye lens model, with masks warped along.
 - Camera solving drops cameras placed far off the camera path.
 
-### SplatWork for Linux 1.4
+### SplatWork for Linux 1.4–1.5
 - The Linux app is now a full studio: viewer, New Project, editing (including Auto clean and the mask editor),
   export, turntable videos, iPhone Inbox, compute devices and block-parallel training across machines, all next to
   the worker server.
-- Worker jobs can be paused (state saved, GPU freed) and checkpointed.
+- Renamed from SplatWork Node to SplatWork; sidebar, start page and New Project follow the Mac's.
+- Worker jobs can be paused (state saved, GPU freed) and checkpointed; stopping the worker pauses running training
+  jobs instead of discarding their state.
+- Multi-device runs follow a device that changes address and retry a block here after 30 minutes unreachable.
 - The setup screen shows the exact command to install a missing NVIDIA driver extension.
+
+### Fixes
+- About 30 issues from an independent review of this release's new code, among them: masks from an earlier run
+  baked into reused frames; two preparations running in one folder after Stop; Stop not reaching a block
+  training on the Mac; a failed block holding up its device's other blocks; resumed runs on the wrong devices or
+  from step 0; the Linux mask editor not showing why a job failed.
 
 ### Security
 - Mac worker requests need an access token; Bonjour-advertised addresses are only trusted once the worker confirms
   them; dataset paths can't escape their folder; benchmark runs are isolated.
 
 ### Changes
+- Licensed under Apache 2.0; public documentation, website and project files.
 - The repository moved to `Benevision/SplatWork`.
+- Local Mac builds are signed with a development identity when there is one, so the Keychain stops asking again
+  after every update.
 - iPhones no longer act as training workers for other devices; SplatWork Capture still processes and trains its own
   scans.
 

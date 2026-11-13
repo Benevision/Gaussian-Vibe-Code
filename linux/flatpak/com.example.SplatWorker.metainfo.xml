@@ -81,6 +81,17 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.5.0" date="2026-11-13">
+      <description>
+        <p>SplatWork Node is now simply SplatWork, with the same layout and wording as the Mac app: sidebar, start page (with a Drone / aerial tile) and New Project. New hex mesh icon.</p>
+        <ul>
+          <li>Imported photos keep their GPS location (only that), so camera solving can check the cameras against it and put the scene in metres.</li>
+          <li>Stopping the app or the service pauses running training jobs, keeping their saved state, instead of discarding it.</li>
+          <li>Multi-device runs follow a device that changes address, and retry a block here after 30 minutes without an answer.</li>
+          <li>This PC's processing outputs are no longer visible to other computers; the mask editor shows why a job failed.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.4.4" date="2026-11-09">
       <description>
         <p>Undistorted camera solves (fisheye, wide-angle) now undistort the masks too, so moving-object and fixed-part masks still line up with the photos they mask.</p>
