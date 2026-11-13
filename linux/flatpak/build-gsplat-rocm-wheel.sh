@@ -52,7 +52,8 @@ n1 = len(re.findall(r"__version__ \+= f\"\+\{git_rev\}\"", s))
 s = re.sub(r"__version__ \+= f\"\+\{git_rev\}\"", "__version__ += \"+\" + os.environ[\"GSPLAT_LOCAL_TAG\"]", s)
 n2 = s.count("f\"--offload-arch={gpu_arch}\"")
 s = s.replace("f\"--offload-arch={gpu_arch}\"",
-              "*[f\"--offload-arch={a}\" for a in os.environ.get(\"PYTORCH_ROCM_ARCH\", gpu_arch).split(\";\") if a]")
+              "*[f\"--offload-arch={a}\" for a in os.environ.get(\"PYTORCH_ROCM_ARCH\", gpu_arch).split(\";\") if a], "
+              "*os.environ.get(\"GSPLAT_HIP_EXTRA_FLAGS\", \"\").split()")
 assert n1 == 1 and n2 >= 1, f"setup.py changed upstream: version hooks {n1}, offload-arch {n2}"
 if "\nimport os" not in s and not s.startswith("import os"):
     s = "import os\n" + s
@@ -60,7 +61,10 @@ open(p, "w").write(s)
 print("patched setup.py: version tag + offload archs", os.environ.get("PYTORCH_ROCM_ARCH"))
 PY
   grep -n "offload-arch\|GSPLAT_LOCAL_TAG" setup.py
-  GSPLAT_LOCAL_TAG="$TAG" PYTORCH_ROCM_ARCH="$ARCH" python3 -m pip wheel --no-deps --no-build-isolation -w /out .
+  # The port assumes 64-wide wavefronts (Instinct / CDNA). Radeon (RDNA) runs wave32 by default and fails to
+  # compile its 64-thread tiles, so the Radeon targets are built in wave64 mode.
+  EXTRA=""; case "$ARCH" in *gfx1*) EXTRA="-mwavefrontsize64" ;; esac
+  GSPLAT_HIP_EXTRA_FLAGS="$EXTRA" GSPLAT_LOCAL_TAG="$TAG" PYTORCH_ROCM_ARCH="$ARCH" python3 -m pip wheel --no-deps --no-build-isolation -w /out .
   ls -la /out
 '
 ls -la "$OUT"
