@@ -1,0 +1,26 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// One (tile, splat) instance per tile a splat's rectangle covers, written in depth order so a stable
+// sort by tile key keeps each tile's list front to back (Mac: duplicate_keys).
+#include "common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer ValBuf { uint sortVals[]; };
+layout(std430, binding = 2) readonly buffer OffBuf { uint offsets[]; };
+layout(std430, binding = 3) readonly buffer RectBuf { uvec4 rects[]; };
+layout(std430, binding = 4) writeonly buffer TKeyBuf { uint tileKeys[]; };
+layout(std430, binding = 5) writeonly buffer TValBuf { uint tileVals[]; };
+layout(push_constant) uniform PC { uint n; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.n) return;
+    uint g = sortVals[i];
+    uvec4 r = rects[g];
+    uint off = offsets[i];
+    for (uint y = r.y; y < r.w; y++)
+        for (uint x = r.x; x < r.z; x++) {
+            tileKeys[off] = y * F.tilesX + x;
+            tileVals[off] = g;
+            off++;
+        }
+}

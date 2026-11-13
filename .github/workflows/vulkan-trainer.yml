@@ -1,0 +1,41 @@
+# Vulkan trainer (linux/vktrain): build it and run its kernel self-test (CPU reference + finite-difference
+# gradient checks) on Mesa lavapipe, software Vulkan, so no GPU is needed. Separate from the Flatpak workflow:
+# a failure here never blocks a build or release.
+name: Vulkan trainer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - linux/vktrain/**
+      - linux/tests/test_vktrain.py
+      - .github/workflows/vulkan-trainer.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vulkan-trainer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the test image (Debian trixie, lavapipe)
+        run: docker build -t splat-vk-test -f linux/vktrain/ci/Dockerfile linux/vktrain/ci
+      - name: Build
+        run: >
+          docker run --rm -v "$PWD":/w -w /w/linux/vktrain splat-vk-test
+          sh -c 'cmake -S . -B build -G Ninja && cmake --build build'
+      - name: Device
+        run: docker run --rm -v "$PWD":/w -w /w/linux/vktrain splat-vk-test ./build/splatwork-vk-train --info
+      - name: Self-test (every float-atomic path the driver gets right)
+        run: docker run --rm -v "$PWD":/w -w /w/linux/vktrain splat-vk-test ./build/vktrain-selftest
+      - name: Dump round trip (Vulkan image vs the double-precision CPU reference)
+        run: >
+          docker run --rm -v "$PWD":/w -w /w/linux/vktrain splat-vk-test
+          python3 compare_gsplat.py all --dir /tmp/cmp --vk-train ./build/splatwork-vk-train --no-gsplat

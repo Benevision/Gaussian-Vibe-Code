@@ -1,0 +1,13 @@
+#version 460
+// [start, end) of each tile's run in the sorted tile keys (ranges zero-filled beforehand).
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer TKeyBuf { uint tileKeys[]; };
+layout(std430, binding = 1) buffer RangeBuf { uint ranges[]; };
+layout(push_constant) uniform PC { uint m; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.m) return;
+    uint t = tileKeys[i];
+    if (i == 0u || tileKeys[i - 1u] != t) ranges[t * 2u] = i;
+    if (i == pc.m - 1u || tileKeys[i + 1u] != t) ranges[t * 2u + 1u] = i + 1u;
+}

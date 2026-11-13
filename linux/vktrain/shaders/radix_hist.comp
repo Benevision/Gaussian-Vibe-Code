@@ -1,0 +1,24 @@
+#version 460
+// LSD radix sort, pass 1 of 3: per-workgroup histogram of one 8-bit digit.
+// Each workgroup owns 256 × RADIX_CHUNKS consecutive keys. Output is digit-major
+// (hist[digit * numBlocks + block]) so one exclusive scan of the whole array gives every block's
+// scatter base for every digit (stable across blocks). Shared-memory atomics only: no subgroup assumptions.
+#define RADIX_CHUNKS 8
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer KeyBuf { uint keys[]; };
+layout(std430, binding = 1) writeonly buffer HistBuf { uint hist[]; };
+layout(push_constant) uniform PC { uint n; uint shift; uint numBlocks; } pc;
+shared uint h[256];
+void main() {
+    uint lid = gl_LocalInvocationID.x, b = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (b >= pc.numBlocks) return;   // whole workgroup: spare groups of a 2D-folded dispatch
+    h[lid] = 0u;
+    barrier();
+    uint base = b * 256u * RADIX_CHUNKS;
+    for (uint c = 0u; c < RADIX_CHUNKS; c++) {
+        uint idx = base + c * 256u + lid;
+        if (idx < pc.n) atomicAdd(h[(keys[idx] >> pc.shift) & 255u], 1u);
+    }
+    barrier();
+    hist[lid * pc.numBlocks + b] = h[lid];
+}

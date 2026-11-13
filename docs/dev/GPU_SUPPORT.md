@@ -193,6 +193,23 @@ carries on as the experimental `rocm6.4-train` runtime. The Mac trainer is not c
 - On the RTX 4080: the same kernels and a full training run compared with gsplat / CUDA (PSNR on the reference
   eval, speed). On the RX 6700 XT (SteamOS, Mesa RADV): the same steps through the Flatpak.
 
+### Stage 1 status (kernels, `linux/vktrain`)
+
+- `splatwork-vk-train` (for now `--info` and `--dump`) and `vktrain-selftest`, CMake + C++17, GLSL kernels in
+  `linux/vktrain/shaders`: projection, LSD radix sort and scan, tile binning, rasterisation forward / backward,
+  L1 + SSIM loss, Adam. Stage-2 features (normals, appearance, bilateral grid, sky, transient weights, MCMC noise,
+  compact optimizer, regularisers, densification statistics beyond `absGrad`) are not ported yet.
+- The self-test checks every kernel against a double-precision CPU reference and finite differences on random
+  scenes; all checks pass on lavapipe. Not yet run on real GPUs: on the RTX 4080 run `vktrain-selftest` and
+  `compare_gsplat.py` (commands in its docstring).
+- Native float atomics are probed at start-up: Mesa lavapipe 25.0 (aarch64) advertises
+  `shaderBufferFloat32AtomicAdd` but loses updates across workgroups, so the trainer falls back to the CAS kernels
+  there (and on any driver whose probe fails).
+- Deliberate differences from the Mac kernels: the projection backward adds the view-dependent SH term
+  (d colour / d direction → position), which gsplat has and the Mac kernel leaves out. Kept as on the Mac (and
+  gsplat): the EWA Jacobian's derivative where x/z or y/z is clamped is the usual approximation, not the exact
+  derivative; the 0.99 alpha clamp has no gradient.
+
 ### Stages (each checked in with the user)
 
 1. Kernels: projection, sort, tile binning, rasterisation forward / backward, L1 + SSIM loss, Adam — with gradient

@@ -1,0 +1,42 @@
+#version 460
+// LSD radix sort, pass 3 of 3: stable scatter of one 8-bit digit. hist holds the exclusive scan of the
+// digit-major histogram (radix_hist). Within a chunk of 256 keys each key's rank among equal digits is
+// counted in shared memory (independent of the subgroup width); chunks are processed in order, so the
+// sort is stable.
+#define RADIX_CHUNKS 8
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer KeyIn { uint keysIn[]; };
+layout(std430, binding = 1) readonly buffer ValIn { uint valsIn[]; };
+layout(std430, binding = 2) writeonly buffer KeyOut { uint keysOut[]; };
+layout(std430, binding = 3) writeonly buffer ValOut { uint valsOut[]; };
+layout(std430, binding = 4) readonly buffer HistBuf { uint hist[]; };
+layout(push_constant) uniform PC { uint n; uint shift; uint numBlocks; } pc;
+shared uint digits[256];
+shared uint runBase[256];
+shared uint chunkCount[256];
+void main() {
+    uint lid = gl_LocalInvocationID.x, b = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (b >= pc.numBlocks) return;   // whole workgroup: spare groups of a 2D-folded dispatch
+    runBase[lid] = hist[lid * pc.numBlocks + b];
+    uint base = b * 256u * RADIX_CHUNKS;
+    for (uint c = 0u; c < RADIX_CHUNKS; c++) {
+        uint idx = base + c * 256u + lid;
+        bool valid = idx < pc.n;
+        uint k = valid ? keysIn[idx] : 0u;
+        uint d = valid ? (k >> pc.shift) & 255u : 256u;
+        digits[lid] = d;
+        chunkCount[lid] = 0u;
+        barrier();
+        if (valid) {
+            uint r = 0u;
+            for (uint j = 0u; j < lid; j++) r += digits[j] == d ? 1u : 0u;
+            uint dst = runBase[d] + r;
+            keysOut[dst] = k;
+            valsOut[dst] = valsIn[idx];
+            atomicAdd(chunkCount[d], 1u);
+        }
+        barrier();
+        runBase[lid] += chunkCount[lid];
+        barrier();
+    }
+}

@@ -1,0 +1,13 @@
+#version 460
+// counts[i] = tiles touched by the i-th splat in depth order; counts[n] = 0 so the exclusive scan of
+// n + 1 values leaves the total number of tile instances in counts[n].
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer ValBuf { uint sortVals[]; };
+layout(std430, binding = 1) readonly buffer TouchBuf { uint tilesTouched[]; };
+layout(std430, binding = 2) writeonly buffer CountBuf { uint counts[]; };
+layout(push_constant) uniform PC { uint n; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i < pc.n) counts[i] = tilesTouched[sortVals[i]];
+    else if (i == pc.n) counts[i] = 0u;
+}
