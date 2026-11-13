@@ -6,6 +6,12 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
 
 ## Unreleased
 
+- **SplatWork for Linux 1.6.0 — AMD and Intel graphics cards:** the app now recognises AMD Radeon / Instinct and
+  Intel Arc cards (name, video memory, load), shows them on the Status page and to the Mac, and explains that
+  training still needs an NVIDIA GPU instead of saying "no GPU found". On those cards it offers a processing runtime
+  with PyTorch for ROCm (AMD) or for Intel GPUs, so feature matching and masks can use the GPU. Not yet tested on
+  real AMD or Intel hardware; training on AMD / Intel is not available (options and plan in
+  `docs/dev/GPU_SUPPORT.md`).
 - **Whole pipeline on one worker:** when a project's processing and training both go to the same SplatWork for
   Linux worker (1.6.0 or later), the Mac uploads the video (or the photos it imported) and every setting once, and
   the worker runs frames, masks, sky, camera solving, levelling and training by itself — the Mac can sleep, go

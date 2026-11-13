@@ -27,7 +27,7 @@ finish-args:
   - --share=ipc               # X11 shared memory (fallback-x11)
   - --socket=wayland
   - --socket=fallback-x11
-  - --device=all              # /dev/nvidia*, /dev/nvidia-uvm, /dev/nvidiactl for CUDA
+  - --device=all              # /dev/nvidia* for CUDA; /dev/kfd + /dev/dri for AMD ROCm and Intel GPUs
   - --talk-name=org.freedesktop.Avahi   # see README "Network behaviour" (zeroconf does the mDNS itself)
   - --filesystem=xdg-download # exporting results (the file chooser portal covers other folders)
   - --filesystem=xdg-documents/SplatWork:create   # projects (same layout as the Mac's ~/Documents/Splat Studio; copy either way)

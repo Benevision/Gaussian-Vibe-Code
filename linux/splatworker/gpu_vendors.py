@@ -122,10 +122,15 @@ def pci_names(paths: Iterable[str] = PCI_IDS_PATHS) -> Dict:
 
 
 def _marketing_name(raw: str) -> str:
-    """"Navi 31 [Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M]" → "Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M";
-    "DG2 [Arc A770]" → "Arc A770"."""
+    """"DG2 [Arc A770]" → "Arc A770". One PCI id often covers several cards ("Navi 31 [Radeon RX 7900 XT/7900
+    XTX/7900 GRE/7900M]"): then the family, "Radeon RX 7900 series"."""
     m = re.search(r"\[(.+)\]", raw)
-    return m.group(1) if m else raw
+    name = m.group(1) if m else raw
+    if "/" in name:
+        first = name.split("/")[0]
+        fam = re.match(r"(.*?\b[A-Z]*\d{3,4})", first)
+        name = f"{fam.group(1)} series" if fam else first
+    return name
 
 
 def adapter_name(vendor: str, vendor_id: int, device_id: int, product: Optional[str] = None,

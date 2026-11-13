@@ -137,7 +137,7 @@ GPU_PROFILES: List[GpuProfile] = [  # newest first
 class ProcessingGpuProfile:
     """PyTorch for an AMD (ROCm) or Intel (XPU) GPU: dataset processing (matching, masks) runs on the GPU;
     no gsplat exists for these, so the runtime can't train (docs/dev/GPU_SUPPORT.md)."""
-    id: str                      # "rocm6.3" — also the download.pytorch.org sub-index
+    id: str                      # "rocm6.4" — also the download.pytorch.org sub-index
     label: str
     vendor: str                  # "amd" | "intel"
     torch: str
@@ -150,10 +150,11 @@ class ProcessingGpuProfile:
         return PYTORCH_INDEX + self.id
 
 
-# PyTorch's own builds (download.pytorch.org/whl/rocm6.3 and /xpu), same torch as the CUDA 12.8 profile. Untested
+# PyTorch's own builds (download.pytorch.org/whl/rocm6.4 and /xpu). ROCm 6.4 rather than 6.3 because it is the
+# first with Radeon RX 9000 (RDNA 4, gfx1200 / gfx1201) kernels; PyTorch 2.8 is the oldest build for it. Untested
 # on real AMD / Intel hardware: the project's test PC is NVIDIA-only.
 PROCESSING_GPU_PROFILES: List[ProcessingGpuProfile] = [
-    ProcessingGpuProfile("rocm6.3", "PyTorch 2.7 for ROCm 6.3 (AMD) · processing only", "amd", "2.7.1", "0.22.1",
+    ProcessingGpuProfile("rocm6.4", "PyTorch 2.8 for ROCm 6.4 (AMD) · processing only", "amd", "2.8.0", "0.23.0",
                          download_mb=4700, disk_mb=14000),
     ProcessingGpuProfile("xpu", "PyTorch 2.7 for Intel GPUs (XPU) · processing only", "intel", "2.7.1", "0.22.1",
                          download_mb=2000, disk_mb=5500),
@@ -256,9 +257,9 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
         if proc is not None:
             warnings = []
             if proc.vendor == "amd":
-                warnings.append("PyTorch for ROCm officially supports Radeon RX 7000 / Pro W7000 cards and AMD "
-                                "Instinct accelerators; other Radeon cards may not be used and processing then "
-                                "runs on the CPU. It is a large download (about "
+                warnings.append("PyTorch for ROCm supports Radeon RX 9000 and most RX 7000 / Pro W7000 cards and "
+                                "AMD Instinct accelerators; older Radeon cards may not be used, and processing then "
+                                "runs on the CPU. With the processing models, PyTorch for ROCm is a large download (about "
                                 f"{proc.download_mb / 1000:.1f} GB).")
             else:
                 warnings.append("PyTorch for Intel GPUs needs a recent kernel (6.8 or newer) with the i915 or xe "

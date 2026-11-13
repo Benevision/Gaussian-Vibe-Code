@@ -8,7 +8,7 @@ Where SplatWork stands, what is tested and how, what is known to be missing, and
 | Component | Version | Where the version lives | Shipped as |
 |---|---|---|---|
 | SplatWork (Mac) | 1.2.0 | the release tag (`SPLAT_VERSION` in `mac/scripts/build_app.sh`); build number = commit count | `.dmg` on the GitHub release; a rolling `dev` pre-release from `main` |
-| SplatWork for Linux | 1.5.0 | `linux/splatworker/__init__.py`, `linux/pyproject.toml`, `<release>` in `linux/flatpak/com.example.SplatWorker.metainfo.xml` | Flatpak repository on GitHub Pages (every push to `main`), `.flatpak` bundle on the release |
+| SplatWork for Linux | 1.6.0 (unreleased; 1.5.0 in the 1.2.0 release) | `linux/splatworker/__init__.py`, `linux/pyproject.toml`, `<release>` in `linux/flatpak/com.example.SplatWorker.metainfo.xml` | Flatpak repository on GitHub Pages (every push to `main`), `.flatpak` bundle on the release |
 | SplatWork Capture (iPhone) | 1.2 (build 2) | `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` in `ios/project.yml` | build from source (not on the App Store / TestFlight) |
 | splatprep | 0.1.0 | `tools/pyproject.toml` | inside the Mac app and the Linux Flatpak |
 
@@ -45,7 +45,8 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 
 ## Next work
 
-1. **AMD and Intel GPUs in SplatWork for Linux** — see [GPU_SUPPORT.md](GPU_SUPPORT.md).
+1. **AMD and Intel GPUs in SplatWork for Linux** — detection, setup wording and ROCm / XPU processing runtimes are in
+   1.6.0 (untested on real AMD / Intel hardware); training needs a decision on the path: see [GPU_SUPPORT.md](GPU_SUPPORT.md).
 2. **Linux parity with this release's Mac features:** the Projects list with stage checkpoints and resume, drone
    mode and the photo-location switch, Show Live View, block Retry / Leave Out / Pause.
 3. **A Windows app** with the Mac and Linux feature set.

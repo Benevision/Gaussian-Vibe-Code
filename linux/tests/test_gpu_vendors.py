@@ -73,7 +73,7 @@ def test_scan_amd_intel_nvidia(tmp_path, names):
     found = V.scan(sys_root, names)
     assert [a.vendor for a in found] == ["amd", "intel", "intel", "nvidia"]
     amd, arc, iris, nv = found
-    assert amd.name == "AMD Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M" and amd.driver == "amdgpu"
+    assert amd.name == "AMD Radeon RX 7900 series" and amd.driver == "amdgpu"
     assert (amd.memory_mb, amd.memory_used_mb, amd.busy_pct, amd.temperature_c) == (24576, 2048, 37, 55)
     assert not amd.integrated and amd.to_info()["freeMemoryMB"] == 22528
     assert arc.name == "Intel Arc A770" and arc.memory_mb == 16384 and not arc.integrated
@@ -113,18 +113,18 @@ def test_amd_setup_offers_rocm_processing(tmp_path, names):
     d = info_for(tmp_path, names, lambda s: amd_card(s))
     assert not d.has_gpu and d.kfd and d.other_gpu.vendor == "amd"
     title, text = d.problem()
-    assert title == "AMD Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M found"
+    assert title == "AMD Radeon RX 7900 series found"
     assert "needs an NVIDIA graphics card" in text and "ROCm" in text and "Flatpak driver" not in text
     c = choose_profile(d)
-    assert c.profile_id == "rocm6.3" and not c.can_train and "dataset processing uses the GPU" in c.summary
+    assert c.profile_id == "rocm6.4" and not c.can_train and "dataset processing uses the GPU" in c.summary
     assert c.blocking == text and any("ROCm" in w for w in c.warnings)
     plan = build_plan(c, _paths(tmp_path), with_splatprep=True, with_lightglue=True, splatprep_dir=tmp_path)
     ids = [s.id for s in plan.steps]
     assert "gsplat" not in ids and ids.index("torch") < ids.index("torchvision") and not plan.can_train
     torch_step = next(s for s in plan.steps if s.id == "torch")
-    assert "torch==2.7.1" in torch_step.argv and "https://download.pytorch.org/whl/rocm6.3" in torch_step.argv
+    assert "torch==2.8.0" in torch_step.argv and "https://download.pytorch.org/whl/rocm6.4" in torch_step.argv
     lg = next(s for s in plan.steps if s.id == "processing").argv
-    assert "torch==2.7.1" in lg and "torchvision==0.22.1" in lg
+    assert "torch==2.8.0" in lg and "torchvision==0.23.0" in lg
     # without the processing models there is no reason to download PyTorch at all
     small = build_plan(c, _paths(tmp_path), with_splatprep=True, with_lightglue=False, splatprep_dir=tmp_path)
     assert "torch" not in [s.id for s in small.steps]
@@ -161,7 +161,7 @@ def test_nvidia_behaviour_unchanged(tmp_path, names):
 
 
 def test_manual_processing_profile_and_ids(tmp_path, names):
-    assert {"rocm6.3", "xpu"} <= set(PROFILE_IDS)
+    assert {"rocm6.4", "xpu"} <= set(PROFILE_IDS)
     c = choose_profile(DriverInfo(), override="xpu")
     assert c.profile_id == "xpu" and not c.can_train and "CPU" in c.warnings[0]
 
@@ -170,7 +170,7 @@ def test_verify_processing_runtime(tmp_path, names):
     d = info_for(tmp_path, names, lambda s: amd_card(s))
     plan = build_plan(choose_profile(d), _paths(tmp_path), with_splatprep=True, with_lightglue=True,
                       splatprep_dir=tmp_path)
-    ok = {"splatworker": True, "splatprep": True, "lightglue": True, "torch": "2.7.1+rocm6.3",
+    ok = {"splatworker": True, "splatprep": True, "lightglue": True, "torch": "2.8.0+rocm6.4",
           "cudaAvailable": False, "torchvisionImports": True}
     assert verify_problems(ok, plan) == []          # GPU not visible: processing falls back to the CPU
     assert verify_problems({**ok, "torch": None}, plan) == ["PyTorch could not be imported."]

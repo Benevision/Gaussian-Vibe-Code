@@ -81,6 +81,16 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.6.0" date="2026-11-13">
+      <description>
+        <p>AMD and Intel graphics cards are recognised, and a whole project can run on this computer as one job.</p>
+        <ul>
+          <li>AMD Radeon / Instinct and Intel Arc cards are detected with their video memory, load and temperature; the setup explains that training still needs an NVIDIA GPU.</li>
+          <li>On those cards the setup offers a processing runtime with PyTorch for ROCm (AMD) or Intel GPUs, so feature matching and masks can use the GPU. Not yet tested on real AMD or Intel hardware.</li>
+          <li>When the Mac sends both the processing and the training of a project here, this computer runs the whole pipeline by itself; the Mac can sleep or go offline meanwhile.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.0" date="2026-11-13">
       <description>
         <p>SplatWork Node is now simply SplatWork, with the same layout and wording as the Mac app: sidebar, start page (with a Drone / aerial tile) and New Project. New hex mesh icon.</p>
