@@ -38,6 +38,7 @@ jobs:
         with:
           path: wheels-win
           key: ${{ steps.pin.outputs.key }}
+          enableCrossOsArchive: true   # restored on Linux by the Pages job
       - name: Use a wheel attached to a GitHub Release
         id: release
         if: steps.cache.outputs.cache-hit != 'true'

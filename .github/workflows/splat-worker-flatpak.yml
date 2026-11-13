@@ -231,6 +231,17 @@ jobs:
         with:
           name: gsplat-wheels
           path: site/wheels
+      # SplatWork for Windows' gsplat 1.6 wheel (gsplat-windows-wheel.yml), cached per pin; missing until built
+      - name: Windows wheel cache key
+        id: winpin
+        run: echo "key=gsplat-win-$(sha256sum linux/flatpak/gsplat-pin.env | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: wheels-win
+          key: ${{ steps.winpin.outputs.key }}
+          enableCrossOsArchive: true
+      - name: Add the Windows wheel
+        run: cp wheels-win/gsplat-*win_amd64.whl site/wheels/ 2>/dev/null && ls site/wheels || echo "no Windows gsplat wheel cached for this pin yet"
       - name: Wheel index (pip --find-links)
         run: |
           cd site/wheels

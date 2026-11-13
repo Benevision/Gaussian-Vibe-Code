@@ -155,3 +155,18 @@ def test_windows_python_runtime_and_profiles(monkeypatch):
     assert "x86_64-pc-windows-msvc" in rt.url and len(rt.sha256) == 64 and rt.version == RP.PYTHON_RUNTIME.version
     monkeypatch.setattr(RP.sys, "platform", "win32")
     assert "cu128" in RP.unpublished_profiles(opener=lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+
+
+def test_own_gsplat_wheel_must_match_this_platform(monkeypatch):
+    import io
+
+    from splatworker.gui import runtime_plan as RP
+
+    prof = RP.profile_by_id("cu128")
+    page = "<a href='gsplat-1.6.0%2Bpt27cu128-cp310-cp310-linux_x86_64.whl'>"
+    opener = lambda *a, **k: io.BytesIO(page.encode())   # noqa: E731
+    monkeypatch.setattr(RP, "WHEEL_PLATFORM", "win_amd64")
+    assert RP.gsplat_wheel_published(prof, opener) is False          # Linux wheel only: not for Windows
+    page += "<a href='gsplat-1.6.0+pt27cu128-cp310-cp310-win_amd64.whl'>"
+    assert RP.gsplat_wheel_published(prof, opener) is True
+    assert "cu128" not in RP.LINUX_ONLY_PROFILES

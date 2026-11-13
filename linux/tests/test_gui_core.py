@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from splatworker.gui import runtime_plan as RP
+
 from splatworker.cli import build_parser
 from splatworker.gui import autostart, formatting, qr
 from splatworker.gui.nvidia import (DriverInfo, GpuInfo, GpuMonitor, detect, flatpak_gl_extension_name,
@@ -501,7 +503,7 @@ def test_gsplat_wheel_published():
         return op
 
     p = profile_by_id("cu128")
-    assert gsplat_wheel_published(p, opener_with("<a href='gsplat-1.6.0%2Bpt27cu128-cp310-cp310-linux_x86_64.whl'>")) is True
+    assert gsplat_wheel_published(p, opener_with(f"<a href='gsplat-1.6.0%2Bpt27cu128-cp310-cp310-{RP.WHEEL_PLATFORM}.whl'>")) is True
     assert gsplat_wheel_published(p, opener_with("<html>nothing</html>")) is False
 
     def offline(url, timeout=None):
@@ -521,7 +523,7 @@ def test_local_gsplat_wheel_is_preferred(tmp_path):
     p = profile_by_id("cu128")
     assert unpublished_profiles(offline, local_dir=paths.local_wheels_dir) == ["cu128"]
     paths.local_wheels_dir.mkdir(parents=True)
-    (paths.local_wheels_dir / "gsplat-1.6.0+pt27cu128-cp310-cp310-linux_x86_64.whl").write_bytes(b"x")
+    (paths.local_wheels_dir / f"gsplat-1.6.0+pt27cu128-cp310-cp310-{RP.WHEEL_PLATFORM}.whl").write_bytes(b"x")
     assert gsplat_wheel_published(p, offline, local_dir=paths.local_wheels_dir) is True
     assert unpublished_profiles(offline, local_dir=paths.local_wheels_dir) == []
     g = [s for s in build_plan("cu128", paths).steps if s.id == "gsplat"][0].argv

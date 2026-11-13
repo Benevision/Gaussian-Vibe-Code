@@ -26,6 +26,7 @@ prebuilt gsplat wheels appear.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -61,8 +62,10 @@ PYTHON_RUNTIME_WINDOWS = PythonRuntime(
     sha256="cb023e83e42d8937ba77c7cf83641083c3b81e88e1226e1c694a347ae1924d54",
     size_bytes=39573204,
 )
-# Profiles with no Windows wheels yet: cu128's gsplat 1.6 is built by our CI for Linux only.
-LINUX_ONLY_PROFILES = ("cu128",)
+# Profiles with no Windows wheels: none — cu128's gsplat 1.6 is built for Windows too (gsplat-windows-wheel.yml).
+LINUX_ONLY_PROFILES: Tuple[str, ...] = ()
+# Platform tag of our own gsplat wheels on this OS (the wheel page lists Linux and Windows files side by side)
+WHEEL_PLATFORM = "win_amd64" if sys.platform == "win32" else "linux_x86_64"
 
 
 def python_runtime(windows: Optional[bool] = None) -> PythonRuntime:
@@ -208,7 +211,7 @@ def local_gsplat_wheel(prof: GpuProfile, local_dir: Optional[Path]) -> Optional[
     """A wheel for this profile built on this PC (build-gsplat-wheel.sh), if any."""
     if local_dir is None or not Path(local_dir).is_dir():
         return None
-    hits = sorted(Path(local_dir).glob(f"gsplat-{prof.gsplat}+{prof.gsplat_index}-*.whl"))
+    hits = sorted(Path(local_dir).glob(f"gsplat-{prof.gsplat}+{prof.gsplat_index}-*{WHEEL_PLATFORM}.whl"))
     return hits[-1] if hits else None
 
 
@@ -229,7 +232,8 @@ def gsplat_wheel_published(prof: GpuProfile, opener: Callable[..., Any] = None, 
     except Exception:
         return None
     want = f"gsplat-{prof.gsplat}+{prof.gsplat_index}"
-    return want in page or want.replace("+", "%2B") in page
+    names = re.findall(r"gsplat-[^\"<>\s]+\.whl", page.replace("%2B", "+"))
+    return any(n.startswith(want) and n.endswith(f"{WHEEL_PLATFORM}.whl") for n in names)
 
 
 def rocm_gsplat_published(prof: "ProcessingGpuProfile", opener: Callable[..., Any] = None,
