@@ -40,6 +40,7 @@ struct TrainOptions {
     ContextOptions ctx;
     bool opacityReset = false;    // adaptive strategy: textbook opacity reset (gsplat 1.5's never fires, see trainer.cpp)
     int64_t pauseAt = -1;         // tests: pause before this step, as if "pause" had arrived
+    std::string dumpEval;         // debugging: write the final holdout renders and targets as PPM files here
     int64_t traceEvery = 0;       // tests: {"type": "trace", step, loss, psnr, numGaussians} every N steps
     std::string resumePath() const;   // where a pause saves the state
 };

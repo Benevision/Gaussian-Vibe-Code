@@ -1,4 +1,4 @@
-// vktrain-selftest: checks every stage-1 kernel of the Vulkan trainer against a double-precision CPU reference
+// vktrain-selftest: checks every kernel (stage 1 and the stage-2 training kernels and host strategies) of the Vulkan trainer against a double-precision CPU reference
 // (forward) and against central finite differences of that reference (gradients), on small random scenes,
 // with each float-atomic path the device supports. Prints a table; exits non-zero on any failure.
 //
@@ -15,6 +15,7 @@
 
 #include "cpu_ref.h"
 #include "gpu_splat.h"
+#include "strategy.h"
 
 using namespace vkt;
 
@@ -595,6 +596,266 @@ void testFit(GpuSplat& gs, int steps) {
     addRow("training (adam fit)", "final / initial loss", std::to_string(steps) + " steps", last / first, 0.6);
 }
 
+// ------------------------------------------------------------------ stage 2: loss variants and training kernels
+
+// Valid-window SSIM (fused-ssim padding="valid") and soft loss masks (target := m·photo + (1 − m)·render, the
+// render held constant): GPU loss and dL/dimage against the double-precision reference and its finite
+// differences in image space.
+void testLossVariants(Context& ctx, GpuSplat& gs) {
+    Rng r(23);
+    const int w = 40, h = 30;
+    const double eye[3] = {0, 0, -4}, origin[3] = {0, 0, 0};
+    Camera cam = lookAt(eye, origin, 0.0, 40, 40, 20, 15, w, h);
+    Params P = randomScene(r, 20, eye, 0);
+    gs.setParams(P);
+    RenderOpts opt;
+    opt.ssimValid = true;
+    opt.ssimWeight = 0.3f;
+    gs.setCamera(cam, opt);
+    size_t hw = size_t(w) * h;
+    std::vector<float> img(4 * hw, 0.0f);
+    for (size_t i = 0; i < 3 * hw; i++) img[i] = float(r.uni(-0.05, 1.05));   // a few values outside [0, 1]
+    std::vector<uint32_t> tgt(hw);
+    std::vector<double> tP(3 * hw), x(3 * hw), m(hw);
+    for (size_t p = 0; p < hw; p++) {
+        uint32_t px = 0;
+        for (int c = 0; c < 3; c++) px |= uint32_t(r.below(256)) << (8 * c);
+        int mm = r.below(4) == 0 ? r.below(256) : 255;   // a quarter of the pixels partly or fully masked
+        px |= uint32_t(mm) << 24;
+        tgt[p] = px;
+        m[p] = mm / 255.0;
+        for (int c = 0; c < 3; c++) {
+            x[c * hw + p] = img[c * hw + p];
+            double t = ((px >> (8 * c)) & 255u) / 255.0;
+            tP[c * hw + p] = m[p] * t + (1 - m[p]) * x[c * hw + p];
+        }
+    }
+    ctx.upload(gs.img, img.data(), img.size() * 4);
+    gs.setTarget(tgt);
+    double l1g = 0, ssg = 0;
+    double Lg = gs.loss(&l1g, &ssg);
+    float st0[4];
+    ctx.download(gs.stats, st0, sizeof st0);
+    double l1c = 0, ssc = 0;
+    double Lc = ref::loss(x, tP, w, h, 0.3, &l1c, &ssc, true);
+    addRow("loss (valid SSIM, soft mask)", "loss", "40x30", std::abs(Lg - Lc) / Lc, 1e-4);
+    addRow("loss (valid SSIM, soft mask)", "mean SSIM", "40x30", std::abs(ssg - ssc), 1e-5);
+    auto gimg = gs.read<float>(gs.gradImg, 3 * hw);
+    std::vector<double> ga, fd;
+    for (int s = 0; s < 60; s++) {
+        size_t at = size_t(r.below(int(3 * hw)));
+        if (std::abs(x[at] - tP[at]) < 1e-3) continue;   // |x − y| kink
+        double v = x[at], hstep = 1e-6;
+        x[at] = v + hstep; double lp = ref::loss(x, tP, w, h, 0.3, nullptr, nullptr, true);
+        x[at] = v - hstep; double lm = ref::loss(x, tP, w, h, 0.3, nullptr, nullptr, true);
+        x[at] = v;
+        ga.push_back(gimg[at]);
+        fd.push_back((lp - lm) / (2 * hstep));
+    }
+    addRow("loss (valid SSIM, soft mask)", "dL/dimage", "40x30", relErr(ga, fd, 5e-2), 2e-3);
+    double se = 0;
+    for (size_t i = 0; i < 3 * hw; i++) { double xc = std::clamp(x[i], 0.0, 1.0); se += (xc - tP[i]) * (xc - tP[i]); }
+    float* st = st0;
+    addRow("loss (valid SSIM, soft mask)", "PSNR statistic sum (clamp(x)-y)^2", "40x30", std::abs(st[2] - se) / se, 1e-4);
+}
+
+double regLoss(const ref::ParamsD& P, double wo, double ws, double wf, double wa, double maxRatio) {
+    double L = 0;
+    for (int i = 0; i < P.n; i++) {
+        double o = 1 / (1 + std::exp(-P.g[3][size_t(i)]));
+        L += wo * o;
+        double l[3] = {P.g[1][size_t(i) * 3], P.g[1][size_t(i) * 3 + 1], P.g[1][size_t(i) * 3 + 2]};
+        for (double v : l) L += ws * std::exp(v);
+        double e2[3] = {std::exp(2 * l[0]), std::exp(2 * l[1]), std::exp(2 * l[2])};
+        L += wf * std::min({e2[0], e2[1], e2[2]}) / (e2[0] + e2[1] + e2[2]);
+        double s[3] = {l[0], l[1], l[2]};
+        std::sort(s, s + 3);
+        L += wa * std::max(std::exp(s[2] - s[1]) - maxRatio, 0.0);   // the middle axis is detached: handled by FD below
+    }
+    return L;
+}
+
+void testTrainingKernels(Context& ctx, GpuSplat& gs) {
+    Rng r(31);
+    const int n = 300;
+    Params P;
+    P.resize(n);
+    for (int i = 0; i < n; i++) {
+        for (int k = 0; k < 3; k++) P.pos[size_t(i) * 3 + k] = float(r.uni(-1, 1));
+        for (int k = 0; k < 3; k++) P.logScale[size_t(i) * 3 + k] = float(r.uni(-4, -1));
+        if (i % 3 == 0) P.logScale[size_t(i) * 3 + size_t(r.below(3))] += 3.0f;   // needles beyond the ratio limit
+        for (int k = 0; k < 4; k++) P.quat[size_t(i) * 4 + k] = float(r.uni(-1, 1));
+        P.opLogit[size_t(i)] = float(r.uni(-6, 6));
+    }
+    gs.setParams(P);
+    // ---- regularisers: the GPU gradients against finite differences of the summed penalty
+    {
+        const double wo = 0.01 / n, ws = 0.01 / (3.0 * n), wf = 0.2 / n, wa = 0.1 / n, maxRatio = 10;
+        struct { float wOp, wScale, wFlat, wAniso, maxRatio; uint32_t n; } pc{float(wo), float(ws), float(wf), float(wa), float(maxRatio), n};
+        ctx.begin();
+        ctx.fill(gs.grads[1], 0);
+        ctx.fill(gs.grads[3], 0);
+        ctx.dispatch("reg_grad", {&gs.params[1], &gs.params[3], &gs.grads[1], &gs.grads[3]}, &pc, sizeof pc, (n + 255) / 256);
+        ctx.submitWait();
+        auto gS = gs.read<float>(gs.grads[1], size_t(n) * 3), gO = gs.read<float>(gs.grads[3], size_t(n));
+        ref::ParamsD D = ref::toDouble(P);
+        std::vector<double> ga, fd;
+        for (int i = 0; i < n; i++) {
+            for (int k = 0; k < 4; k++) {
+                int grp = k < 3 ? 1 : 3;
+                size_t at = k < 3 ? size_t(i) * 3 + size_t(k) : size_t(i);
+                double v = D.g[grp][at], hs = 1e-6;
+                // the anisotropy term detaches the middle axis: freeze it by evaluating the FD on the longest axis only
+                double l[3] = {D.g[1][size_t(i) * 3], D.g[1][size_t(i) * 3 + 1], D.g[1][size_t(i) * 3 + 2]};
+                int imax = int(std::max_element(l, l + 3) - l);
+                double s[3] = {l[0], l[1], l[2]};
+                std::sort(s, s + 3);
+                bool anisoActive = std::exp(s[2] - s[1]) > maxRatio;
+                if (grp == 1 && anisoActive && k != imax) continue;   // d/d(middle) differs by design (detached)
+                D.g[grp][at] = v + hs; double lp = regLoss(D, wo, ws, wf, wa, maxRatio);
+                D.g[grp][at] = v - hs; double lm = regLoss(D, wo, ws, wf, wa, maxRatio);
+                D.g[grp][at] = v;
+                ga.push_back(grp == 1 ? gS[at] : gO[at]);
+                fd.push_back((lp - lm) / (2 * hs));
+            }
+        }
+        addRow("regularisers (reg_grad)", "d/dlog-scale, d/dopacity", "300 splats", relErr(ga, fd), 1e-3);
+    }
+    // ---- MCMC noise: the kernel against the host implementation (the same counter-based normals)
+    {
+        float scaler = 40.0f;
+        struct { float scaler; uint32_t seed, step, n; } pc{scaler, 42u, 1234u, n};
+        ctx.begin();
+        ctx.dispatch("mcmc_noise", {&gs.params[0], &gs.params[1], &gs.params[2], &gs.params[3]}, &pc, sizeof pc, (n + 255) / 256);
+        ctx.submitWait();
+        auto pos = gs.read<float>(gs.params[0], size_t(n) * 3);
+        SplatState s;
+        s.p = P;
+        mcmcNoise(s, scaler, 42u, 1234u);
+        std::vector<double> ga, cd;
+        for (size_t i = 0; i < pos.size(); i++) { ga.push_back(double(pos[i]) - P.pos[i]); cd.push_back(double(s.p.pos[i]) - P.pos[i]); }
+        double moved = 0;
+        for (double v : cd) moved += v != 0;
+        addRow("mcmc noise", "displacement vs host version", "300 splats", relErr(ga, cd, 1e-2), 1e-3);
+        addRow("mcmc noise", "displaced coordinates (info)", "300 splats", moved, 0, true);
+        // mean / variance of the hash normals
+        double s1 = 0, s2 = 0;
+        const int cnt = 200000;
+        for (int i = 0; i < cnt; i++) { double z = hashNormal(7u, 3u, uint32_t(i), uint32_t(i % 3)); s1 += z; s2 += z * z; }
+        double mean = s1 / cnt, var = s2 / cnt - mean * mean;
+        addRow("hash normals", "|mean| + |var - 1|", "200k samples", std::abs(mean) + std::abs(var - 1), 0.02);
+    }
+    // ---- densification statistics (adaptive strategy)
+    {
+        std::vector<float> acc(static_cast<size_t>(n) * 12);
+        std::vector<uint32_t> touched(static_cast<size_t>(n));
+        for (float& v : acc) v = float(r.uni(-1e-3, 1e-3));
+        for (auto& t : touched) t = r.below(3) ? uint32_t(r.below(5) + 1) : 0u;
+        ctx.upload(gs.acc, acc.data(), acc.size() * 4);
+        ctx.upload(gs.tilesTouched, touched.data(), touched.size() * 4);
+        Buffer g2 = ctx.createBuffer(size_t(n) * 4), cnt = ctx.createBuffer(size_t(n) * 4);
+        std::vector<double> ga, ca;
+        for (int absg = 0; absg < 2; absg++) {
+            struct { float hw, hh; uint32_t absGrad, n; } pc{64.0f, 48.0f, uint32_t(absg), n};
+            ctx.begin();
+            ctx.fill(g2, 0);
+            ctx.fill(cnt, 0);
+            ctx.dispatch("grad_stats", {&gs.acc, &gs.tilesTouched, &g2, &cnt}, &pc, sizeof pc, (n + 255) / 256);
+            ctx.dispatch("grad_stats", {&gs.acc, &gs.tilesTouched, &g2, &cnt}, &pc, sizeof pc, (n + 255) / 256);
+            ctx.submitWait();
+            auto G = gs.read<float>(g2, size_t(n)), C = gs.read<float>(cnt, size_t(n));
+            for (int i = 0; i < n; i++) {
+                size_t o = size_t(i) * 12 + (absg ? 10 : 0);
+                double e = touched[size_t(i)] ? 2 * std::hypot(acc[o] * 64.0, acc[o + 1] * 48.0) : 0.0;
+                ga.push_back(G[size_t(i)]); ca.push_back(e);
+                ga.push_back(C[size_t(i)]); ca.push_back(touched[size_t(i)] ? 2.0 : 0.0);
+            }
+        }
+        addRow("densification statistics", "grad2d, count (grad and absgrad)", "300 splats", relErr(ga, ca), 1e-5);
+        ctx.destroy(g2);
+        ctx.destroy(cnt);
+    }
+}
+
+// Host-side strategies: counts and invariants (they run on the CPU, once per test run).
+void testStrategies() {
+    g_path = "host";
+    HostRng rng(5);
+    std::vector<float> xyz, rgb;
+    Rng r(77);
+    for (int i = 0; i < 1000; i++) {
+        for (int k = 0; k < 3; k++) xyz.push_back(float(r.uni(-1, 1)));
+        for (int k = 0; k < 3; k++) rgb.push_back(float(r.uni(0, 1)));
+    }
+    SplatState s = initSplats(xyz, rgb, 0.1f, rng);
+    // kNN: brute force on a few points
+    std::vector<float> kd = knnMeanDist(xyz);
+    double kerr = 0;
+    for (int i = 0; i < 1000; i += 97) {
+        std::vector<double> d;
+        for (int j = 0; j < 1000; j++) {
+            if (j == i) continue;
+            double s2 = 0;
+            for (int k = 0; k < 3; k++) s2 += double(xyz[size_t(i) * 3 + k] - xyz[size_t(j) * 3 + k]) * (xyz[size_t(i) * 3 + k] - xyz[size_t(j) * 3 + k]);
+            d.push_back(std::sqrt(s2));
+        }
+        std::sort(d.begin(), d.end());
+        kerr = std::max(kerr, std::abs((d[0] + d[1] + d[2]) / 3 - kd[size_t(i)]) / kd[size_t(i)]);
+    }
+    addRow("init (kd-tree kNN)", "mean 3-NN distance vs brute force", "1000 points", kerr, 1e-5);
+    // MCMC: a third dead → all relocated, 5 % added, no dead left, moments of the new rows zero
+    for (int i = 0; i < s.n(); i++) {
+        s.p.opLogit[size_t(i)] = i % 3 == 0 ? -8.0f : float(r.uni(-2, 3));
+        for (float* m : {&s.m1.pos[size_t(i) * 3], &s.m2.pos[size_t(i) * 3]}) *m = 1.0f;
+    }
+    McmcParams mp;
+    mp.capMax = 100000;
+    McmcResult mr = mcmcRefine(s, mp, rng);
+    int deadLeft = 0, newMomentsNonzero = 0;
+    for (int i = 0; i < s.n(); i++) if (1 / (1 + std::exp(-s.p.opLogit[size_t(i)])) <= 0.005) deadLeft++;
+    for (int i = 1000; i < s.n(); i++) if (s.m1.pos[size_t(i) * 3] != 0) newMomentsNonzero++;
+    addRow("mcmc refine (host)", "relocated - dead, added - 50", "1000 splats", std::abs(double(mr.relocated) - 334) + std::abs(double(mr.added) - 50), 0);
+    addRow("mcmc refine (host)", "dead left + new rows with moments", "1000 splats", deadLeft + newMomentsNonzero, 0);
+    // relocation keeps the opacity of a group: 20 splats grow by one copy, 1 − (1 − o_new)² = o_old
+    {
+        std::vector<float> pts, col;
+        for (int i = 0; i < 20; i++) {
+            for (int k = 0; k < 3; k++) pts.push_back(float(r.uni(-1, 1)));
+            for (int k = 0; k < 3; k++) col.push_back(0.5f);
+        }
+        SplatState t = initSplats(pts, col, 0.6f, rng);
+        McmcParams cap;
+        cap.capMax = 1000;
+        mcmcRefine(t, cap, rng);
+        double o = 1 / (1 + std::exp(-double(t.p.opLogit[20])));
+        addRow("mcmc relocation (eq. 9)", "1-(1-o_new)^2 - o_old", "20 splats", t.n() == 21 ? std::abs(1 - (1 - o) * (1 - o) - 0.6) : 1.0, 1e-6);
+        size_t moved = spreadCloneGroups(t);
+        bool apart = true;
+        for (int i = 0; i < 20; i++)
+            if (t.p.pos[size_t(i) * 3] == t.p.pos[60] && t.p.pos[size_t(i) * 3 + 1] == t.p.pos[61]) apart = false;
+        addRow("long-axis split", "clone pair spread apart", "20 splats", moved == 2 && apart ? 0.0 : 1.0, 0);
+    }
+    // adaptive: high gradient → clone small, split large; prune transparent
+    {
+        SplatState a = initSplats(xyz, rgb, 0.1f, rng);
+        std::vector<float> g(1000, 0.0f), c(1000, 1.0f);
+        int wantDup = 0, wantSplit = 0, wantPrune = 0;
+        for (int i = 0; i < 1000; i++) {
+            for (int k = 0; k < 3; k++) a.p.logScale[size_t(i) * 3 + k] = -4.0f;
+            if (i % 4 == 0) { g[size_t(i)] = 1e-3f; if (i % 8 == 0) { for (int k = 0; k < 3; k++) a.p.logScale[size_t(i) * 3 + k] = -1.0f; wantSplit++; } else wantDup++; }
+            if (i % 10 == 5) { a.p.opLogit[size_t(i)] = -8.0f; wantPrune++; }
+        }
+        AdcParams ap;
+        ap.growGrad2d = 2e-4;
+        ap.sceneScale = 10.0;   // grow_scale3d · scene = 0.1: exp(-1) is large, exp(-4) small
+        int n0 = a.n();
+        AdcResult ar = adcRefine(a, g, c, ap, 600, rng);
+        double err = std::abs(double(ar.duplicated) - wantDup) + std::abs(double(ar.split) - wantSplit) + std::abs(double(ar.pruned) - wantPrune) +
+                     std::abs(double(a.n()) - (n0 + wantDup + wantSplit - wantPrune));
+        addRow("adaptive refine (host)", "duplicated, split, pruned, count", "1000 splats", err, 0);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -666,10 +927,13 @@ int main(int argc, char** argv) {
             testPrimitives(ctx, gs, quick);
             for (const Case& c : cases) runCase(ctx, gs, c, quick);
             testAdam(ctx, gs);
+            testLossVariants(ctx, gs);
+            testTrainingKernels(ctx, gs);
             testFit(gs, quick ? std::min(fitSteps, 150) : fitSteps);
             std::printf("  path %s took %.1f s\n", name.c_str(),
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - tp).count());
         }
+        testStrategies();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "vktrain-selftest: error: %s\n", e.what());
         rc = 4;

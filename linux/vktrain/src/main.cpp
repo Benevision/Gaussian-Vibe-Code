@@ -168,6 +168,7 @@ int train(int argc, char** argv, int first, ContextOptions co) {
         else if (a == "--opacity-reset") opt.opacityReset = true;
         else if (a == "--pause-at") opt.pauseAt = std::stoll(next());        // test aid
         else if (a == "--trace-every") opt.traceEvery = std::stoll(next());  // test aid
+        else if (a == "--dump-eval") opt.dumpEval = next();                  // debugging aid
         else if (a == "--device") co.deviceIndex = std::stoi(next());
         else if (a == "--atomics") {
             std::string v = next();
