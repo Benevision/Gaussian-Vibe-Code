@@ -870,6 +870,7 @@ def _ingest_dataset(settings: ServerSettings, zip_path: Path, dataset_id: str) -
 
 def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                devices: Optional[List[Optional[int]]] = None) -> FastAPI:
+    from .gpu import adapters as gpu_adapters
     from .gpu import backend_description, list_gpus
 
     backend = backend or SubprocessBackend()
@@ -962,7 +963,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
     # --------------------------------------------------------------- info
     @app.get("/v1/info")
     def info():
-        gpus = [{"name": g["name"], "memoryMB": g["memoryMB"], "freeMemoryMB": g["freeMemoryMB"]}
+        gpus = [{"name": g["name"], "memoryMB": g["memoryMB"], "freeMemoryMB": g["freeMemoryMB"],
+                 "vendor": g.get("vendor", "nvidia")}
                 for g in list_gpus(settings.gpus)]
         try:
             caps = backend.capabilities()
@@ -993,6 +995,9 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             "version": PROTOCOL_VERSION,
             "workerVersion": __version__,
             "gpus": gpus,
+            # ≥ 1.6.0: every graphics card of any vendor (sysfs), also ones jobs can't use (AMD / Intel without a
+            # GPU runtime, integrated GPUs): {vendor, name, pci, driver, integrated, memoryMB?, freeMemoryMB?}
+            "adapters": gpu_adapters(),
             "backend": backend_description(),
             "busy": manager.busy(),
             "queueLength": manager.queue_length(),

@@ -42,15 +42,36 @@ class DriverInfo:
     device_nodes: bool = False                  # /dev/nvidia0 visible
     in_flatpak: bool = False
     error: Optional[str] = None
+    # every graphics card from sysfs (gpu_vendors.Adapter), NVIDIA or not, and AMD's compute device /dev/kfd
+    adapters: list = field(default_factory=list)
+    kfd: bool = False
 
     @property
     def has_gpu(self) -> bool:
         return bool(self.gpus)
 
+    @property
+    def other_gpu(self):
+        """The AMD / Intel card to talk about when there is no usable NVIDIA one (None otherwise)."""
+        from ..gpu_vendors import best_non_nvidia
+
+        if self.has_gpu or self.kernel_driver_version or self.device_nodes \
+                or any(a.vendor == "nvidia" for a in self.adapters):
+            return None
+        return best_non_nvidia(self.adapters)
+
     def problem(self) -> Optional[Tuple[str, str]]:
         """(title, explanation) for the user when no GPU could be used, else None."""
         if self.has_gpu:
             return None
+        other = self.other_gpu
+        if other is not None:
+            how = {"amd": "PyTorch for ROCm", "intel": "PyTorch for Intel GPUs (XPU)"}[other.vendor]
+            return (f"{other.name} found",
+                    "Training in SplatWork for Linux needs an NVIDIA graphics card (CUDA) for now; support for "
+                    f"{other.vendor_name} GPUs is being worked on. This computer can still prepare datasets: the "
+                    "processing runtime runs feature matching, camera solving and masks, on this GPU through "
+                    f"{how} where it can and on the CPU otherwise. The viewer and editing work on any GPU.")
         if not self.device_nodes and not self.kernel_driver_version:
             return ("No NVIDIA GPU found",
                     "This computer does not seem to have an NVIDIA graphics card with the NVIDIA "
@@ -234,7 +255,8 @@ def _detect_smi(exe: str, run: Callable[..., Any]) -> DriverInfo:
 
 def detect(nvml: Any = "auto", run: Callable[..., Any] = subprocess.run,
            smi: Optional[str] = "auto", proc_file: Path = Path("/proc/driver/nvidia/version"),
-           dev_glob: str = "/dev/nvidia[0-9]*", flatpak: Optional[bool] = None) -> DriverInfo:
+           dev_glob: str = "/dev/nvidia[0-9]*", flatpak: Optional[bool] = None,
+           sys_root: Path = Path("/sys"), dev_root: Path = Path("/dev")) -> DriverInfo:
     """Detect the driver and GPUs. Never raises."""
     from .paths import in_flatpak
 
@@ -270,6 +292,13 @@ def detect(nvml: Any = "auto", run: Callable[..., Any] = subprocess.run,
     info.kernel_driver_version = kernel_driver_version(proc_file)
     info.device_nodes = bool(glob.glob(dev_glob))
     info.in_flatpak = in_flatpak() if flatpak is None else flatpak
+    try:
+        from ..gpu_vendors import kfd_available, scan
+
+        info.adapters = scan(sys_root)
+        info.kfd = kfd_available(dev_root)
+    except Exception:
+        info.adapters, info.kfd = [], False
     if errors and not info.gpus:
         info.error = "; ".join(errors)
     return info
@@ -297,17 +326,33 @@ class GpuStats:
 
 
 class GpuMonitor:
-    """Keeps NVML initialised and samples every GPU. ``sample()`` never raises."""
+    """Keeps NVML initialised and samples every GPU. ``sample()`` never raises. Without NVML (no NVIDIA card),
+    AMD and Intel cards are read from sysfs instead (amdgpu: memory, load, temperature)."""
 
-    def __init__(self, nvml: Any = "auto"):
+    def __init__(self, nvml: Any = "auto", sys_root: Path = Path("/sys")):
         self.nvml = load_nvml() if nvml == "auto" else nvml
+        self.sys_root = sys_root
         self._initialised = False
-        self.error: Optional[str] = None if self.nvml is not None else \
+        self._sysfs = self.nvml is None and bool(self._sysfs_sample())
+        self.error: Optional[str] = None if (self.nvml is not None or self._sysfs) else \
             "GPU statistics are unavailable (NVML / nvidia-ml-py not found)"
 
     @property
     def available(self) -> bool:
-        return self.nvml is not None
+        return self.nvml is not None or self._sysfs
+
+    def _sysfs_sample(self) -> List[GpuStats]:
+        try:
+            from ..gpu_vendors import scan
+
+            out = []
+            for i, a in enumerate(x for x in scan(self.sys_root) if x.vendor in ("amd", "intel")):
+                out.append(GpuStats(index=i, name=a.name, memory_total_mb=a.memory_mb or 0,
+                                    memory_used_mb=a.memory_used_mb or 0, temperature_c=a.temperature_c,
+                                    utilization_pct=a.busy_pct))
+            return out
+        except Exception:
+            return []
 
     def _ensure(self) -> bool:
         if self.nvml is None:
@@ -323,6 +368,8 @@ class GpuMonitor:
         return True
 
     def sample(self) -> List[GpuStats]:
+        if self.nvml is None and self._sysfs:
+            return self._sysfs_sample()
         if not self._ensure():
             return []
         nv = self.nvml

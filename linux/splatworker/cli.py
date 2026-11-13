@@ -165,7 +165,7 @@ def cmd_splat_info(args) -> int:
 
 def cmd_info(args) -> int:
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
-    from .gpu import backend_description, list_gpus, training_available
+    from .gpu import adapters, backend_description, list_gpus, torch_backend, training_available
     from .processing import available_models, splatprep_available
 
     print(json.dumps({
@@ -175,6 +175,8 @@ def cmd_info(args) -> int:
         "splatprepAvailable": splatprep_available(),
         "models": available_models(),
         "gpus": list_gpus(),
+        "adapters": adapters(),
+        "torchBackend": torch_backend(),
     }, indent=1))
     return 0
 

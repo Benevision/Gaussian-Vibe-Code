@@ -11,10 +11,12 @@ from ..installer import InstallError, Installer
 from ..nvidia import DriverInfo, detect
 from ..paths import splatprep_dir
 from ..pip_progress import human_bytes
-from ..runtime_plan import CPU_PROFILE_ID, GPU_PROFILES, Plan, build_plan, choose_profile, unpublished_profiles
+from ..runtime_plan import (CPU_PROFILE_ID, GPU_PROFILES, PROCESSING_GPU_PROFILES, Plan, build_plan,
+                            choose_profile, unpublished_profiles)
 from .common import action_row, alert, append_text, esc, label, scrolled_page, text_view
 
 PROFILE_CHOICES = [(None, "Automatic (recommended)")] + [(p.id, p.label) for p in GPU_PROFILES] + \
+    [(p.id, p.label) for p in PROCESSING_GPU_PROFILES] + \
     [(CPU_PROFILE_ID, "Processing only (no training)")]
 
 
@@ -50,7 +52,7 @@ class SetupAssistant(Adw.Window):
 
     # --------------------------------------------------------------- detect
     def _build_detect_page(self) -> None:
-        page = Adw.StatusPage(icon_name="system-search-symbolic", title="Looking for your NVIDIA GPU…",
+        page = Adw.StatusPage(icon_name="system-search-symbolic", title="Looking for your graphics card…",
                               description="This only takes a moment.")
         spinner = Gtk.Spinner(spinning=True, width_request=32, height_request=32, halign=Gtk.Align.CENTER)
         page.set_child(spinner)

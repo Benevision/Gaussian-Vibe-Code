@@ -43,7 +43,7 @@ def set_precision(device: str, precision: str = "auto") -> str:
     Returns the effective precision.  Falls back to fp32 when bf16 is not supported."""
     global _AUTOCAST
     _AUTOCAST = None
-    if precision not in ("auto", "bf16", "fp16") or device not in ("cuda", "mps"):
+    if precision not in ("auto", "bf16", "fp16") or device not in ("cuda", "mps", "xpu"):
         return "fp32"
     try:
         import torch

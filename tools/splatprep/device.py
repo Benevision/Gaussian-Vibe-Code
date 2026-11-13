@@ -1,4 +1,8 @@
-"""Compute device selection: CUDA > MPS > CPU (override with SPLATPREP_DEVICE)."""
+"""Compute device selection: CUDA > XPU > MPS > CPU (override with SPLATPREP_DEVICE).
+
+"cuda" also covers AMD GPUs with a ROCm build of PyTorch (HIP answers through ``torch.cuda``); ``gpu_backend()``
+tells NVIDIA ("cuda") and AMD ("rocm") apart where it matters (e.g. COLMAP's CUDA SIFT). "xpu" is an Intel GPU
+with PyTorch's XPU build."""
 
 from __future__ import annotations
 
@@ -40,7 +44,7 @@ def module_installed(name: str) -> bool:
 
 
 def select_device(preferred: str | None = None) -> str:
-    """Return "cuda", "mps" or "cpu".  Never imports torch if it is absent."""
+    """Return "cuda", "xpu", "mps" or "cpu".  Never imports torch if it is absent."""
     pref = (preferred or os.environ.get("SPLATPREP_DEVICE") or "auto").lower()
     if pref in ("cpu",):
         return "cpu"
@@ -48,12 +52,29 @@ def select_device(preferred: str | None = None) -> str:
         return "cpu"
     import torch
 
-    if pref in ("auto", "cuda") and torch.cuda.is_available():
+    if pref in ("auto", "cuda", "rocm") and torch.cuda.is_available():
         return "cuda"
+    xpu = getattr(torch, "xpu", None)
+    try:
+        if pref in ("auto", "xpu") and xpu is not None and xpu.is_available():
+            return "xpu"
+    except Exception:
+        pass
     mps = getattr(torch.backends, "mps", None)
     if pref in ("auto", "mps") and mps is not None and mps.is_available():
         return "mps"
     return "cpu"
+
+
+def gpu_backend(device: str | None = None) -> str:
+    """"cuda" (NVIDIA), "rocm" (AMD via HIP), "xpu" (Intel), "mps" (Apple) or "cpu" for a ``select_device``
+    result (or the automatic choice)."""
+    device = device or select_device()
+    if device == "cuda":
+        import torch
+
+        return "rocm" if getattr(torch.version, "hip", None) else "cuda"
+    return device
 
 
 def torch_device(preferred: str | None = None):
@@ -78,6 +99,9 @@ def peak_gpu_mb() -> float | None:
     try:
         if torch.cuda.is_available():
             return round(torch.cuda.max_memory_allocated() / 2**20, 1)
+        xpu = getattr(torch, "xpu", None)
+        if xpu is not None and xpu.is_available() and hasattr(xpu, "max_memory_allocated"):
+            return round(xpu.max_memory_allocated() / 2**20, 1)
         mps = getattr(torch, "mps", None)
         if mps is not None and hasattr(mps, "driver_allocated_memory") and torch.backends.mps.is_available():
             return round(mps.driver_allocated_memory() / 2**20, 1)  # current, not peak
@@ -94,6 +118,8 @@ def empty_cache() -> None:
     try:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        elif getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
+            torch.xpu.empty_cache()
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             torch.mps.empty_cache()
     except Exception:

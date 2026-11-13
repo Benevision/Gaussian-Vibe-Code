@@ -77,8 +77,9 @@ PROCESSING_DEPS = ["pycolmap>=3.10", "transformers>=4.38,<4.50", "huggingface_hu
 SAM2_REQ = "SAM-2 @ https://github.com/facebookresearch/sam2/archive/refs/heads/main.zip"
 
 
-def torch_pins(gpu: "GpuProfile | None") -> List[str]:
-    """Requirements that keep torch / torchvision at the profile's build in every later pip call."""
+def torch_pins(gpu) -> List[str]:
+    """Requirements that keep torch / torchvision at the profile's build in every later pip call (a GpuProfile
+    or a ProcessingGpuProfile)."""
     return [f"torch=={gpu.torch}", f"torchvision=={gpu.torchvision}"] if gpu is not None else []
 
 
@@ -130,8 +131,35 @@ GPU_PROFILES: List[GpuProfile] = [  # newest first
     GpuProfile("cu118", "PyTorch 2.4 + CUDA 11.8", (11, 8), "2.4.1", "0.19.1", "1.5.3", "pt24cu118",
                download_mb=2500, disk_mb=5200),
 ]
+
+
+@dataclass(frozen=True)
+class ProcessingGpuProfile:
+    """PyTorch for an AMD (ROCm) or Intel (XPU) GPU: dataset processing (matching, masks) runs on the GPU;
+    no gsplat exists for these, so the runtime can't train (docs/dev/GPU_SUPPORT.md)."""
+    id: str                      # "rocm6.3" — also the download.pytorch.org sub-index
+    label: str
+    vendor: str                  # "amd" | "intel"
+    torch: str
+    torchvision: str
+    download_mb: int             # torch + its vendor libraries, approximate
+    disk_mb: int
+
+    @property
+    def torch_index(self) -> str:
+        return PYTORCH_INDEX + self.id
+
+
+# PyTorch's own builds (download.pytorch.org/whl/rocm6.3 and /xpu), same torch as the CUDA 12.8 profile. Untested
+# on real AMD / Intel hardware: the project's test PC is NVIDIA-only.
+PROCESSING_GPU_PROFILES: List[ProcessingGpuProfile] = [
+    ProcessingGpuProfile("rocm6.3", "PyTorch 2.7 for ROCm 6.3 (AMD) · processing only", "amd", "2.7.1", "0.22.1",
+                         download_mb=4700, disk_mb=14000),
+    ProcessingGpuProfile("xpu", "PyTorch 2.7 for Intel GPUs (XPU) · processing only", "intel", "2.7.1", "0.22.1",
+                         download_mb=2000, disk_mb=5500),
+]
 CPU_PROFILE_ID = "cpu"
-PROFILE_IDS = [p.id for p in GPU_PROFILES] + [CPU_PROFILE_ID]
+PROFILE_IDS = [p.id for p in GPU_PROFILES] + [p.id for p in PROCESSING_GPU_PROFILES] + [CPU_PROFILE_ID]
 
 BASE_DOWNLOAD_MB = 45 + 60     # python + worker deps (numpy, scipy, pillow, fastapi ...)
 BASE_DISK_MB = 170 + 260
@@ -180,6 +208,24 @@ def profile_by_id(pid: str) -> Optional[GpuProfile]:
     return next((p for p in GPU_PROFILES if p.id == pid), None)
 
 
+def processing_profile_by_id(pid: str) -> Optional[ProcessingGpuProfile]:
+    return next((p for p in PROCESSING_GPU_PROFILES if p.id == pid), None)
+
+
+def processing_profile_for(driver: DriverInfo) -> Optional[ProcessingGpuProfile]:
+    """The PyTorch build for the AMD / Intel GPU when there's no NVIDIA one: ROCm for a dedicated AMD card whose
+    compute device (/dev/kfd) is visible, XPU for an Intel card with its own memory (Arc). Integrated GPUs stay on
+    the CPU build (ROCm and XPU support for them is patchy)."""
+    other = driver.other_gpu
+    if other is None or other.integrated:
+        return None
+    if other.vendor == "amd" and driver.kfd:
+        return PROCESSING_GPU_PROFILES[0]
+    if other.vendor == "intel":
+        return PROCESSING_GPU_PROFILES[1]
+    return None
+
+
 # ------------------------------------------------------------- choosing
 
 @dataclass
@@ -197,12 +243,36 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
     automatic choice skips them, a manual choice gets a warning."""
     if override is not None and override not in PROFILE_IDS:
         raise ValueError(f"unknown runtime profile {override!r} (choose from {PROFILE_IDS})")
+    proc = processing_profile_by_id(override) if override else None
+    if proc is not None:
+        return ProfileChoice(proc.id, False, f"{proc.label} (chosen manually).",
+                             [] if driver.other_gpu is not None and driver.other_gpu.vendor == proc.vendor else
+                             [f"No {'AMD' if proc.vendor == 'amd' else 'Intel'} GPU was found; PyTorch will run "
+                              "on the CPU."])
     if not driver.has_gpu:
         problem = driver.problem()
-        return ProfileChoice(CPU_PROFILE_ID, False,
-                             "Processing-only runtime: no usable NVIDIA GPU was found, so training "
-                             "will not be available.",
-                             blocking=problem[1] if problem else None)
+        other = driver.other_gpu
+        proc = processing_profile_for(driver) if override != CPU_PROFILE_ID else None
+        if proc is not None:
+            warnings = []
+            if proc.vendor == "amd":
+                warnings.append("PyTorch for ROCm officially supports Radeon RX 7000 / Pro W7000 cards and AMD "
+                                "Instinct accelerators; other Radeon cards may not be used and processing then "
+                                "runs on the CPU. It is a large download (about "
+                                f"{proc.download_mb / 1000:.1f} GB).")
+            else:
+                warnings.append("PyTorch for Intel GPUs needs a recent kernel (6.8 or newer) with the i915 or xe "
+                                "driver; if it can't use the card, processing runs on the CPU.")
+            return ProfileChoice(proc.id, False,
+                                 f"Processing runtime for {other.name}: dataset processing uses the GPU; "
+                                 "training isn't available on this GPU yet.", warnings,
+                                 blocking=problem[1] if problem else None)
+        if other is not None:
+            summary = (f"Processing-only runtime: training isn't available on {other.name} yet, so processing "
+                       "runs on the CPU.")
+        else:
+            summary = "Processing-only runtime: no usable NVIDIA GPU was found, so training will not be available."
+        return ProfileChoice(CPU_PROFILE_ID, False, summary, blocking=problem[1] if problem else None)
     if override == CPU_PROFILE_ID:
         return ProfileChoice(CPU_PROFILE_ID, False, "Processing-only runtime (chosen manually).")
 
@@ -356,6 +426,7 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
         with_splatprep = False
     with_lightglue = with_lightglue and with_splatprep
     gpu = profile_by_id(profile_id)
+    proc = processing_profile_by_id(profile_id)     # AMD / Intel PyTorch for processing (no training)
     target = paths.venv_staging_dir   # swapped into paths.venv_dir by the installer after "verify" passes
     py = target / "bin" / "python"
     rt = PYTHON_RUNTIME
@@ -413,9 +484,19 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
         download += SPLATPREP_DOWNLOAD_MB
         disk += SPLATPREP_DISK_MB
     if with_lightglue:
-        if gpu is not None:
-            tv = pip_argv(py, paths, f"torchvision=={gpu.torchvision}", f"torch=={gpu.torch}",
-                          index_url=gpu.torch_index)
+        if proc is not None:
+            steps.append(Step(
+                "torch", f"Downloading PyTorch {proc.torch} ({'ROCm' if proc.vendor == 'amd' else 'Intel XPU'})",
+                f"PyTorch {proc.torch} built for {'AMD GPUs (ROCm)' if proc.vendor == 'amd' else 'Intel GPUs'}, "
+                f"for the processing models (about {proc.download_mb / 1000:.1f} GB).", "command",
+                argv=pip_argv(py, paths, f"torch=={proc.torch}", index_url=proc.torch_index),
+                download_mb=proc.download_mb - 10, weight=50, parser="pip"))
+            download += proc.download_mb
+            disk += proc.disk_mb
+        tgt = gpu if gpu is not None else proc
+        if tgt is not None:
+            tv = pip_argv(py, paths, f"torchvision=={tgt.torchvision}", f"torch=={tgt.torch}",
+                          index_url=tgt.torch_index)
             extra_dl, extra_disk = LIGHTGLUE_DOWNLOAD_MB, LIGHTGLUE_DISK_MB
         else:
             tv = pip_argv(py, paths, "torch", "torchvision", index_url=PYTORCH_INDEX + "cpu")
@@ -424,8 +505,8 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
         steps.append(Step("torchvision", "Installing torchvision",
                           "torchvision, needed by the learned feature matchers.", "command",
                           argv=tv, download_mb=extra_dl - 20, weight=6, parser="pip"))
-        pins = torch_pins(gpu)
-        xidx = gpu.torch_index if gpu is not None else None
+        pins = torch_pins(tgt)
+        xidx = tgt.torch_index if tgt is not None else None
         steps.append(Step("lightglue", "Installing LightGlue",
                           "SuperPoint / DISK / ALIKED + LightGlue learned feature matching.", "command",
                           argv=pip_argv(py, paths, *LIGHTGLUE_DEPS, *pins, extra_index_url=xidx),
@@ -464,6 +545,11 @@ try:
     r["torch"] = torch.__version__
     r["cudaAvailable"] = bool(torch.cuda.is_available())
     r["torchCuda"] = torch.version.cuda
+    r["torchHip"] = getattr(torch.version, "hip", None)
+    try:
+        r["xpuAvailable"] = bool(torch.xpu.is_available())
+    except Exception:
+        r["xpuAvailable"] = False
     r["devices"] = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())] if r["cudaAvailable"] else []
     if r["cudaAvailable"]:
         torch.zeros(8, device="cuda").sum().item()
@@ -527,6 +613,14 @@ def verify_problems(result: dict, plan: Plan) -> List[str]:
             problems.append("gsplat could not be imported.")
         elif not result.get("gsplatPrebuilt"):
             problems.append("gsplat was installed without prebuilt CUDA kernels; it would need a compiler.")
+    proc = processing_profile_by_id(plan.profile_id)
+    if proc is not None and plan.with_lightglue:
+        # the GPU not being visible isn't fatal here (processing falls back to the CPU); a broken PyTorch is
+        if not result.get("torch"):
+            problems.append("PyTorch could not be imported.")
+        elif result.get("torchvisionImports") is False:
+            problems.append("torchvision is installed but can't be loaded (it doesn't match PyTorch): "
+                            f"{result.get('torchvisionError', '')}")
     if plan.with_splatprep and not result.get("splatprep"):
         problems.append("splatprep (dataset processing) could not be imported.")
     if plan.with_lightglue and not result.get("lightglue"):

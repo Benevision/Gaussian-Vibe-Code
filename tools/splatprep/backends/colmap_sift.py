@@ -62,7 +62,11 @@ class ColmapSiftBackend(Backend):
             db.unlink()
         list_path = ctx.work_dir / "image_list.txt"
         list_path.write_text("\n".join(ctx.names) + "\n")
-        use_gpu = "1" if (ctx.device == "cuda" and sys.platform != "darwin") else "0"
+        # COLMAP's GPU SIFT is CUDA-only: not with an AMD (ROCm) or Intel GPU
+        from ..device import gpu_backend
+
+        use_gpu = "1" if (ctx.device == "cuda" and sys.platform != "darwin" and gpu_backend("cuda") == "cuda") \
+            else "0"
 
         def opt(cmd: str, *names: str):
             return pick_option(colmap, cmd, *names)
