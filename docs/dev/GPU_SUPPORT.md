@@ -16,6 +16,10 @@ GPU-accelerated processing done in 1.6.0** (untested on real AMD / Intel hardwar
 | splatprep: `torch.xpu`, `gpu_backend()` tells CUDA from ROCm; COLMAP's CUDA SIFT only on NVIDIA; SAM 2 autocast on XPU | `tools/splatprep/device.py`, `backends/colmap_sift.py`, `masks/track.py` | fake torch modules (`tools/tests/test_device.py`) |
 | AMD Radeon / Instinct and Intel Arc names in the speed tables (guesses; a benchmark replaces them) | `ComputeScheduler.estimateThroughput`, `studio/devices.py` | unit tests |
 
+| AMD ISA per card (KFD topology, else a device-id table) and `HSA_OVERRIDE_GFX_VERSION` for RDNA 2 cards PyTorch's ROCm build lacks (gfx1031–1036 → 10.3.0, gfx1103 → 11.0.0), set in the app's runtime environment only | `gpu_vendors.py` `kfd_gfx` / `hsa_override`, `gui/installer.py` `gpu_env` | fake KFD topology |
+| `splatworker gpu-check`: one pasteable report (cards, PyTorch build and devices, 1 GB allocation, matmul, conv backward, gsplat forward + backward, fused-ssim, splatprep device) | `linux/splatworker/gpucheck.py` | fake torch (no GPU path) |
+| **Training spike:** AMD's ROCm gsplat port built in CI (`.github/workflows/gsplat-rocm-wheel.yml`, `linux/flatpak/gsplat-rocm-pin.env`) onto the prerelease `gsplat-1.5.3-rocm6.4`; runtime profile `rocm6.4-train`, only when picked by hand | `gui/runtime_plan.py` | plan / verify unit tests; needs the AMD test PC — procedure in [AMD_TEST_STEAMOS.md](AMD_TEST_STEAMOS.md) |
+
 Why ROCm 6.4 and not 6.3: 6.4 is the first PyTorch ROCm build with Radeon RX 9000 (RDNA 4, gfx1200/1201) kernels;
 PyTorch 2.8 is the oldest build on it. AMD itself recommends its own wheels at repo.radeon.com over PyTorch's
 (less tested by AMD); PyTorch's index was chosen because pip can install from it without extra configuration.

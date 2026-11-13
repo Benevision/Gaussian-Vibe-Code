@@ -356,7 +356,10 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
                 "software": software or f"SplatWork for Linux {info.get('workerVersion') or ''} · "
                                         f"{info.get('backend') or ''}".strip(" ·"),
                 "trainStepsPerSecond": round(rate, 3), "splats": spec.splats,
-                "megapixels": round(spec.megapixels, 2), "uploadMBps": up_mbps, "downloadMBps": down_mbps}
+                "megapixels": round(spec.megapixels, 2), "uploadMBps": up_mbps, "downloadMBps": down_mbps,
+                # quality at the end of the run (a broken GPU backend trains fast but badly)
+                "psnr": s.get("psnr"), "evalPsnr": s.get("evalPsnr"), "gpuVendor": (
+                    gpus[0].get("vendor") if gpus and isinstance(gpus[0], dict) else None)}
     finally:
         if job is not None:
             try:
