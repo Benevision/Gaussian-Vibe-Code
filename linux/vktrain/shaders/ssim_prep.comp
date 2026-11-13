@@ -1,0 +1,26 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Loss, step 1 (Mac: ssim_prep): per channel the five planes x, y, x², y², xy that the SSIM window blurs.
+// Target pixels are RGBA8 (r | g<<8 | b<<16 | a<<24); masked-out pixels (alpha ≤ 127) use target := render.
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer ImgBuf { float img[]; };
+layout(std430, binding = 2) readonly buffer TgtBuf { uint target[]; };
+layout(std430, binding = 3) writeonly buffer PlaneBuf { float planes[]; };
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= F.width || p.y >= F.height) return;
+    uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+    uint t = target[pid];
+    bool keep = (t >> 24u) > 127u;
+    for (uint c = 0u; c < 3u; c++) {
+        float x = img[c * hw + pid];
+        float y = keep ? float((t >> (8u * c)) & 255u) / 255.0 : x;
+        planes[(c * 5u + 0u) * hw + pid] = x;
+        planes[(c * 5u + 1u) * hw + pid] = y;
+        planes[(c * 5u + 2u) * hw + pid] = x * x;
+        planes[(c * 5u + 3u) * hw + pid] = y * y;
+        planes[(c * 5u + 4u) * hw + pid] = x * y;
+    }
+}

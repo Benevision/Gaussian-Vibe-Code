@@ -1,0 +1,75 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Rasterise forward (Mac: rasterize_forward). One 16×16 workgroup per tile, front-to-back alpha blending.
+// Output planes: r, g, b (with background), depth (Σ α·T·z, no background); final transmittance; index
+// (1-based, within the tile's list) of the last splat that contributed to the pixel.
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer RangeBuf { uvec2 ranges[]; };
+layout(std430, binding = 2) readonly buffer TValBuf { uint tileVals[]; };
+layout(std430, binding = 3) readonly buffer P2dBuf { vec2 p2d[]; };
+layout(std430, binding = 4) readonly buffer ConicBuf { vec4 conicO[]; };
+layout(std430, binding = 5) readonly buffer RgbdBuf { vec4 rgbd[]; };
+layout(std430, binding = 6) writeonly buffer ImgBuf { float outImg[]; };
+layout(std430, binding = 7) writeonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 8) writeonly buffer NBuf { uint nContrib[]; };
+
+shared vec2 sP[256];
+shared vec4 sC[256];
+shared vec4 sF[256];
+shared uint anyActive;
+
+void main() {
+    uvec2 tg = gl_WorkGroupID.xy;
+    uvec2 pix = tg * TILE + gl_LocalInvocationID.xy;
+    uint tidx = gl_LocalInvocationIndex;
+    bool inside = pix.x < F.width && pix.y < F.height;
+    vec2 pf = vec2(pix) + 0.5;
+    uvec2 range = ranges[tg.y * F.tilesX + tg.x];
+    int toDo = int(range.y) - int(range.x);
+    int rounds = (toDo + 255) / 256;
+    float T = 1.0;
+    vec4 C = vec4(0.0);
+    uint contributor = 0u, last = 0u;
+    bool done = !inside;
+    for (int r = 0; r < rounds; r++, toDo -= 256) {
+        if (tidx == 0u) anyActive = 0u;
+        barrier();
+        if (!done) anyActive = 1u;
+        barrier();
+        if (anyActive == 0u) break;
+        uint idx = range.x + uint(r) * 256u + tidx;
+        if (idx < range.y) {
+            uint g = tileVals[idx];
+            sP[tidx] = p2d[g]; sC[tidx] = conicO[g]; sF[tidx] = rgbd[g];
+        }
+        barrier();
+        int cnt = min(256, toDo);
+        for (int j = 0; j < cnt && !done; j++) {
+            contributor++;
+            vec2 d = sP[j] - pf;
+            vec4 con = sC[j];
+            float power = -0.5 * (con.x * d.x * d.x + con.z * d.y * d.y) - con.y * d.x * d.y;
+            if (power > 0.0) continue;
+            float alpha = min(0.99, con.w * exp(power));
+            if (alpha < 1.0 / 255.0) continue;
+            float testT = T * (1.0 - alpha);
+            if (testT < 0.0001) { done = true; continue; }
+            C += sF[j] * (alpha * T);
+            T = testT;
+            last = contributor;
+        }
+        barrier();   // everyone is done reading shared memory before the next round overwrites it
+    }
+    if (inside) {
+        uint pid = pix.y * F.width + pix.x;
+        uint hw = F.width * F.height;
+        outImg[pid] = C.x + T * F.bg.x;
+        outImg[hw + pid] = C.y + T * F.bg.y;
+        outImg[2u * hw + pid] = C.z + T * F.bg.z;
+        outImg[3u * hw + pid] = C.w;
+        finalT[pid] = T;
+        nContrib[pid] = last;
+    }
+}

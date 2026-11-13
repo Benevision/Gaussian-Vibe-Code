@@ -1,0 +1,101 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Projection forward (Mac: train_preprocess). One thread per splat.
+#include "common.glsl"
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer PosBuf { float pos[]; };
+layout(std430, binding = 2) readonly buffer ScaleBuf { float logScale[]; };
+layout(std430, binding = 3) readonly buffer QuatBuf { float quat[]; };
+layout(std430, binding = 4) readonly buffer OpBuf { float opLogit[]; };
+layout(std430, binding = 5) readonly buffer ShBuf { float sh[]; };
+layout(std430, binding = 6) writeonly buffer P2dBuf { vec2 p2d[]; };
+layout(std430, binding = 7) writeonly buffer ConicBuf { vec4 conicO[]; };   // conic (a, b, c), opacity · comp
+layout(std430, binding = 8) writeonly buffer RgbdBuf { vec4 rgbd[]; };     // rgb, camera depth
+layout(std430, binding = 9) writeonly buffer RectBuf { uvec4 rects[]; };   // tile rectangle [x0, y0, x1, y1)
+layout(std430, binding = 10) writeonly buffer TouchBuf { uint tilesTouched[]; };
+layout(std430, binding = 11) writeonly buffer KeyBuf { uint depthKeys[]; };
+layout(std430, binding = 12) writeonly buffer ValBuf { uint sortVals[]; };
+
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= F.count) return;
+    sortVals[i] = i;
+    tilesTouched[i] = 0u;
+    depthKeys[i] = 0xFFFFFFFFu;
+    rects[i] = uvec4(0u);
+    p2d[i] = vec2(0.0);
+    conicO[i] = vec4(0.0);
+    rgbd[i] = vec4(0.0);
+
+    vec3 p = vec3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+    vec3 t = (F.w2c * vec4(p, 1.0)).xyz;
+    if (t.z < 0.01) return;
+    vec3 s = exp(vec3(logScale[i * 3], logScale[i * 3 + 1], logScale[i * 3 + 2]));
+    vec4 q = vec4(quat[i * 4], quat[i * 4 + 1], quat[i * 4 + 2], quat[i * 4 + 3]);
+    float ql = length(q);
+    q = ql > 1e-12 ? q / ql : vec4(1.0, 0.0, 0.0, 0.0);
+    float R[3][3];
+    quat_rot(q, R);
+    float M[3][3];
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) M[r][c] = R[r][c] * s[c];
+    float S[3][3];
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) S[r][c] = M[r][0] * M[c][0] + M[r][1] * M[c][1] + M[r][2] * M[c][2];
+
+    float W[3][3];
+    frame_rot(F, W);
+    float fx = F.intr.x, fy = F.intr.y;
+    float txz = clamp(t.x / t.z, -F.lim.x, F.lim.x) * t.z;
+    float tyz = clamp(t.y / t.z, -F.lim.y, F.lim.y) * t.z;
+    float iz = 1.0 / t.z;
+    float J[2][3];
+    J[0][0] = fx * iz; J[0][1] = 0.0; J[0][2] = -fx * txz * iz * iz;
+    J[1][0] = 0.0; J[1][1] = fy * iz; J[1][2] = -fy * tyz * iz * iz;
+    float T[2][3];
+    for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) T[r][c] = J[r][0] * W[0][c] + J[r][1] * W[1][c] + J[r][2] * W[2][c];
+    float TS[2][3];
+    for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) TS[r][c] = T[r][0] * S[0][c] + T[r][1] * S[1][c] + T[r][2] * S[2][c];
+    float c00 = 0.0, c01 = 0.0, c11 = 0.0;
+    for (int k = 0; k < 3; k++) { c00 += TS[0][k] * T[0][k]; c01 += TS[0][k] * T[1][k]; c11 += TS[1][k] * T[1][k]; }
+
+    float dil = F.lim.z;
+    float det0 = c00 * c11 - c01 * c01;
+    float a = c00 + dil, b = c01, c = c11 + dil;
+    float det = a * c - b * b;
+    if (det <= 1e-12) return;
+    float o = 1.0 / (1.0 + exp(-opLogit[i]));
+    float comp = (F.flags & 1u) != 0u ? sqrt(max(det0, 0.0) / det) : 1.0;
+    float oe = o * comp;
+    float idet = 1.0 / det;
+    vec3 conic = vec3(c * idet, -b * idet, a * idet);
+    vec2 mean = vec2(fx * t.x * iz + F.intr.z, fy * t.y * iz + F.intr.w);
+    // k-sigma support where alpha falls to 1/255 (at most 3 sigma), tight axis-aligned bounds of that ellipse.
+    float k = min(3.0, sqrt(max(2.0 * log(max(255.0 * oe, 1.0001)), 0.0)));
+    float mid = 0.5 * (a + c);
+    float l1 = mid + sqrt(max(0.1, mid * mid - det));
+    float radius = ceil(k * sqrt(l1));
+    if (radius <= 0.0 || oe < 1.0 / 255.0) return;
+    vec2 ext = ceil(k * sqrt(vec2(a, c)));
+    int tx = int(F.tilesX), ty = int(F.tilesY);
+    ivec2 rmin = ivec2(clamp(int(floor((mean.x - ext.x) / float(TILE))), 0, tx), clamp(int(floor((mean.y - ext.y) / float(TILE))), 0, ty));
+    ivec2 rmax = ivec2(clamp(int(floor((mean.x + ext.x) / float(TILE))) + 1, 0, tx), clamp(int(floor((mean.y + ext.y) / float(TILE))) + 1, 0, ty));
+    int n = (rmax.x - rmin.x) * (rmax.y - rmin.y);
+    if (rmax.x <= rmin.x || rmax.y <= rmin.y) return;
+
+    float bsh[16];
+    int deg = int(F.shDegree);
+    vec3 dir = normalize(p - F.campos.xyz);
+    sh_basis(dir, deg, bsh);
+    vec3 col = vec3(0.0);
+    int nc = (deg + 1) * (deg + 1);
+    for (int kk = 0; kk < nc; kk++) col += bsh[kk] * vec3(sh[i * 48 + kk * 3], sh[i * 48 + kk * 3 + 1], sh[i * 48 + kk * 3 + 2]);
+    col = max(col + 0.5, 0.0);
+
+    p2d[i] = mean;
+    conicO[i] = vec4(conic, oe);
+    rgbd[i] = vec4(col, t.z);
+    rects[i] = uvec4(rmin.x, rmin.y, rmax.x, rmax.y);
+    tilesTouched[i] = uint(n);
+    depthKeys[i] = floatBitsToUint(t.z);   // t.z > 0: the bit pattern orders like the float
+}

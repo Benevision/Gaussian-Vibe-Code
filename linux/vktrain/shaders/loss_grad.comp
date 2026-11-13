@@ -1,0 +1,25 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Loss, step 4 (Mac: loss_grad): dL/dimage for L = (1−λ)·mean|x−y| + λ·(1 − mean SSIM), the mean taken over
+// all pixels and the three channels. bd holds the blurred SSIM derivative maps (blur adjoint = blur).
+// The depth plane's gradient is zero here (depth supervision is stage 2).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer PlaneBuf { float planes[]; };
+layout(std430, binding = 2) readonly buffer BdBuf { float bd[]; };
+layout(std430, binding = 3) writeonly buffer GradBuf { float gradImg[]; };
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= F.width || p.y >= F.height) return;
+    uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+    float norm = F.invNumPixels / 3.0;
+    float lam = F.ssimWeight;
+    for (uint c = 0u; c < 3u; c++) {
+        float x = planes[(c * 5u) * hw + pid], y = planes[(c * 5u + 1u) * hw + pid];
+        float dS = bd[(c * 3u + 0u) * hw + pid] + 2.0 * x * bd[(c * 3u + 1u) * hw + pid] + y * bd[(c * 3u + 2u) * hw + pid];
+        float l1g = x > y ? 1.0 : (x < y ? -1.0 : 0.0);
+        gradImg[c * hw + pid] = norm * ((1.0 - lam) * l1g - lam * dS);
+    }
+    gradImg[3u * hw + pid] = 0.0;
+}

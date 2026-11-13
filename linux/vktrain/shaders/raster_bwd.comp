@@ -1,0 +1,124 @@
+#version 460
+#ifdef NATIVE_FLOAT_ATOMICS
+#extension GL_EXT_shader_atomic_float : require
+#endif
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_vote : require
+// Rasterise backward (Mac: rasterize_backward). Walks each tile's list back to front, recovering T by
+// division, and accumulates per-splat gradients. Per splat and step, the gradients of a whole subgroup
+// are summed with subgroupAdd (any subgroup width) and one lane issues the float atomics.
+// Accumulator layout per splat (12 floats): dmean2D.xy, dconic.abc, dopacity (post-sigmoid × comp),
+// drgb, ddepth, Σ|dmean2D| per pixel (x, y; densification statistics like the Mac's absGrad).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer RangeBuf { uvec2 ranges[]; };
+layout(std430, binding = 2) readonly buffer TValBuf { uint tileVals[]; };
+layout(std430, binding = 3) readonly buffer P2dBuf { vec2 p2d[]; };
+layout(std430, binding = 4) readonly buffer ConicBuf { vec4 conicO[]; };
+layout(std430, binding = 5) readonly buffer RgbdBuf { vec4 rgbd[]; };
+layout(std430, binding = 6) readonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 7) readonly buffer NBuf { uint nContrib[]; };
+layout(std430, binding = 8) readonly buffer GradBuf { float gradImg[]; };
+#ifdef NATIVE_FLOAT_ATOMICS
+layout(std430, binding = 9) buffer AccBuf { float acc[]; };
+void accAdd(uint i, float v) { atomicAdd(acc[i], v); }
+#else
+layout(std430, binding = 9) buffer AccBuf { uint acc[]; };
+void accAdd(uint i, float v) {   // compare-and-swap loop on the float's bits
+    uint old = acc[i];
+    for (;;) {
+        uint nv = floatBitsToUint(uintBitsToFloat(old) + v);
+        uint prev = atomicCompSwap(acc[i], old, nv);
+        if (prev == old) break;
+        old = prev;
+    }
+}
+#endif
+
+shared vec2 sP[256];
+shared vec4 sC[256];
+shared vec4 sF[256];
+shared uint sI[256];
+
+void main() {
+    uvec2 tg = gl_WorkGroupID.xy;
+    uvec2 pix = tg * TILE + gl_LocalInvocationID.xy;
+    uint tidx = gl_LocalInvocationIndex;
+    bool inside = pix.x < F.width && pix.y < F.height;
+    vec2 pf = vec2(pix) + 0.5;
+    uvec2 range = ranges[tg.y * F.tilesX + tg.x];
+    int toDo = int(range.y) - int(range.x);
+    int rounds = (toDo + 255) / 256;
+    uint pid = pix.y * F.width + pix.x;
+    uint hw = F.width * F.height;
+    float Tfinal = inside ? finalT[pid] : 1.0;
+    float T = Tfinal;
+    uint last = inside ? nContrib[pid] : 0u;
+    vec4 dpix = inside ? vec4(gradImg[pid], gradImg[hw + pid], gradImg[2u * hw + pid], gradImg[3u * hw + pid]) : vec4(0.0);
+    float bgDot = dot(F.bg.xyz, dpix.xyz);   // dL/dT_final from the constant background
+    vec4 accumRec = vec4(0.0), lastColor = vec4(0.0);
+    float lastAlpha = 0.0;
+    uint contributor = uint(toDo);
+    bool wantAbs = F.absGrad != 0u;
+    bool wantDepth = F.hasDepth != 0u;
+    for (int r = 0; r < rounds; r++, toDo -= 256) {
+        barrier();
+        int progress = r * 256 + int(tidx);
+        if (int(range.x) + progress < int(range.y)) {
+            uint g = tileVals[range.y - uint(progress) - 1u];
+            sI[tidx] = g; sP[tidx] = p2d[g]; sC[tidx] = conicO[g]; sF[tidx] = rgbd[g];
+        }
+        barrier();
+        int cnt = min(256, toDo);
+        for (int j = 0; j < cnt; j++) {
+            bool act = inside;
+            if (act) { contributor--; act = contributor < last; }
+            vec2 d = sP[j] - pf;
+            vec4 con = sC[j];
+            float power = -0.5 * (con.x * d.x * d.x + con.z * d.y * d.y) - con.y * d.x * d.y;
+            float G = exp(power);
+            float alpha = min(0.99, con.w * G);
+            act = act && power <= 0.0 && alpha >= 1.0 / 255.0;
+            if (!subgroupAny(act)) continue;
+            float gm0 = 0.0, gm1 = 0.0, gc0 = 0.0, gc1 = 0.0, gc2 = 0.0, go = 0.0, gr = 0.0, gg = 0.0, gb = 0.0, gdep = 0.0;
+            if (act) {
+                T = T / (1.0 - alpha);
+                float dchdc = alpha * T;
+                vec4 c = sF[j];
+                accumRec = lastAlpha * lastColor + (1.0 - lastAlpha) * accumRec;
+                lastColor = c;
+                float dLda = dot(c - accumRec, dpix);
+                gr = dchdc * dpix.x; gg = dchdc * dpix.y; gb = dchdc * dpix.z; gdep = dchdc * dpix.w;
+                dLda *= T;
+                lastAlpha = alpha;
+                dLda += (-Tfinal / (1.0 - alpha)) * bgDot;
+                float dLdG = con.w * dLda;
+                float gdx = G * d.x, gdy = G * d.y;
+                gm0 = dLdG * (-gdx * con.x - gdy * con.y);
+                gm1 = dLdG * (-gdy * con.z - gdx * con.y);
+                gc0 = -0.5 * gdx * d.x * dLdG;
+                gc1 = -gdx * d.y * dLdG;
+                gc2 = -0.5 * gdy * d.y * dLdG;
+                go = G * dLda;
+            }
+            float s0 = subgroupAdd(gm0), s1 = subgroupAdd(gm1);
+            float s2 = subgroupAdd(gc0), s3 = subgroupAdd(gc1), s4 = subgroupAdd(gc2);
+            float s5 = subgroupAdd(go), s6 = subgroupAdd(gr), s7 = subgroupAdd(gg), s8 = subgroupAdd(gb);
+            float s9 = wantDepth ? subgroupAdd(gdep) : 0.0;
+            float a0 = 0.0, a1 = 0.0;
+            if (wantAbs) { a0 = subgroupAdd(abs(gm0)); a1 = subgroupAdd(abs(gm1)); }
+            if (subgroupElect()) {
+                uint A = sI[j] * 12u;
+                accAdd(A + 0u, s0); accAdd(A + 1u, s1);
+                accAdd(A + 2u, s2); accAdd(A + 3u, s3); accAdd(A + 4u, s4);
+                accAdd(A + 5u, s5);
+                accAdd(A + 6u, s6); accAdd(A + 7u, s7); accAdd(A + 8u, s8);
+                if (wantDepth) accAdd(A + 9u, s9);
+                if (wantAbs) { accAdd(A + 10u, a0); accAdd(A + 11u, a1); }
+            }
+        }
+    }
+}

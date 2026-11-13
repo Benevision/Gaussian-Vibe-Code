@@ -1,0 +1,30 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Separable 11-tap Gaussian blur (σ = 1.5, zero padding) of a stack of planes (Mac: blur_h / blur_v).
+// pc.dir = 0: horizontal, 1: vertical; z of the dispatch = plane. The window is symmetric, so the same
+// blur is its own adjoint (used again on the SSIM derivative maps).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer SrcBuf { float src[]; };
+layout(std430, binding = 2) writeonly buffer DstBuf { float dst[]; };
+layout(push_constant) uniform PC { uint dir; uint pad0; uint pad1; uint pad2; float w[11]; } pc;
+void main() {
+    uvec3 p = gl_GlobalInvocationID;
+    if (p.x >= F.width || p.y >= F.height) return;
+    uint hw = F.width * F.height;
+    uint base = p.z * hw;
+    float s = 0.0;
+    if (pc.dir == 0u) {
+        for (int k = -5; k <= 5; k++) {
+            int x = int(p.x) + k;
+            if (x >= 0 && x < int(F.width)) s += pc.w[k + 5] * src[base + p.y * F.width + uint(x)];
+        }
+    } else {
+        for (int k = -5; k <= 5; k++) {
+            int y = int(p.y) + k;
+            if (y >= 0 && y < int(F.height)) s += pc.w[k + 5] * src[base + uint(y) * F.width + p.x];
+        }
+    }
+    dst[base + p.y * F.width + p.x] = s;
+}

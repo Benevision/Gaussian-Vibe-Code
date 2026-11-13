@@ -1,0 +1,10 @@
+#version 460
+// Exclusive prefix sum, level 2: add each 1024-block's (already scanned) base.
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer DataBuf { uint data[]; };
+layout(std430, binding = 1) readonly buffer SumBuf { uint blockSums[]; };
+layout(push_constant) uniform PC { uint n; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i < pc.n) data[i] += blockSums[i / 1024u];
+}
