@@ -113,6 +113,27 @@ Checked against upstream, not on hardware.
 Nothing here should be presented as "training works on AMD / Intel" until a real card has trained the benchmark
 scene.
 
+## ROCm gsplat spike: outcome (2026-11-13, stopped)
+
+Seven CI builds (`.github/workflows/gsplat-rocm-wheel.yml`) for Radeon targets (gfx1030–gfx1201), no hardware run:
+
+1. **AMD's port** (`AMD-Ecosystem/gsplat` release/1.5.3b2): written for Instinct's 64-wide wavefronts throughout
+   (wave64 DPP intrinsics, `lane % 64`, 64-bit lane masks, block-size-64 kernels). It doesn't compile for Radeon in
+   wave32 ("Tile size … greater than the wavefront size"), and HIP refuses wave64 on RDNA ("HIP is not supported on
+   the specified GPU ARCH with wavefront size 64"; rocPRIM's sort needs warp size ≤ 32). Making it run on Radeon
+   means rewriting its kernels.
+2. **Upstream gsplat 1.5.3 through PyTorch's hipify** (32-wide warps match Radeon): build plumbing fixed (nvcc-only
+   flags, glm's `.inl` files), and the CUDA cooperative-groups calls HIP lacks replaced with wave32 shims
+   (`cg::reduce` ×15, `cg::labeled_partition` ×8, `cg::this_grid().thread_rank()` ×16 — in
+   `linux/flatpak/rocm-gsplat-patch.py`). It then fails in glm: hipify rewrites glm's own headers and include
+   paths, and glm's functions aren't compiled as device code under hipcc (`no matching function for call to
+   'transpose'`), even with `GLM_FORCE_CUDA`. Next step would be to keep glm out of hipify (pre-hipified include
+   directory and `hipify` exclusions) — more plumbing, then likely further runtime issues on real hardware.
+
+Stopped there: the Vulkan trainer (below) covers AMD and Intel without these dependencies. The `rocm6.4-train`
+runtime stays in the advanced options; until a wheel is published, setup refuses it before downloading anything.
+The workflow, pin and patch script stay in the repository for anyone who picks this up.
+
 ## Decision (2026-11-13): a portable Vulkan trainer
 
 The user approved option B: a Vulkan compute port of the Mac's Metal trainer (`TrainShaders.swift`,
