@@ -10,6 +10,7 @@ on:
     paths:
       - linux/flatpak/gsplat-rocm-pin.env
       - linux/flatpak/build-gsplat-rocm-wheel.sh
+      - linux/flatpak/rocm-gsplat-patch.py
       - .github/workflows/gsplat-rocm-wheel.yml
 
 permissions:
