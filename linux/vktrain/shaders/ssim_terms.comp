@@ -1,0 +1,61 @@
+#version 460
+#ifdef NATIVE_FLOAT_ATOMICS
+#extension GL_EXT_shader_atomic_float : require
+#endif
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// Loss, step 3 (Mac: ssim_terms): SSIM map from the blurred moments, its three derivative maps per
+// channel (w.r.t. μx, E[x²], E[xy]), and the loss sums: stats[0] += Σ|x−y|, stats[1] += Σ SSIM,
+// stats[2] += Σ(x−y)².
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer MuBuf { float mu[]; };
+layout(std430, binding = 2) writeonly buffer DBuf { float dmaps[]; };
+#ifdef NATIVE_FLOAT_ATOMICS
+layout(std430, binding = 3) buffer StatBuf { float stats[]; };
+void statAdd(uint i, float v) { atomicAdd(stats[i], v); }
+#else
+layout(std430, binding = 3) buffer StatBuf { uint stats[]; };
+void statAdd(uint i, float v) {
+    uint old = stats[i];
+    for (;;) {
+        uint nv = floatBitsToUint(uintBitsToFloat(old) + v);
+        uint prev = atomicCompSwap(stats[i], old, nv);
+        if (prev == old) break;
+        old = prev;
+    }
+}
+#endif
+layout(std430, binding = 4) readonly buffer PlaneBuf { float planes[]; };
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    bool inb = p.x < F.width && p.y < F.height;
+    uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+    const float C1 = 0.0001, C2 = 0.0009;
+    float sumS = 0.0, sumL1 = 0.0, sumL2 = 0.0;
+    if (inb) {
+        for (uint c = 0u; c < 3u; c++) {
+            float mx = mu[(c * 5u + 0u) * hw + pid], my = mu[(c * 5u + 1u) * hw + pid];
+            float mxx = mu[(c * 5u + 2u) * hw + pid], myy = mu[(c * 5u + 3u) * hw + pid], mxy = mu[(c * 5u + 4u) * hw + pid];
+            float sx = mxx - mx * mx, sy = myy - my * my, sxy = mxy - mx * my;
+            float A1 = 2.0 * mx * my + C1, A2 = 2.0 * sxy + C2, B1 = mx * mx + my * my + C1, B2 = sx + sy + C2;
+            float Q = 1.0 / (B1 * B2);
+            float S = A1 * A2 * Q;
+            // S/A1 and S/A2 written without dividing by A1, A2 (either can be exactly 0).
+            dmaps[(c * 3u + 0u) * hw + pid] = 2.0 * my * A2 * Q - 2.0 * my * A1 * Q - 2.0 * mx * S / B1 + 2.0 * mx * S / B2;
+            dmaps[(c * 3u + 1u) * hw + pid] = -S / B2;
+            dmaps[(c * 3u + 2u) * hw + pid] = 2.0 * A1 * Q;
+            sumS += S;
+            float x = planes[(c * 5u) * hw + pid], y = planes[(c * 5u + 1u) * hw + pid];
+            sumL1 += abs(x - y); sumL2 += (x - y) * (x - y);
+        }
+    }
+    sumS = subgroupAdd(sumS); sumL1 = subgroupAdd(sumL1); sumL2 = subgroupAdd(sumL2);
+    if (subgroupElect()) {
+        statAdd(0u, sumL1);
+        statAdd(1u, sumS);
+        statAdd(2u, sumL2);
+    }
+}

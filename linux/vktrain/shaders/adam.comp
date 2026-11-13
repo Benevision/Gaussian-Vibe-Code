@@ -1,0 +1,24 @@
+#version 460
+// Adam (Mac: adam_step): bias-corrected, non-finite gradients treated as zero. Two learning rates per
+// parameter group: element i uses lr when (i % period) < split, else lr2 (e.g. SH: DC vs. rest).
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer ParamBuf { float param[]; };
+layout(std430, binding = 1) readonly buffer GradBuf { float grad[]; };
+layout(std430, binding = 2) buffer MBuf { float m[]; };
+layout(std430, binding = 3) buffer VBuf { float v[]; };
+layout(push_constant) uniform PC {
+    float lr; float lr2; uint period; uint split;
+    float beta1; float beta2; float eps; float bc1;
+    float bc2; uint n;
+} pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.n) return;
+    float g = grad[i];
+    if (isnan(g) || isinf(g)) g = 0.0;
+    float mi = pc.beta1 * m[i] + (1.0 - pc.beta1) * g;
+    float vi = pc.beta2 * v[i] + (1.0 - pc.beta2) * g * g;
+    m[i] = mi; v[i] = vi;
+    float lr = (i % pc.period) < pc.split ? pc.lr : pc.lr2;
+    param[i] -= lr * (mi / pc.bc1) / (sqrt(vi / pc.bc2) + pc.eps);
+}

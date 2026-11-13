@@ -1,0 +1,170 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Projection backward (Mac: preprocess_backward, without the stage-2 regularisers and densification
+// statistics). From the per-splat screen-space gradients (acc, 12 floats, see raster_bwd) to position,
+// log-scale, quaternion, opacity logit and SH coefficients. Adds the view-dependent colour term
+// (dcolour/ddirection → position) that the Mac kernel leaves out; gsplat has it too.
+#include "common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer PosBuf { float pos[]; };
+layout(std430, binding = 2) readonly buffer ScaleBuf { float logScale[]; };
+layout(std430, binding = 3) readonly buffer QuatBuf { float quat[]; };
+layout(std430, binding = 4) readonly buffer OpBuf { float opLogit[]; };
+layout(std430, binding = 5) readonly buffer ShBuf { float sh[]; };
+layout(std430, binding = 6) readonly buffer AccBuf { float acc[]; };
+layout(std430, binding = 7) readonly buffer TouchBuf { uint tilesTouched[]; };
+layout(std430, binding = 8) writeonly buffer GPosBuf { float gPos[]; };
+layout(std430, binding = 9) writeonly buffer GScaleBuf { float gScale[]; };
+layout(std430, binding = 10) writeonly buffer GQuatBuf { float gQuat[]; };
+layout(std430, binding = 11) writeonly buffer GOpBuf { float gOp[]; };
+layout(std430, binding = 12) writeonly buffer GShBuf { float gSH[]; };
+
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= F.count) return;
+    float gop = 0.0;
+    vec3 gls = vec3(0.0);
+    vec3 gp = vec3(0.0);
+    vec4 gq = vec4(0.0);
+    for (int k = 0; k < 48; k++) gSH[i * 48 + k] = 0.0;
+    if (tilesTouched[i] > 0u) {
+        uint A = i * 12u;
+        vec2 dmean = vec2(acc[A], acc[A + 1u]);
+        vec3 dconic = vec3(acc[A + 2u], acc[A + 3u], acc[A + 4u]);
+        float dop = acc[A + 5u];
+        vec3 dcol = vec3(acc[A + 6u], acc[A + 7u], acc[A + 8u]);
+        float ddep = acc[A + 9u];
+
+        float o = 1.0 / (1.0 + exp(-opLogit[i]));
+        vec3 s = exp(vec3(logScale[i * 3], logScale[i * 3 + 1], logScale[i * 3 + 2]));
+        vec3 p = vec3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+        vec4 qr = vec4(quat[i * 4], quat[i * 4 + 1], quat[i * 4 + 2], quat[i * 4 + 3]);
+        float qlen = max(length(qr), 1e-12);
+        vec4 q = qr / qlen;
+        float Rm[3][3], Mm[3][3], Sg[3][3], Wm[3][3];
+        quat_rot(q, Rm);
+        frame_rot(F, Wm);
+        for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) Mm[r][c] = Rm[r][c] * s[c];
+        for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) Sg[r][c] = Mm[r][0] * Mm[c][0] + Mm[r][1] * Mm[c][1] + Mm[r][2] * Mm[c][2];
+        vec3 t = (F.w2c * vec4(p, 1.0)).xyz;
+        float fx = F.intr.x, fy = F.intr.y;
+        float limx = F.lim.x, limy = F.lim.y;
+        float rx = t.x / t.z, ry = t.y / t.z;
+        float txz = clamp(rx, -limx, limx) * t.z, tyz = clamp(ry, -limy, limy) * t.z;
+        float mulx = (rx < -limx || rx > limx) ? 0.0 : 1.0;
+        float muly = (ry < -limy || ry > limy) ? 0.0 : 1.0;
+        float iz = 1.0 / t.z, iz2 = iz * iz, iz3 = iz2 * iz;
+        float Jm[2][3];
+        Jm[0][0] = fx * iz; Jm[0][1] = 0.0; Jm[0][2] = -fx * txz * iz2;
+        Jm[1][0] = 0.0; Jm[1][1] = fy * iz; Jm[1][2] = -fy * tyz * iz2;
+        float Tm[2][3], TS[2][3];
+        for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) Tm[r][c] = Jm[r][0] * Wm[0][c] + Jm[r][1] * Wm[1][c] + Jm[r][2] * Wm[2][c];
+        for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) TS[r][c] = Tm[r][0] * Sg[0][c] + Tm[r][1] * Sg[1][c] + Tm[r][2] * Sg[2][c];
+        float c00 = 0.0, c01 = 0.0, c11 = 0.0;
+        for (int k = 0; k < 3; k++) { c00 += TS[0][k] * Tm[0][k]; c01 += TS[0][k] * Tm[1][k]; c11 += TS[1][k] * Tm[1][k]; }
+        float dil = F.lim.z;
+        float a = c00 + dil, b = c01, c = c11 + dil;
+        float det = a * c - b * b;
+        float det0 = c00 * c11 - c01 * c01;
+        float idet = 1.0 / det;
+        float Ca = c * idet, Cb = -b * idet, Cc = a * idet;   // conic
+        bool aa = (F.flags & 1u) != 0u;
+        float comp = aa ? sqrt(max(det0, 0.0) * idet) : 1.0;
+        // opacity (rendered opacity = sigmoid(logit) · comp)
+        gop += dop * comp * o * (1.0 - o);
+        // conic → dilated covariance: dΣ' = −C·G·C, G the symmetric gradient of the conic matrix
+        float G00 = dconic.x, G01 = 0.5 * dconic.y, G11 = dconic.z;
+        float P00 = Ca * G00 + Cb * G01, P01 = Ca * G01 + Cb * G11;
+        float P10 = Cb * G00 + Cc * G01, P11 = Cb * G01 + Cc * G11;
+        float D00 = -(P00 * Ca + P01 * Cb);
+        float D01 = -(P00 * Cb + P01 * Cc);
+        float D11 = -(P10 * Cb + P11 * Cc);
+        float dc00 = D00, dc11 = D11, dc01 = 2.0 * D01;   // scalar (tied) off-diagonal
+        if (aa && comp > 1e-8) {
+            // comp = sqrt(det0 / det)
+            float k = dop * o * 0.5 / comp;
+            float idet2 = idet * idet;
+            dc00 += k * (c11 * det - det0 * c) * idet2;
+            dc11 += k * (c00 * det - det0 * a) * idet2;
+            dc01 += k * (-2.0 * c01 * det + det0 * 2.0 * b) * idet2;
+        }
+        float G2[2][2];
+        G2[0][0] = dc00; G2[0][1] = 0.5 * dc01; G2[1][0] = 0.5 * dc01; G2[1][1] = dc11;
+        // Σ2 = T Σ3 Tᵀ:  dΣ3 = Tᵀ G2 T,  dT = 2 G2 T Σ3
+        float dS3[3][3];
+        for (int r = 0; r < 3; r++) for (int cc = 0; cc < 3; cc++) {
+            float v = 0.0;
+            for (int u = 0; u < 2; u++) for (int w = 0; w < 2; w++) v += Tm[u][r] * G2[u][w] * Tm[w][cc];
+            dS3[r][cc] = v;
+        }
+        float dT[2][3];
+        for (int r = 0; r < 2; r++) for (int cc = 0; cc < 3; cc++) dT[r][cc] = 2.0 * (G2[r][0] * TS[0][cc] + G2[r][1] * TS[1][cc]);
+        // T = J W:  dJ = dT Wᵀ
+        float dJ[2][3];
+        for (int r = 0; r < 2; r++) for (int cc = 0; cc < 3; cc++) dJ[r][cc] = dT[r][0] * Wm[cc][0] + dT[r][1] * Wm[cc][1] + dT[r][2] * Wm[cc][2];
+        vec3 dt = vec3(0.0);
+        // J(t) (same convention as the Mac and gsplat: clamped x/z, y/z enter J's last column)
+        dt.x += -fx * iz2 * dJ[0][2] * mulx;
+        dt.y += -fy * iz2 * dJ[1][2] * muly;
+        dt.z += -fx * iz2 * dJ[0][0] + 2.0 * fx * txz * iz3 * dJ[0][2] - fy * iz2 * dJ[1][1] + 2.0 * fy * tyz * iz3 * dJ[1][2];
+        // mean2D
+        dt.x += fx * iz * dmean.x;
+        dt.y += fy * iz * dmean.y;
+        dt.z += -fx * t.x * iz2 * dmean.x - fy * t.y * iz2 * dmean.y;
+        // depth
+        dt.z += ddep;
+        // t = W p + t0  →  dp = Wᵀ dt
+        for (int k = 0; k < 3; k++) gp[k] = Wm[0][k] * dt.x + Wm[1][k] * dt.y + Wm[2][k] * dt.z;
+        // Σ3 = M Mᵀ → dM = (dΣ3 + dΣ3ᵀ) M;  M = R diag(s)
+        float dM[3][3];
+        for (int r = 0; r < 3; r++) for (int cc = 0; cc < 3; cc++) {
+            float v = 0.0;
+            for (int k = 0; k < 3; k++) v += (dS3[r][k] + dS3[k][r]) * Mm[k][cc];
+            dM[r][cc] = v;
+        }
+        float dR[3][3];
+        vec3 ds = vec3(0.0);
+        for (int r = 0; r < 3; r++) for (int cc = 0; cc < 3; cc++) {
+            dR[r][cc] = dM[r][cc] * s[cc];
+            ds[cc] += dM[r][cc] * Rm[r][cc];
+        }
+        gls += ds * s;
+        float w = q.x, x = q.y, y = q.z, z = q.w;
+        float gw = 2.0 * (z * (dR[1][0] - dR[0][1]) + y * (dR[0][2] - dR[2][0]) + x * (dR[2][1] - dR[1][2]));
+        float gx = 2.0 * (y * (dR[1][0] + dR[0][1]) + z * (dR[2][0] + dR[0][2]) + w * (dR[2][1] - dR[1][2])) - 4.0 * x * (dR[1][1] + dR[2][2]);
+        float gy = 2.0 * (x * (dR[1][0] + dR[0][1]) + w * (dR[0][2] - dR[2][0]) + z * (dR[2][1] + dR[1][2])) - 4.0 * y * (dR[0][0] + dR[2][2]);
+        float gz = 2.0 * (w * (dR[1][0] - dR[0][1]) + x * (dR[2][0] + dR[0][2]) + y * (dR[2][1] + dR[1][2])) - 4.0 * z * (dR[0][0] + dR[1][1]);
+        vec4 gqn = vec4(gw, gx, gy, gz);
+        gq = (gqn - q * dot(q, gqn)) / qlen;
+        // SH colour: col = max(Σ b_k(dir) sh_k + 0.5, 0), dir = normalize(p − campos)
+        int deg = int(F.shDegree);
+        float bsh[16];
+        vec3 dv = p - F.campos.xyz;
+        float dlen = length(dv);
+        vec3 dir = dv / dlen;
+        sh_basis(dir, deg, bsh);
+        vec3 raw = vec3(0.0);
+        int nc = (deg + 1) * (deg + 1);
+        for (int k = 0; k < nc; k++) raw += bsh[k] * vec3(sh[i * 48 + k * 3], sh[i * 48 + k * 3 + 1], sh[i * 48 + k * 3 + 2]);
+        raw += 0.5;
+        vec3 dc = vec3(raw.x > 0.0 ? dcol.x : 0.0, raw.y > 0.0 ? dcol.y : 0.0, raw.z > 0.0 ? dcol.z : 0.0);
+        for (int k = 0; k < nc; k++) {
+            gSH[i * 48 + k * 3] = bsh[k] * dc.x; gSH[i * 48 + k * 3 + 1] = bsh[k] * dc.y; gSH[i * 48 + k * 3 + 2] = bsh[k] * dc.z;
+        }
+        if (deg > 0) {
+            vec3 gb[16];
+            sh_basis_grad(dir, deg, gb);
+            vec3 gdir = vec3(0.0);
+            for (int k = 1; k < nc; k++) {
+                float cd = dot(vec3(sh[i * 48 + k * 3], sh[i * 48 + k * 3 + 1], sh[i * 48 + k * 3 + 2]), dc);
+                gdir += cd * gb[k];
+            }
+            gp += (gdir - dir * dot(dir, gdir)) / dlen;
+        }
+    }
+    gPos[i * 3] = gp.x; gPos[i * 3 + 1] = gp.y; gPos[i * 3 + 2] = gp.z;
+    gScale[i * 3] = gls.x; gScale[i * 3 + 1] = gls.y; gScale[i * 3 + 2] = gls.z;
+    gQuat[i * 4] = gq.x; gQuat[i * 4 + 1] = gq.y; gQuat[i * 4 + 2] = gq.z; gQuat[i * 4 + 3] = gq.w;
+    gOp[i] = gop;
+}

@@ -1,0 +1,38 @@
+#version 460
+// Exclusive prefix sum (uint), level 1: each workgroup scans 1024 values in place and writes its total
+// to blockSums. Shared-memory Hillis–Steele scan over the 256 per-thread sums (no subgroup assumptions).
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer DataBuf { uint data[]; };
+layout(std430, binding = 1) writeonly buffer SumBuf { uint blockSums[]; };
+layout(push_constant) uniform PC { uint n; uint writeSums; } pc;
+shared uint s[2][256];
+void main() {
+    uint lid = gl_LocalInvocationID.x, b = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (b * 1024u >= pc.n) return;   // whole workgroup: spare groups of a 2D-folded dispatch
+    uint base = b * 1024u + lid * 4u;
+    uint v[4];
+    uint tot = 0u;
+    for (uint k = 0u; k < 4u; k++) {
+        uint idx = base + k;
+        v[k] = idx < pc.n ? data[idx] : 0u;
+        tot += v[k];
+    }
+    uint src = 0u;
+    s[0][lid] = tot;
+    barrier();
+    for (uint off = 1u; off < 256u; off <<= 1u) {
+        uint x = s[src][lid];
+        if (lid >= off) x += s[src][lid - off];
+        s[1u - src][lid] = x;
+        src = 1u - src;
+        barrier();
+    }
+    uint incl = s[src][lid];
+    uint run = incl - tot;   // exclusive prefix of this thread's 4 values
+    for (uint k = 0u; k < 4u; k++) {
+        uint idx = base + k;
+        if (idx < pc.n) data[idx] = run;
+        run += v[k];
+    }
+    if (lid == 255u && pc.writeSums != 0u) blockSums[b] = incl;
+}
