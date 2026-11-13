@@ -113,7 +113,10 @@ def _windows_peak_working_set() -> float:
         pmc.cb = ctypes.sizeof(PMC)
         k32 = ctypes.windll.kernel32
         k32.GetCurrentProcess.restype = wintypes.HANDLE
-        if ctypes.windll.psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+        gpmi = ctypes.windll.psapi.GetProcessMemoryInfo
+        gpmi.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+        gpmi.restype = wintypes.BOOL
+        if gpmi(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
             return float(pmc.PeakWorkingSetSize)
     except Exception:  # noqa: BLE001
         pass

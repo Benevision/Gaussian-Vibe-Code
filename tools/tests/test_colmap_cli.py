@@ -1,6 +1,7 @@
 """Orchestration of the COLMAP CLI path (colmap_sift and feature backends + `colmap mapper`) with a fake colmap."""
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -17,14 +18,18 @@ TOOLS = TESTS.parent
 
 @pytest.fixture
 def fake_colmap(tmp_path, monkeypatch, synth_small):
-    script = tmp_path / "bin" / "colmap"
+    script = tmp_path / "bin" / ("colmap.cmd" if sys.platform == "win32" else "colmap")
     script.parent.mkdir()
-    script.write_text(f'#!/bin/sh\nPYTHONPATH="{TOOLS}" exec "{sys.executable}" "{TESTS / "fake_colmap.py"}" "$@"\n')
-    script.chmod(0o755)
+    if sys.platform == "win32":
+        script.write_text(f'@set "PYTHONPATH={TOOLS}"\r\n@"{sys.executable}" "{TESTS / "fake_colmap.py"}" %*\r\n')
+    else:
+        script.write_text(f'#!/bin/sh\nPYTHONPATH="{TOOLS}" exec "{sys.executable}" "{TESTS / "fake_colmap.py"}" "$@"\n')
+        script.chmod(0o755)
     log = tmp_path / "colmap_calls.jsonl"
     monkeypatch.setenv("SPLATPREP_COLMAP", str(script))
     monkeypatch.setenv("SPLATPREP_GLOMAP", str(tmp_path / "missing_glomap"))
-    monkeypatch.setenv("PATH", str(tmp_path / "bin") + ":/usr/bin:/bin")  # hide any real glomap
+    system = os.environ.get("SystemRoot", r"C:\Windows") + r"\System32" if sys.platform == "win32" else "/usr/bin:/bin"
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + system)  # hide any real glomap
     monkeypatch.setenv("FAKE_COLMAP_LOG", str(log))
     monkeypatch.setenv("FAKE_COLMAP_GT", str(synth_small / "dataset.json"))
     mapper_mod.colmap_commands.cache_clear()
