@@ -253,7 +253,8 @@ def unpublished_profiles(opener: Callable[..., Any] = None, local_dir: Optional[
     """Ids of profiles whose gsplat wheel is not (yet) downloadable — skipped by ``choose_profile``."""
     out = [p.id for p in GPU_PROFILES if gsplat_wheel_published(p, opener, local_dir=local_dir) is not True]
     if sys.platform == "win32":
-        out += [pid for pid in LINUX_ONLY_PROFILES if pid not in out]
+        out += [p.id for p in GPU_PROFILES if p.id in LINUX_ONLY_PROFILES and p.id not in out
+                and local_gsplat_wheel(p, local_dir) is None]   # a wheel built on this PC still counts
     return out
 
 

@@ -116,6 +116,10 @@ def make_python_tarball(tmp_path) -> Path:
         link = tarfile.TarInfo("python/bin/python3")
         link.type, link.linkname = tarfile.SYMTYPE, "python3.10"
         tf.addfile(link)
+        if sys.platform == "win32":   # python-build-standalone for Windows: python/python.exe
+            exe = tarfile.TarInfo("python/python.exe")
+            exe.size = len(data)
+            tf.addfile(exe, io.BytesIO(data))
         lib = b"# stdlib"
         li = tarfile.TarInfo("python/lib/python3.10/os.py")
         li.size = len(lib)

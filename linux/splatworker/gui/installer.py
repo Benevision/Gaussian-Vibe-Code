@@ -383,7 +383,8 @@ class Installer:
         os.replace(root, target_dir)
         shutil.rmtree(staging, ignore_errors=True)
         if not self.paths.python_exe.exists():
-            raise InstallError("The Python download is incomplete", "bin/python3 missing", "Press Retry.")
+            raise InstallError("The Python download is incomplete",
+                               f"{self.paths.python_exe.relative_to(target_dir)} missing", "Press Retry.")
         marker.write_text(step.sha256 or "")
         archive.unlink(missing_ok=True)
         self._log(f"Python unpacked to {target_dir}")

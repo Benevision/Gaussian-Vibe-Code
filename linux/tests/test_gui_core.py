@@ -16,7 +16,7 @@ from splatworker.gui.nvidia import (DriverInfo, GpuInfo, GpuMonitor, detect, fla
                                     kernel_driver_version, parse_compute_cap, parse_cuda_version,
                                     parse_smi_header, parse_smi_query)
 from splatworker.gui.paths import AppPaths, in_flatpak
-from splatworker.gui.runtime_plan import (CPU_PROFILE_ID, GPU_PROFILES, PYTHON_RUNTIME, TRAIN_EXTRA_DEPS,
+from splatworker.gui.runtime_plan import (CPU_PROFILE_ID, GPU_PROFILES, PYTHON_RUNTIME, python_runtime, TRAIN_EXTRA_DEPS,
                                           WORKER_DEPS, build_plan, choose_profile, verify_problems)
 from splatworker.gui.settings import AppSettings, TokenStore
 
@@ -291,7 +291,7 @@ def test_build_plan_gpu(paths, tmp_path):
     lg = [s for s in plan.steps if s.id == "lightglue"][0].argv
     assert "torch==2.4.1" in lg
     by = {s.id: s for s in plan.steps}
-    assert by["python"].url == PYTHON_RUNTIME.url and len(by["python"].sha256) == 64
+    assert by["python"].url == python_runtime().url and len(by["python"].sha256) == 64
     assert by["venv"].argv[:3] == [str(paths.python_exe), "-m", "venv"]
     torch = by["torch"].argv
     # built in the staging dir and swapped in after verification
