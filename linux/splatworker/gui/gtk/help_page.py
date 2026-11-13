@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from gi.repository import Adw, Gtk
 
 from .common import action_row, copy_text, icon_button, label
@@ -85,8 +87,10 @@ class HelpPage(Gtk.ScrolledWindow):
                         "train from elsewhere.")
         g6 = Adw.PreferencesGroup(
             title="Running without the window",
-            description="Servers without a desktop can run the same worker from a terminal or systemd unit: "
-                        "flatpak run com.example.SplatWorker --headless")
+            description=("PCs without a desktop session can run the same worker from a terminal: "
+                         "SplatWork.exe --headless" if sys.platform == "win32" else
+                         "Servers without a desktop can run the same worker from a terminal or systemd unit: "
+                         "flatpak run com.example.SplatWorker --headless"))
         for g in (g1, g2, g3, g4, g5, g6):
             self.page.add(g)
             self._groups.append(g)

@@ -882,9 +882,13 @@ class ViewerPage(Gtk.Box):
         self.load(path, keep_camera=self.area.cloud is not None, live=True)
 
     def _gl_error(self, msg: str) -> bool:
-        self.error_page.set_description(
-            f"{msg}\n\nThe viewer needs OpenGL 4.3. On the PC this comes from the NVIDIA driver's Flatpak extension "
-            "(org.freedesktop.Platform.GL.nvidia-…): run “flatpak update” and restart the app.")
+        import sys
+
+        hint = ("Install the latest graphics driver from NVIDIA, AMD or Intel (Windows Update's driver may lack "
+                "OpenGL) and restart SplatWork." if sys.platform == "win32" else
+                "On the PC this comes from the NVIDIA driver's Flatpak extension "
+                "(org.freedesktop.Platform.GL.nvidia-…): run “flatpak update” and restart the app.")
+        self.error_page.set_description(f"{msg}\n\nThe viewer needs OpenGL 4.3. {hint}")
         self.stack.set_visible_child_name("error")
         return False
 

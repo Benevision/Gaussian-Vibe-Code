@@ -260,20 +260,22 @@ def test_real_plan_commands_are_well_formed(paths):
 def test_installer_swaps_in_only_after_verify(tmp_path, paths):
     tarball = make_python_tarball(tmp_path)
     live, staging = paths.venv_dir, paths.venv_staging_dir
-    (live / "bin").mkdir(parents=True)
-    (live / "bin" / "python").write_text("old")
-    write_new = f"import pathlib; p = pathlib.Path({str(staging)!r}) / 'bin'; p.mkdir(parents=True, exist_ok=True); (p / 'python').write_text('new')"
+    rel = paths.venv_python.relative_to(live)          # bin/python, or Scripts\\python.exe on Windows
+    (live / rel).parent.mkdir(parents=True)
+    (live / rel).write_text("old")
+    write_new = (f"import pathlib; p = pathlib.Path({str(staging / rel)!r}); p.parent.mkdir(parents=True, exist_ok=True); "
+                 "p.write_text('new')")
     plan = make_plan(tarball, [py_step("torch", write_new, None), py_step("verify", VERIFY_OK, None, "verify")])
     plan.venv_dir = staging
     # a failing verify leaves the working runtime alone
     bad = make_plan(tarball, [py_step("torch", write_new, None), py_step("verify", "print('nothing')", None, "verify")])
     bad.venv_dir = staging
     r = Installer(bad, paths).run()
-    assert not r.ok and (live / "bin" / "python").read_text() == "old"
+    assert not r.ok and (live / rel).read_text() == "old"
     assert "has not been changed" in r.error.hint
     r = Installer(plan, paths).run()
     assert r.ok, r.error
-    assert (live / "bin" / "python").read_text() == "new"
+    assert (live / rel).read_text() == "new"
     assert not staging.exists() and not live.with_name("venv.old").exists()
 
 

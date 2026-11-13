@@ -64,6 +64,8 @@ jobs:
             mingw-w64-ucrt-x86_64-python-scipy
             mingw-w64-ucrt-x86_64-mesa
       - name: Install Python packages
+        env:
+          SKIP_CYTHON: "1"   # zeroconf as pure Python (MSYS2 has no compiler set up here)
         run: python -m pip install --break-system-packages fastapi uvicorn zeroconf httpx qrcode
       - name: Versions
         run: |
