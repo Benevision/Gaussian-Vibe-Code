@@ -65,7 +65,7 @@ struct NewProjectSheet: View {
             prep.reset()   // a new project starts on its settings, not on the last run's result
             source = model.newProjectSource
             step = model.newProjectStartStep; model.newProjectStartStep = 0
-            if let s = source { projectName = defaultName(s) }
+            if let s = source { projectName = defaultName(s); Self.applySourceDefaults(s, to: &options) }
             if mode == .advanced { holdout = true }
             if case .captureBundle = source { solverKind = .fromCapture }
             ProcessingDevicePicker.applyRemembered(to: &options)
@@ -245,6 +245,13 @@ struct NewProjectSheet: View {
     @ViewBuilder private var camerasPage: some View {
         Text("Cameras & masks").font(.title2.bold())
         Text("First, the position of every camera is recovered (structure-from-motion). Masks optionally tell training to ignore moving people, sky or background.").foregroundStyle(.secondary)
+        PanelSection(title: "Processing device", systemImage: "cpu") {
+            ProcessingDevicePicker(options: $options)
+            if options.compute != .thisMac, isVideoSource {
+                SettingRow(id: "net.videoOnWorker") { Toggle("", isOn: $options.videoOnWorker).labelsHidden() }
+            }
+            missingWorkerModelsNotice
+        }
         PanelSection(title: "Camera solving", systemImage: "camera.metering.center.weighted") {
             SettingRow(id: "sfm.solver") {
                 Picker("", selection: $solverKind) {
@@ -361,17 +368,10 @@ struct NewProjectSheet: View {
     @ViewBuilder private var trainingPage: some View {
         Text("Training").font(.title2.bold())
         Text("You can change all of this later and retrain from the same dataset.").foregroundStyle(.secondary)
-        PanelSection(title: "Dataset processing", systemImage: "cpu") {
-            ProcessingDevicePicker(options: $options)
-        }
         Toggle("Start training as soon as the dataset is ready", isOn: $trainAfter)
         if trainAfter {
             TrainingPresetPicker(session: model.training)
             ComputePicker(session: model.training, prepPlacement: .constant(.thisMac))
-            missingWorkerModelsNotice
-            if options.compute != .thisMac, isVideoSource {
-                SettingRow(id: "net.videoOnWorker") { Toggle("", isOn: $options.videoOnWorker).labelsHidden() }
-            }
             DisclosureGroup(isExpanded: $showTrainingDetails) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Changing any value switches the preset to Custom. Every setting has an ⓘ explanation.")
@@ -390,6 +390,7 @@ struct NewProjectSheet: View {
                 Text("• Source: \(source.map(kindName) ?? "–") — \(source?.displayName ?? "")")
                 Text("• Cameras: \(solverDescription)")
                 Text("• Masks: \(maskKind == .none ? "none" : maskKind.rawValue)")
+                Text("• Processing on: \(processingDeviceName)")
                 if trainAfter { Text("• Training: \(model.training.preset.title), \(model.training.config.iterations) steps, up to \(formatCount(model.training.config.maxGaussians)) splats on \(placementName)") }
                 Text("• Project folder: \(projectParent.appendingPathComponent(projectName).path)").lineLimit(1).truncationMode(.middle)
             }
@@ -415,6 +416,10 @@ struct NewProjectSheet: View {
         case .learned: return "\(featureChoices.first { $0.0 == featureModel }?.1 ?? featureModel), \(mapper)"
         case .fromCapture: return "poses from source"
         }
+    }
+    private var processingDeviceName: String {
+        guard options.compute != .thisMac, let id = options.remoteWorkerId else { return "this Mac" }
+        return WorkerBrowser.shared.workers.first { $0.id == id }?.name ?? "a worker"
     }
     private var placementName: String {
         switch model.training.placement { case .thisMac: return "this Mac"; case .remote: return "the Linux worker"; case .both: return "this Mac + worker" }
@@ -521,6 +526,11 @@ struct NewProjectSheet: View {
         // Easy: every 25th photo (4 %), enough for a trustworthy trend at almost no cost; Advanced: every 8th
         // (the research-paper convention, a more precise number).
         o.holdoutInterval = holdout ? (mode == .advanced ? 8 : 25) : nil
+        // A preset that trains at a higher resolution than the photos are stored at (Maximum: 2400 px) gets
+        // photos stored at that resolution, unless the stored size was changed by hand.
+        if trainAfter, let stored = o.maxImageSize, stored == PrepOptions().maxImageSize, model.training.config.maxImageSize > stored {
+            o.maxImageSize = model.training.config.maxImageSize
+        }
         switch solverKind {
         case .automatic: o.poseSolver = .automatic
         case .objectCapture: o.poseSolver = .objectCapture
@@ -572,13 +582,18 @@ struct NewProjectSheet: View {
         step = 1
     }
 
+    /// Per-source defaults, the same whichever way the source was chosen (welcome tiles, Open, drop, Change…):
+    /// outdoor-capable sources find the sky (learned skybox); captures, COLMAP and Nerfstudio don't.
+    static func applySourceDefaults(_ s: SourceDescription, to o: inout PrepOptions) {
+        switch s { case .video, .video360, .photos, .photoFiles, .photos360: o.masking.sky = true; default: o.masking.sky = false }
+    }
+
     private func choose(dir: Bool, files: Bool = false, make: @escaping (URL) -> SourceDescription) {
         let p = NSOpenPanel()
         p.canChooseDirectories = dir; p.canChooseFiles = !dir || files
         if p.runModal() == .OK, let u = p.url {
             source = make(u)
-            // outdoor-capable sources: find the sky by default (skybox); iPhone object captures don't need it
-            switch source! { case .video, .video360, .photos, .photoFiles, .photos360: options.masking.sky = true; default: options.masking.sky = false }
+            Self.applySourceDefaults(source!, to: &options)
             if projectName.isEmpty { projectName = defaultName(source!) }
         }
     }

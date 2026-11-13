@@ -76,7 +76,7 @@ class LocalPipeline:
                  train: Optional[bool] = None, priority: int = 1):
         self.client = client
         self.project = project
-        self.o = options
+        self.o = options.with_storage_for_preset()
         self.emit = on_event
         self.train_enabled = options.auto_train if train is None else train
         self.priority = priority

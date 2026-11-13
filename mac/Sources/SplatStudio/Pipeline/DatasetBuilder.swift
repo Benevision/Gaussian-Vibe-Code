@@ -353,8 +353,8 @@ enum DatasetBuilder {
                                         worker: o.compute != .thisMac ? worker : nil, progress: maskP)
         }
         if o.masking.sky {   // stacked on top of the masks above: a separate layer for the skybox
-            try await FrameMasker.applySky(to: &frames, runner: SplatPrepRunner(),
-                                           worker: o.compute != .thisMac ? worker : nil, progress: maskP)
+            try await skyOrSkip(maskP) { try await FrameMasker.applySky(to: &frames, runner: SplatPrepRunner(),
+                                                                worker: o.compute != .thisMac ? worker : nil, progress: maskP) }
         }
         try cp.save(frames, as: .masks, fingerprint: fp[.masks]!, summary: maskSummary(o))
         }
@@ -376,6 +376,16 @@ enum DatasetBuilder {
         try ds.save()
         try cp.save(ds, as: .poses, fingerprint: fp[.poses]!, summary: "\(ds.manifest.cameras.count) of \(frames.frames.count) frames placed")
         return finish(ds, progress)
+    }
+
+    /// Finding the sky needs the Models pack or a worker. Without either it is skipped with a note instead of
+    /// failing the whole run: training then simply has no skybox. (Redo from Masks once the models are there.)
+    static func skyOrSkip(_ progress: PipelineProgressHandler? = nil, _ body: () async throws -> Void) async throws {
+        do { try await body() } catch let e as CancellationError { throw e } catch {
+            if Task.isCancelled { throw CancellationError() }
+            progress?(PipelineProgress(stage: "Finding the sky", fraction: -1,
+                message: "skipped: the sky model couldn't run (\(error.localizedDescription)). Install the Models pack or use a worker, then Redo from Masks for a learned sky."))
+        }
     }
 
     /// "no masks" / "people, sky" for the project page.
@@ -469,7 +479,7 @@ enum DatasetBuilder {
             try await FrameMasker.apply(o.masking, to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress)
         }
         if o.masking.sky {
-            try await FrameMasker.applySky(to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress)
+            try await skyOrSkip(progress) { try await FrameMasker.applySky(to: &frames, worker: o.compute != .thisMac ? worker : nil, progress: progress) }
         }
         var out = ds
         let masks = Dictionary(frames.frames.map { ($0.image, ($0.mask, $0.sky)) }, uniquingKeysWith: { a, _ in a })

@@ -474,12 +474,12 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 
 | Setting | Default | Range | Mode |
 |---|---|---|---|
-| [Maximum image size](#maximum-image-size) | 3200 px | 800–8192 px | Advanced |
-| [Frames per second to extract](#frames-per-second-to-extract) | 3 fps | 0.5–30 | Easy |
+| [Maximum image size](#maximum-image-size) | 1600 px | 800–8192 px | Advanced |
+| [Frames per second to extract](#frames-per-second-to-extract) | 2 fps | 0.5–30 | Easy |
 | [Target frame count](#target-frame-count) | 0 (use fps) | 0–3000 | Easy |
 | [Pick sharpest frame](#pick-sharpest-frame) | On | – | Easy |
 | [Reject blurry photos](#reject-blurry-photos) | 0.35 | 0–0.9 | Advanced |
-| [360°: views per frame](#360-views-per-frame) | 8 | 4–20 | Easy |
+| [360°: views per frame](#360-views-per-frame) | 8 around (16 views) | 3–16 | Easy |
 | [360°: view field of view](#360-view-field-of-view) | 90° | 60–120° | Advanced |
 | [360°: drop the floor view](#360-drop-the-floor-view) | On | – | Easy |
 | [Stereo layout](#stereo-layout) | Automatic | – | Easy |
@@ -494,14 +494,15 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 
 | | |
 |---|---|
-| **Default** | 3200 px |
+| **Default** | 1600 px |
 | **Range** | 800–8192 px |
 | **Mode** | Advanced |
 | **ID** | `source.maxImageSize` |
 
 **How it works.** Source photos are downscaled once when the dataset is built. Bigger keeps more detail for later high-quality training but takes more disk and longer preparation.
 
-- Training has its own (smaller or equal) limit.
+- Training has its own (smaller or equal) limit, so training can never use more detail than is stored here.
+- Choosing the Maximum preset (2400 px) in New Project stores photos at 2400 px unless you changed this.
 
 ### Frames per second to extract
 
@@ -509,7 +510,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 
 | | |
 |---|---|
-| **Default** | 3 fps |
+| **Default** | 2 fps |
 | **Range** | 0.5–30 |
 | **Mode** | Easy |
 | **ID** | `source.videoFPS` |
@@ -574,14 +575,15 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 
 | | |
 |---|---|
-| **Default** | 8 |
-| **Range** | 4–20 |
+| **Default** | 8 around (16 views) |
+| **Range** | 3–16 |
 | **Mode** | Easy |
 | **ID** | `source.360views` |
 
 **How it works.** 360° frames can't be used directly by the trainer (pinhole cameras only), so each frame is reprojected into several virtual cameras looking in different directions.
 
-- 8 views (a ring of 6 + up/down) covers the sphere; 4–6 is enough when walking through a space.
+- This sets the ring around the horizon; a ring of 4 looking 35° up and 4 looking 35° down is added, so the default 8 gives 16 views per frame.
+- 4–6 around is enough when walking through a space.
 - Each virtual view becomes a training image, so this multiplies dataset size.
 
 ### 360°: view field of view
@@ -905,6 +907,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 - With this on, a sky model (SegFormer, or a simple bright-and-smooth-at-the-top heuristic when it isn't installed) marks the sky in each photo as a separate layer, stacked on any other masks.
 - Camera solving ignores it, and training draws those pixels with a learned skybox — a panorama behind the scene — while keeping splats out of them.
 - On by default for videos, 360° footage and photo folders; indoor scenes simply have no sky.
+- Without the Models pack or a worker the sky model can't run on this Mac; the step is then skipped with a note instead of stopping the run (Redo from Masks once it can run).
 
 ### Mask fixed parts of the frame
 

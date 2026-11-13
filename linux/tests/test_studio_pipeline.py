@@ -398,3 +398,13 @@ def test_static_regions_stage(server, tmp_path):
     assert all("mask" in c for c in cams)
     m = np.asarray(Image.open(proj.dataset_dir / cams[0]["mask"]))
     assert m[36, 15] == 0 and m[10, 70] == 255
+
+
+def test_maximum_preset_stores_photos_at_its_training_resolution():
+    from splatworker.studio.presets import ProjectOptions
+    o = ProjectOptions(name="P", source_kind="photos", source="/x", preset="ultra")
+    assert o.with_storage_for_preset().max_image_size == 2400
+    # a size changed by hand, another preset, or no training after processing: unchanged
+    assert ProjectOptions(name="P", source_kind="photos", source="/x", preset="ultra", max_image_size=3200).with_storage_for_preset().max_image_size == 3200
+    assert ProjectOptions(name="P", source_kind="photos", source="/x", preset="high").with_storage_for_preset().max_image_size == 1600
+    assert ProjectOptions(name="P", source_kind="photos", source="/x", preset="ultra", auto_train=False).with_storage_for_preset().max_image_size == 1600

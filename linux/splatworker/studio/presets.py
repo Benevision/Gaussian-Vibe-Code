@@ -141,6 +141,16 @@ class ProjectOptions:
         names = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in names})
 
+    def with_storage_for_preset(self) -> "ProjectOptions":
+        """A preset that trains at a higher resolution than photos are stored at by default (Maximum: 2400 px) gets
+        photos stored at that resolution, unless the stored size was changed from the default (as on the Mac)."""
+        o = dataclasses.replace(self)
+        default = ProjectOptions.__dataclass_fields__["max_image_size"].default
+        want = int(PRESETS.get(o.preset, {}).get("config", {}).get("maxImageSize", 0))
+        if o.auto_train and o.max_image_size == default and want > default:
+            o.max_image_size = want
+        return o
+
     # ---------------------------------------------------------------- requests
     def frames_request(self, video_name: str) -> Dict[str, Any]:
         vo: Dict[str, Any] = {"targetFPS": float(self.video_fps), "pickSharpest": bool(self.sharpest_in_window),

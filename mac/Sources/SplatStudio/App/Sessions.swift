@@ -96,10 +96,22 @@ final class TrainingSession {
     var preset: TrainingConfig.Preset = .balanced { didSet { if !customised { config = preset.config.withDepth(config.depthWeight) } } }
     var config = TrainingConfig.Preset.balanced.config
     var customised = false
-    var placement: ComputePlacement = .thisMac
-    var workerId: String? = nil
+    var placement: ComputePlacement = TrainingSession.savedDevices.placement { didSet { saveDevices() } }
+    var workerId: String? = TrainingSession.savedDevices.workerId { didSet { saveDevices() } }
     /// Devices ticked for block-parallel training ("local" = this Mac, else worker ids); nil = every online device.
-    var deviceIds: Set<String>? = nil
+    var deviceIds: Set<String>? = TrainingSession.savedDevices.deviceIds.map(Set.init) { didSet { saveDevices() } }
+
+    /// The training devices you ticked last, kept across launches (a worker that is offline just isn't used).
+    private struct SavedDevices: Codable { var placement: ComputePlacement = .thisMac; var workerId: String?; var deviceIds: [String]? }
+    private static let devicesKey = "training.devices"
+    private static var savedDevices: SavedDevices {
+        guard let d = UserDefaults.standard.data(forKey: devicesKey), let v = try? JSONDecoder().decode(SavedDevices.self, from: d) else { return SavedDevices() }
+        return v
+    }
+    private func saveDevices() {
+        let v = SavedDevices(placement: placement, workerId: workerId, deviceIds: deviceIds.map { Array($0).sorted() })
+        if let d = try? JSONEncoder().encode(v) { UserDefaults.standard.set(d, forKey: Self.devicesKey) }
+    }
     var status = TrainerStatus()
     var remoteMessage: String? = nil
     var livePreview = true
