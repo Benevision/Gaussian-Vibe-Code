@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -174,6 +176,8 @@ void GpuSplat::exclusiveScan(Buffer& data, uint32_t count) {
     recordScan(data, count);
     ctx_.submitWait();
 }
+
+int GpuSplat::atomicProbe(uint32_t count) { return ctx_.probeFloatAtomics(count); }
 
 // ------------------------------------------------------------------ forward
 

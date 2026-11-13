@@ -36,6 +36,9 @@ public:
     // Standalone primitives (own submission), used by the tests.
     void sortPairs(Buffer& keys, Buffer& vals, uint32_t count, int bits);
     void exclusiveScan(Buffer& data, uint32_t count);
+    // Float-atomic probe (shaders/atomic_probe.comp) with `count` invocations: returns the number of wrong
+    // sums (0 = the selected atomic path adds correctly, per subgroup and contended per lane).
+    int atomicProbe(uint32_t count);
 
     template <class T> std::vector<T> read(const Buffer& b, size_t count) const {
         std::vector<T> v(count);

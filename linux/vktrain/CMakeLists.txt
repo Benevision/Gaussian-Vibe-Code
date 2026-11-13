@@ -19,8 +19,8 @@ find_package(Vulkan REQUIRED)
 find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
 
 set(KERNELS preprocess preprocess_bwd radix_hist radix_scatter scan_block scan_add gather_counts duplicate_keys
-            tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam)
-set(ATOMIC_KERNELS raster_bwd ssim_terms)
+            tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam atomic_probe)
+set(ATOMIC_KERNELS raster_bwd ssim_terms atomic_probe)
 
 set(SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
 file(MAKE_DIRECTORY ${SPV_DIR})

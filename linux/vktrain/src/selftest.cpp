@@ -200,6 +200,9 @@ void testPrimitives(Context& ctx, GpuSplat& gs, bool quick) {
         for (uint32_t i = 0; i < n; i++) { if (g[i] != run) scanErr++; run += v[i]; }
         ctx.destroy(b);
     }
+    double probe = 0;
+    for (uint32_t n : {1u, 255u, 4096u, 100003u}) probe += gs.atomicProbe(n);
+    addRow("float atomic add (probe)", "wrong sums", "-", probe, 0);
     addRow("radix sort (standalone)", "mismatches, n<=300k, 16/32 bit", "-", sortErr, 0);
     addRow("exclusive scan (standalone)", "mismatches, n<=1.1M", "-", scanErr, 0);
 }
@@ -613,27 +616,36 @@ int main(int argc, char** argv) {
     }
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::pair<std::string, ContextOptions::Atomics>> paths;
-    bool deviceHasNative = false;
+    bool deviceHasNative = false, nativeBroken = false;
     try {
         ContextOptions probe;
         probe.deviceIndex = device;
-        Context ctx(probe);
+        Context ctx(probe);   // auto mode: probes native float atomics
         deviceHasNative = ctx.info.floatAtomicAdd;
-        std::printf("device: %s (%s), Vulkan %u.%u, subgroup size %u, shaderBufferFloat32AtomicAdd %s, host-visible device memory %s\n",
+        nativeBroken = ctx.info.nativeAtomicsBroken;
+        std::printf("device: %s (%s), Vulkan %u.%u, subgroup size %u, shaderBufferFloat32AtomicAdd %s%s, host-visible device memory %s\n",
                     ctx.info.name.c_str(), ctx.info.driver.c_str(), VK_API_VERSION_MAJOR(ctx.info.apiVersion),
                     VK_API_VERSION_MINOR(ctx.info.apiVersion), ctx.info.subgroupSize, deviceHasNative ? "yes" : "no",
+                    nativeBroken ? " (but the probe got wrong sums: the trainer uses the CAS kernels)" : "",
                     ctx.info.hostVisibleDeviceMemory ? "yes" : "no");
     } catch (const std::exception& e) {
         std::fprintf(stderr, "vktrain-selftest: no usable Vulkan device: %s\n", e.what());
         return 3;
     }
-    if (path == "native" || ((path == "both" || path == "auto") && deviceHasNative)) paths.push_back({"native", ContextOptions::Atomics::Native});
-    if (path == "cas" || path == "both" || (path == "auto" && !deviceHasNative)) paths.push_back({"cas", ContextOptions::Atomics::Cas});
     if (path == "native" && !deviceHasNative) {
         std::fprintf(stderr, "vktrain-selftest: the device has no float atomic add; --path native is not possible\n");
         return 3;
     }
+    bool nativeUsable = deviceHasNative && !nativeBroken;
+    if (path == "native" || ((path == "both" || path == "auto") && nativeUsable)) paths.push_back({"native", ContextOptions::Atomics::Native});
+    if (path == "cas" || path == "both" || (path == "auto" && !nativeUsable)) paths.push_back({"cas", ContextOptions::Atomics::Cas});
     if (path == "both" && !deviceHasNative) std::printf("note: the device has no float atomic add: only the CAS path is tested\n");
+    if (path != "native" && path != "cas" && nativeBroken) {
+        std::printf("note: the driver advertises float atomic add but loses updates (probe); the native path is skipped\n"
+                    "      (force it with --path native). The trainer falls back to the CAS kernels on this driver.\n");
+        g_path = "native";
+        addRow("float atomic add (startup probe)", "driver advertises it, sums wrong", "-", 1, 0, true);
+    }
 
     std::vector<Case> cases = {
         {"A:n50,sh0,64x48", 50, 0, false, 64, 48, {0, 0, -4}, 0.0, 60, 60, 32, 24, {0, 0, 0}, 1},

@@ -31,6 +31,7 @@ struct DeviceInfo {
     bool subgroupOk = false;          // basic + vote + arithmetic in compute shaders
     bool floatAtomicAdd = false;      // shaderBufferFloat32AtomicAdd (VK_EXT_shader_atomic_float)
     bool hostVisibleDeviceMemory = false;
+    bool nativeAtomicsBroken = false;  // advertised, but the startup probe got wrong sums (auto mode fell back to CAS)
     VkDeviceSize maxStorageBufferRange = 0;
 };
 
@@ -67,6 +68,10 @@ public:
     void copy(const Buffer& src, Buffer& dst, VkDeviceSize bytes);
     void submitWait();
     bool recording() const { return recording_; }
+
+    // Runs shaders/atomic_probe.comp with `count` invocations on the current atomic path; returns the number
+    // of wrong sums (0 = correct, both one atomic per subgroup and contended per-lane atomics).
+    int probeFloatAtomics(uint32_t count);
 
 private:
     struct Pipeline {

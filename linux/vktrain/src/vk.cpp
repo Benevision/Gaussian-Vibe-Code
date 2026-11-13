@@ -1,6 +1,8 @@
 #include "vk.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "shaders.h"
@@ -175,6 +177,13 @@ Context::Context(const ContextOptions& opt) {
     uint32_t dt = memoryType(~0u, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     VkMemoryPropertyFlags f = memProps_.memoryTypes[dt].propertyFlags;
     info.hostVisibleDeviceMemory = (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // Trust but verify: some drivers advertise float atomic add and lose updates under contention (seen on
+    // Mesa lavapipe 25.0 / aarch64). In auto mode a failed probe falls back to the compare-and-swap kernels.
+    if (nativeAtomics && opt.atomics == ContextOptions::Atomics::Auto && probeFloatAtomics(100003) != 0) {
+        nativeAtomics = false;
+        info.nativeAtomicsBroken = true;
+    }
 }
 
 Context::~Context() {
@@ -399,6 +408,28 @@ void Context::copy(const Buffer& src, Buffer& dst, VkDeviceSize bytes) {
     VkBufferCopy region{0, 0, bytes};
     vkCmdCopyBuffer(cmd_, src.buf, dst.buf, 1, &region);
     barrier();
+}
+
+int Context::probeFloatAtomics(uint32_t count) {
+    Buffer b = createBuffer(8 * 4);
+    begin();
+    fill(b, 0);
+    uint32_t pc0[2] = {count, 0}, pc1[2] = {count, 1};
+    dispatch("atomic_probe", {&b}, pc0, 8, (count + 255) / 256);
+    dispatch("atomic_probe", {&b}, pc1, 8, (count + 255) / 256);
+    submitWait();
+    float v[8];
+    download(b, v, sizeof(v));
+    destroy(b);
+    int wrong = v[0] == float(count) ? 0 : 1;
+    for (uint32_t k = 0; k < 7; k++) {
+        uint32_t expect = count / 7 + (k < count % 7 ? 1 : 0);
+        if (v[1 + k] != float(expect)) wrong++;
+    }
+    if (wrong && std::getenv("VKTRAIN_DEBUG"))
+        std::fprintf(stderr, "atomic probe n=%u: subgroup sum %g, per-lane sums %g %g %g %g %g %g %g\n", count, v[0], v[1], v[2],
+                     v[3], v[4], v[5], v[6], v[7]);
+    return wrong;
 }
 
 void Context::submitWait() {
