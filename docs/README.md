@@ -22,6 +22,8 @@
 | Document | What's in it |
 |---|---|
 | [Contributing](../CONTRIBUTING.md) | Repository layout, building, tests, sending changes |
+| [Development status](dev/STATUS.md) | Versions, what is tested and how, known issues, next work, how to release |
+| [GPU support (AMD / Intel)](dev/GPU_SUPPORT.md) | Where the Linux app assumes NVIDIA today and the options for AMD and Intel |
 | [Linux studio notes](dev/LINUX_STUDIO.md) | How SplatWork for Linux's studio is built, feature parity with the Mac, manual GPU test plan |
 | [Security policy](../SECURITY.md) | Reporting vulnerabilities |
 | [Changelog](../CHANGELOG.md) | What changed in each release |
