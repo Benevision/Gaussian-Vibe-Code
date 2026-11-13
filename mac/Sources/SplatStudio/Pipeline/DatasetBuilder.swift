@@ -446,10 +446,13 @@ enum DatasetBuilder {
         }
         if choice == .automatic || choice == .fromCapture {
             if frames.frames.contains(where: { $0.cameraGroup != nil }) {
-                // Home video: learned features cope with soft, noisy SD frames, and the per-clip cameras need splatprep.
-                // "auto" matching = sequential within the footage plus retrieval pairs, which is what joins clips
-                // that show the same place.
-                choice = .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
+                // Home video. One clip with one lens setting: Object Capture — on the test tape's best clip it placed
+                // 72 of 75 restored frames in 31 s and trained to 19.56 dB held-out, against 18.89 dB for learned SfM
+                // (4 min) (docs/dev/VHS.md §3). Several clips or zoom settings need a camera per group, which only
+                // splatprep takes; "auto" matching adds the retrieval pairs that join clips of the same place.
+                let groups = Set(frames.frames.compactMap(\.cameraGroup))
+                choice = groups.count == 1 && ObjectCapturePoseSolver.isSupported ? .objectCapture
+                    : .splatprep(featureModelId: "superpoint_lightglue", matching: "auto", mapper: "auto")
             } else if frames.isMultiViewRig {
                 // 360° footage: Object Capture is built for photographing one object and placed only 1,041 of
                 // 9,824 views of a 360 walk-through. Learned SfM (on the worker when one is in use) handles it;
