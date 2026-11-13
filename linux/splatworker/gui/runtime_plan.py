@@ -144,10 +144,19 @@ class ProcessingGpuProfile:
     torchvision: str
     download_mb: int             # torch + its vendor libraries, approximate
     disk_mb: int
+    index_id: Optional[str] = None           # download.pytorch.org sub-index when it isn't the id
+    # Experimental training (AMD only): gsplat built for ROCm by .github/workflows/gsplat-rocm-wheel.yml, found
+    # on this --find-links page (the GitHub prerelease's asset list) as gsplat==<gsplat_requirement>.
+    gsplat_requirement: Optional[str] = None
+    gsplat_find_links: Optional[str] = None
 
     @property
     def torch_index(self) -> str:
-        return PYTORCH_INDEX + self.id
+        return PYTORCH_INDEX + (self.index_id or self.id)
+
+    @property
+    def trains(self) -> bool:
+        return self.gsplat_requirement is not None
 
 
 # PyTorch's own builds (download.pytorch.org/whl/rocm6.4 and /xpu). ROCm 6.4 rather than 6.3 because it is the
@@ -158,6 +167,12 @@ PROCESSING_GPU_PROFILES: List[ProcessingGpuProfile] = [
                          download_mb=4700, disk_mb=14000),
     ProcessingGpuProfile("xpu", "PyTorch 2.7 for Intel GPUs (XPU) · processing only", "intel", "2.7.1", "0.22.1",
                          download_mb=2000, disk_mb=5500),
+    # Never chosen automatically: the AMD training spike (docs/dev/GPU_SUPPORT.md, linux/flatpak/gsplat-rocm-pin.env).
+    ProcessingGpuProfile("rocm6.4-train", "PyTorch 2.8 for ROCm 6.4 + gsplat 1.5.3 for AMD (experimental training)",
+                         "amd", "2.8.0", "0.23.0", download_mb=4750, disk_mb=14100, index_id="rocm6.4",
+                         gsplat_requirement="gsplat==1.5.3+pt28rocm64",
+                         gsplat_find_links="https://github.com/Benevision/SplatWork/releases/expanded_assets/"
+                                           "gsplat-1.5.3-rocm6.4"),
 ]
 CPU_PROFILE_ID = "cpu"
 PROFILE_IDS = [p.id for p in GPU_PROFILES] + [p.id for p in PROCESSING_GPU_PROFILES] + [CPU_PROFILE_ID]
@@ -197,6 +212,23 @@ def gsplat_wheel_published(prof: GpuProfile, opener: Callable[..., Any] = None, 
     except Exception:
         return None
     want = f"gsplat-{prof.gsplat}+{prof.gsplat_index}"
+    return want in page or want.replace("+", "%2B") in page
+
+
+def rocm_gsplat_published(prof: "ProcessingGpuProfile", opener: Callable[..., Any] = None,
+                          timeout: float = 10) -> Optional[bool]:
+    """Is the experimental ROCm gsplat wheel on its prerelease page? None = couldn't tell (offline)."""
+    if not prof.trains:
+        return True
+    import urllib.request
+
+    opener = opener or urllib.request.urlopen
+    try:
+        with opener(prof.gsplat_find_links, timeout=timeout) as resp:
+            page = resp.read().decode("utf-8", "replace")
+    except Exception as e:
+        return False if getattr(e, "code", None) == 404 else None
+    want = prof.gsplat_requirement.replace("==", "-")
     return want in page or want.replace("+", "%2B") in page
 
 
@@ -245,6 +277,14 @@ def choose_profile(driver: DriverInfo, override: Optional[str] = None,
     if override is not None and override not in PROFILE_IDS:
         raise ValueError(f"unknown runtime profile {override!r} (choose from {PROFILE_IDS})")
     proc = processing_profile_by_id(override) if override else None
+    if proc is not None and proc.trains:
+        other = driver.other_gpu
+        warnings = ["Experimental: AMD's port of gsplat officially supports only Instinct accelerators; on Radeon "
+                    "cards it is untested. Run \"--headless gpu-check\" and a benchmark after setup, and report the "
+                    "results."]
+        if other is None or other.vendor != "amd" or not driver.kfd:
+            warnings.append("No AMD GPU with /dev/kfd was found; this runtime will not be able to train here.")
+        return ProfileChoice(proc.id, True, f"{proc.label} (chosen manually).", warnings)
     if proc is not None:
         return ProfileChoice(proc.id, False, f"{proc.label} (chosen manually).",
                              [] if driver.other_gpu is not None and driver.other_gpu.vendor == proc.vendor else
@@ -492,8 +532,24 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
             weight=4, parser="pip"))
         download += SPLATPREP_DOWNLOAD_MB
         disk += SPLATPREP_DISK_MB
+    if proc is not None and proc.trains:
+        steps.append(Step(
+            "torch", f"Downloading PyTorch {proc.torch} (ROCm)",
+            f"PyTorch {proc.torch} built for AMD GPUs (ROCm), including AMD's GPU libraries (about "
+            f"{proc.download_mb / 1000:.1f} GB). This is by far the largest download.", "command",
+            argv=pip_argv(py, paths, f"torch=={proc.torch}", index_url=proc.torch_index),
+            download_mb=proc.download_mb - 60, weight=55, parser="pip"))
+        steps.append(Step(
+            "gsplat", "Installing gsplat for AMD GPUs (experimental)",
+            "AMD's ROCm port of gsplat, compiled by SplatWork's build service (no compiler needed here).",
+            "command", argv=pip_argv(py, paths, proc.gsplat_requirement, *torch_pins(proc),
+                                     extra_index_url=proc.torch_index,
+                                     extra=["--find-links", proc.gsplat_find_links, "--only-binary", "gsplat"]),
+            download_mb=50, weight=3, parser="pip"))
+        download += proc.download_mb
+        disk += proc.disk_mb
     if with_lightglue:
-        if proc is not None:
+        if proc is not None and not proc.trains:
             steps.append(Step(
                 "torch", f"Downloading PyTorch {proc.torch} ({'ROCm' if proc.vendor == 'amd' else 'Intel XPU'})",
                 f"PyTorch {proc.torch} built for {'AMD GPUs (ROCm)' if proc.vendor == 'amd' else 'Intel GPUs'}, "
@@ -535,7 +591,7 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
     steps.append(Step("verify", "Checking the installation",
                       "Imports everything and asks PyTorch whether it can see the GPU.", "verify",
                       argv=[str(py), "-c", VERIFY_SCRIPT], weight=2))
-    return Plan(profile_id=profile_id, can_train=gpu is not None, steps=steps, download_mb=download,
+    return Plan(profile_id=profile_id, can_train=gpu is not None or (proc is not None and proc.trains), steps=steps, download_mb=download,
                 disk_mb=disk, with_splatprep=with_splatprep, with_lightglue=with_lightglue,
                 splatprep_dir=splatprep_dir if with_splatprep else None, venv_dir=target)
 
@@ -599,7 +655,16 @@ def verify_problems(result: dict, plan: Plan) -> List[str]:
     problems = []
     if not result.get("splatworker"):
         problems.append("The worker's libraries (FastAPI / uvicorn) could not be imported.")
-    if plan.can_train:
+    proc = processing_profile_by_id(plan.profile_id)
+    if plan.can_train and proc is not None:          # experimental AMD training: ROCm PyTorch + gsplat
+        if not result.get("torch"):
+            problems.append("PyTorch could not be imported.")
+        elif not result.get("cudaAvailable"):
+            problems.append("PyTorch for ROCm was installed but cannot see the AMD GPU. Check that /dev/kfd exists "
+                            "(the amdgpu driver) and run \"--headless gpu-check\" for details.")
+        if not result.get("gsplat"):
+            problems.append("gsplat for ROCm could not be imported (is the experimental wheel published yet?).")
+    elif plan.can_train:
         prof = next((g for g in GPU_PROFILES if g.id == plan.profile_id), None)
         tv = str(result.get("torchVersion") or "")
         if prof is not None and tv and tv.split("+")[0] != prof.torch:
@@ -622,8 +687,7 @@ def verify_problems(result: dict, plan: Plan) -> List[str]:
             problems.append("gsplat could not be imported.")
         elif not result.get("gsplatPrebuilt"):
             problems.append("gsplat was installed without prebuilt CUDA kernels; it would need a compiler.")
-    proc = processing_profile_by_id(plan.profile_id)
-    if proc is not None and plan.with_lightglue:
+    if proc is not None and not proc.trains and plan.with_lightglue:
         # the GPU not being visible isn't fatal here (processing falls back to the CPU); a broken PyTorch is
         if not result.get("torch"):
             problems.append("PyTorch could not be imported.")

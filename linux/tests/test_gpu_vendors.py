@@ -298,3 +298,39 @@ def test_launcher_routes_gpu_check_to_the_runtime(tmp_path):
     from splatworker.gui.launcher import headless_command
     exe, argv, env, _ = headless_command(["gpu-check"], paths=_paths(tmp_path), environ={"HOME": str(tmp_path)})
     assert argv[1:4] == ["-m", "splatworker", "gpu-check"] and "serve" not in argv
+
+
+# ------------------------------------------------------------------ experimental AMD training runtime
+def test_rocm_training_profile_is_manual_and_installs_gsplat(tmp_path, names):
+    from splatworker.gui.runtime_plan import processing_profile_by_id, rocm_gsplat_published
+    d = info_for(tmp_path, names, lambda s: rx6700xt(s))
+    assert choose_profile(d).profile_id == "rocm6.4"                      # never chosen automatically
+    c = choose_profile(d, override="rocm6.4-train")
+    assert c.can_train and any("Experimental" in w for w in c.warnings)
+    plan = build_plan(c, _paths(tmp_path), with_splatprep=True, with_lightglue=True, splatprep_dir=tmp_path)
+    ids = [s.id for s in plan.steps]
+    assert plan.can_train and ids.count("torch") == 1 and ids.index("torch") < ids.index("gsplat")
+    torch_step = next(s for s in plan.steps if s.id == "torch").argv
+    assert "https://download.pytorch.org/whl/rocm6.4" in torch_step and "torch==2.8.0" in torch_step
+    gs = next(s for s in plan.steps if s.id == "gsplat").argv
+    assert "gsplat==1.5.3+pt28rocm64" in gs and "torch==2.8.0" in gs and "--find-links" in gs
+    ok = {"splatworker": True, "splatprep": True, "lightglue": True, "torch": "2.8.0+rocm6.4", "cudaAvailable": True,
+          "gsplat": "1.5.3+pt28rocm64", "torchvisionImports": True}
+    assert verify_problems(ok, plan) == []
+    assert any("cannot see the AMD GPU" in p for p in verify_problems({**ok, "cudaAvailable": False}, plan))
+    prof = processing_profile_by_id("rocm6.4-train")
+
+    class Page:
+        def __init__(self, text): self.text = text
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return self.text.encode()
+    assert rocm_gsplat_published(prof, lambda url, timeout: Page(
+        '<a href="/x/gsplat-1.5.3%2Bpt28rocm64-cp310-cp310-linux_x86_64.whl">')) is True
+    assert rocm_gsplat_published(prof, lambda url, timeout: Page("<html>no assets</html>")) is False
+
+    def offline(url, timeout):
+        raise OSError("offline")
+    assert rocm_gsplat_published(prof, offline) is None
+    # on a PC without an AMD GPU, chosen by hand: it says it won't train here
+    assert any("No AMD GPU" in w for w in choose_profile(DriverInfo(), override="rocm6.4-train").warnings)

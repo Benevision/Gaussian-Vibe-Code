@@ -1,0 +1,48 @@
+# gsplat for AMD GPUs (ROCm), for the experimental "rocm6.4-train" runtime of SplatWork for Linux. Separate from the
+# Flatpak workflow so a failing ROCm build never blocks a release: run by hand, or when the pin changes.
+# The wheel is attached to the prerelease gsplat-<version>-<rocm tag> (never "latest"), where Set Up downloads it.
+name: gsplat ROCm wheel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - linux/flatpak/gsplat-rocm-pin.env
+      - linux/flatpak/build-gsplat-rocm-wheel.sh
+      - .github/workflows/gsplat-rocm-wheel.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read pin
+        id: pin
+        run: grep -v '^#' linux/flatpak/gsplat-rocm-pin.env | sed '/^$/d' >> "$GITHUB_OUTPUT"
+      - name: Free disk space (the ROCm image and PyTorch for ROCm need ~25 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost \
+                      /usr/share/swift /usr/local/.ghcup
+          docker system prune -af >/dev/null || true
+          df -h /
+      - name: Build
+        run: MAX_JOBS=4 linux/flatpak/build-gsplat-rocm-wheel.sh --out "$PWD/wheels-rocm"
+      - name: Attach to the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="gsplat-${{ steps.pin.outputs.GSPLAT_VERSION }}-${{ steps.pin.outputs.ROCM_TAG }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --prerelease --latest=false --title "gsplat ${{ steps.pin.outputs.GSPLAT_VERSION }} for ROCm (experimental)" \
+              --notes "AMD's port of gsplat (${{ steps.pin.outputs.GSPLAT_ROCM_REF }}) built for PyTorch ${{ steps.pin.outputs.TORCH_VERSION }} + ${{ steps.pin.outputs.ROCM_TAG }}, targets ${{ steps.pin.outputs.PYTORCH_ROCM_ARCH }}. Used by SplatWork for Linux's experimental AMD training runtime. Not an app release."
+          fi
+          gh release upload "$tag" wheels-rocm/*.whl --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsplat-rocm-wheel
+          path: wheels-rocm

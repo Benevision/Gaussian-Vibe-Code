@@ -295,8 +295,16 @@ class Installer:
     # ------------------------------------------------------ preflight / swap
     def _preflight(self) -> None:
         """Fail before downloading gigabytes when the chosen runtime's gsplat build isn't published."""
-        from .runtime_plan import gsplat_wheel_published, profile_by_id
+        from .runtime_plan import (gsplat_wheel_published, processing_profile_by_id, profile_by_id,
+                                   rocm_gsplat_published)
 
+        proc = processing_profile_by_id(self.plan.profile_id)
+        if proc is not None and proc.trains and rocm_gsplat_published(proc, self.opener) is False:
+            raise InstallError("gsplat for AMD GPUs is not published yet",
+                               f"{proc.gsplat_find_links} has no {proc.gsplat_requirement} wheel (the GitHub "
+                               "workflow \"gsplat ROCm wheel\" builds it).",
+                               "Choose \"PyTorch 2.8 for ROCm 6.4 (AMD) · processing only\" for now. Your current "
+                               "runtime has not been changed.")
         prof = profile_by_id(self.plan.profile_id)
         if prof is not None and gsplat_wheel_published(prof, self.opener, local_dir=self.paths.local_wheels_dir) is False:
             raise InstallError(f"gsplat {prof.gsplat} for {prof.label} is not published yet",
