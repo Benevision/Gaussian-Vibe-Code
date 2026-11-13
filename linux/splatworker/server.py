@@ -56,7 +56,7 @@ FINAL_STATES = ("completed", "failed", "cancelled")
 STATUS_KEYS = ("jobId", "kind", "name", "state", "step", "totalSteps", "loss", "psnr", "evalPsnr",
                "numGaussians", "elapsedSeconds", "etaSeconds", "previewStep", "message",
                "datasetId", "createdAt", "gpu", "outputDatasetId", "priority", "origin", "checkpointStep",
-               "pausedAt")
+               "pausedAt", "stage", "stages", "trainJobId", "parentJobId")
 REMOTE_PAUSE_LIMIT = 3600.0         # another computer's paused job resumes by itself after this (s)
 LOCAL_PAUSE_LIMIT = 14 * 86400.0    # a paused job of this PC's app is cancelled (resume.pt freed) after this
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
@@ -154,7 +154,7 @@ class Job:
             for k, v in fields.items():
                 if k in ("state", "step", "totalSteps", "loss", "psnr", "evalPsnr", "numGaussians",
                          "elapsedSeconds", "etaSeconds", "previewStep", "message", "gpu", "priority",
-                         "checkpointStep", "pausedAt"):
+                         "checkpointStep", "pausedAt", "stage", "stages", "trainJobId"):
                     if isinstance(v, float) and v != v:  # NaN -> null
                         v = None
                     self.status[k] = v
@@ -213,7 +213,9 @@ class JobManager:
             except Exception as e:
                 log.warning("skipping unreadable job %s: %s", d.name, e)
                 continue
-            if job.state in ACTIVE_STATES and (d / "resume.pt").is_file():
+            if job.spec.get("kind") == "pipeline":
+                pass       # a whole-pipeline job continues after the restart (start() restarts its runner)
+            elif job.state in ACTIVE_STATES and (d / "resume.pt").is_file():
                 # a resumed job that was running when the worker stopped: its last pause is still on disk
                 job.status["state"] = "paused"
                 job.status["message"] = "interrupted by a worker restart; resume continues from the last pause"
@@ -231,6 +233,8 @@ class JobManager:
         loaded.sort(key=lambda j: j.status.get("createdAt") or "")
         for job in loaded:
             self.jobs[job.id] = job
+            if job.spec.get("kind") == "pipeline":
+                continue
             if job.state == "paused" and job.status.get("origin") != "local":
                 # another computer's paused job: its client may never resume it, so a restart does
                 job.update(persist=True, state="queued", pausedAt=None, message="queued (resumed after a restart)")
@@ -244,6 +248,17 @@ class JobManager:
                                  name=f"splatworker-gpu{dev}")
             t.start()
             self.threads.append(t)
+        from .pipeline import start_runner
+
+        for job in list(self.jobs.values()):
+            if job.spec.get("kind") == "pipeline" and job.state not in FINAL_STATES:
+                try:       # elapsed time counts from when the job was created (worker downtime included)
+                    created = datetime.fromisoformat(str(job.status.get("createdAt")).replace("Z", "+00:00"))
+                    job.started_monotonic = time.monotonic() - max(0.0, time.time() - created.timestamp())
+                except ValueError:
+                    job.started_monotonic = time.monotonic()
+                job.log("worker started: continuing the pipeline")
+                start_runner(self, job)
 
     def shutdown(self, timeout: float = 20.0) -> None:
         with self.cond:
@@ -262,12 +277,15 @@ class JobManager:
 
     # ---------------------------------------------------------------- queue
     def submit(self, kind: str, dataset_id: str, name: str, payload_key: str,
-               payload: Dict[str, Any], total_steps: int, priority: int = 0, origin: Optional[str] = None) -> Job:
+               payload: Dict[str, Any], total_steps: int, priority: int = 0, origin: Optional[str] = None,
+               parent: Optional[str] = None) -> Job:
         prefix = {"train": "j", "census": "c"}.get(kind, "p")
         job_id = prefix + uuid.uuid4().hex[:11]
         job_dir = self.settings.jobs_dir / job_id
         job_dir.mkdir(parents=True)
         spec = {"kind": kind, "datasetId": dataset_id, "name": name, payload_key: payload}
+        if parent:
+            spec["parentJobId"] = parent
         status = {
             "jobId": job_id, "kind": kind, "name": name, "state": "queued",
             "step": 0, "totalSteps": total_steps, "loss": None, "psnr": None,
@@ -276,6 +294,8 @@ class JobManager:
             "message": "queued", "datasetId": dataset_id, "createdAt": _now_iso(), "gpu": None,
             "priority": int(priority), "origin": origin,
         }
+        if parent:
+            status["parentJobId"] = parent
         job = Job(job_dir, spec, status)
         job.persist()
         job.log(f"{kind} job created for dataset {dataset_id}: {json.dumps(payload)}")
@@ -292,6 +312,80 @@ class JobManager:
             raise ApiError(404, "job not found")
         return job
 
+    # ------------------------------------------------------------ pipelines
+    def submit_pipeline(self, dataset_id: str, name: str, spec: Dict[str, Any], priority: int = 0,
+                        origin: Optional[str] = None) -> Job:
+        """A whole-pipeline job (capability "pipeline"): coordinated by its own thread, never in the GPU queue —
+        its steps are child jobs that are. Its working dataset holds the project as it is prepared."""
+        from .pipeline import initial_stages, start_runner
+        from .processing import link_tree
+
+        job_id = "w" + uuid.uuid4().hex[:11]
+        job_dir = self.settings.jobs_dir / job_id
+        job_dir.mkdir(parents=True)
+        work_id = _new_dataset_id()
+        wd = self.settings.datasets_dir / work_id
+        (wd / "files").mkdir(parents=True)
+        meta: Dict[str, Any] = {"datasetId": work_id, "createdAt": _now_iso(), "root": "files", "fromJob": job_id,
+                                "pipelineWork": True, "hasDatasetJson": False, "bytes": 0}
+        if origin == "local":
+            meta["localOnly"] = True
+        if not spec.get("frames"):                # frames the client ingested: they are the starting point
+            src = dataset_root(self.settings, dataset_id)
+            link_tree(src, wd / "files", [src])
+        _write_json_atomic(wd / "meta.json", meta)
+        stages = initial_stages(spec)
+        total = 1000
+        status = {
+            "jobId": job_id, "kind": "pipeline", "name": name, "state": "running",
+            "step": 0, "totalSteps": total, "loss": None, "psnr": None, "numGaussians": None,
+            "elapsedSeconds": 0.0, "etaSeconds": None, "previewStep": None, "message": "starting",
+            "datasetId": dataset_id, "createdAt": _now_iso(), "gpu": None, "priority": int(priority),
+            "origin": origin, "stage": stages[0]["id"], "stages": stages, "trainJobId": None,
+        }
+        job = Job(job_dir, {"kind": "pipeline", "datasetId": dataset_id, "name": name, "pipeline": spec,
+                            "workDatasetId": work_id}, status)
+        job.started_monotonic = time.monotonic()
+        job.persist()
+        job.log(f"pipeline job created for dataset {dataset_id}: {json.dumps(spec)}")
+        with self.cond:
+            self.jobs[job_id] = job
+        start_runner(self, job)
+        return job
+
+    def children(self, job: Job) -> List[Job]:
+        return [j for j in self.jobs.values() if j.spec.get("parentJobId") == job.id]
+
+    def _current_child(self, job: Job) -> Optional[Job]:
+        for st in job.status.get("stages") or []:
+            if st.get("state") == "running" and st.get("jobId"):
+                return self.jobs.get(st["jobId"])
+        return None
+
+    def publish_work_dataset(self, job: Job) -> None:
+        """The prepared dataset is ready: describe it (so it can be trained) and make it the job's output."""
+        work_id = job.spec["workDatasetId"]
+        wd = self.settings.datasets_dir / work_id
+        meta = json.loads((wd / "meta.json").read_text(encoding="utf-8"))
+        meta["bytes"] = _dir_bytes(wd / "files")
+        _describe_dataset(wd / "files", meta)
+        _write_json_atomic(wd / "meta.json", meta)
+        with job.lock:
+            job.status["outputDatasetId"] = work_id
+        job.persist()
+
+    def drop_dataset(self, dataset_id: str) -> None:
+        if ID_RE.match(dataset_id or ""):
+            shutil.rmtree(self.settings.datasets_dir / dataset_id, ignore_errors=True)
+
+    def finish_pipeline(self, job: Job, state: str, message: str) -> None:
+        if state != "completed" and not job.status.get("outputDatasetId"):
+            self.drop_dataset(job.spec.get("workDatasetId", ""))   # nothing usable was prepared
+        self._finish(job, state, message)
+        if job.deleted:
+            shutil.rmtree(job.dir, ignore_errors=True)
+            self.drop_dataset(job.spec.get("workDatasetId", ""))
+
     def list(self) -> List[Dict[str, Any]]:
         jobs = sorted(self.jobs.values(), key=lambda j: j.status.get("createdAt") or "")
         return [j.snapshot() for j in jobs]
@@ -305,6 +399,11 @@ class JobManager:
 
     def cancel(self, job_id: str) -> Job:
         job = self.get(job_id)
+        if job.spec.get("kind") == "pipeline":
+            if job.state not in FINAL_STATES:
+                job.cancel_event.set()          # the runner cancels its current step and ends the job
+                job.update(message="cancelling")
+            return job
         with self.cond:
             if job.state == "queued":
                 try:
@@ -331,8 +430,17 @@ class JobManager:
 
     def pause(self, job_id: str) -> Job:
         """Queued job (any kind): held back. Running train job: the trainer saves its state and stops, freeing the
-        GPU for the next queued job (the state becomes "paused" once it has). Paused: nothing to do."""
+        GPU for the next queued job (the state becomes "paused" once it has). Paused: nothing to do.
+        A pipeline pauses its current step (its training, or a step still waiting in the queue)."""
         job = self.get(job_id)
+        if job.spec.get("kind") == "pipeline":
+            if job.state == "paused":
+                return job
+            child = self._current_child(job)
+            if job.state in FINAL_STATES or child is None:
+                raise ApiError(409, "a pipeline can be paused while its training runs or a step is queued")
+            self.pause(child.id)
+            return job
         with self.cond:
             if job.state == "paused":
                 return job
@@ -358,6 +466,14 @@ class JobManager:
 
     def resume(self, job_id: str) -> Job:
         job = self.get(job_id)
+        if job.spec.get("kind") == "pipeline":
+            child = self._current_child(job)
+            if job.state != "paused" or child is None:
+                if job.state in ("running",) and child is not None and child.state != "paused":
+                    return job
+                raise ApiError(409, f"a {job.state} pipeline can't be resumed")
+            self.resume(child.id)
+            return job
         with self.cond:
             if job.state in ("queued",) + ACTIVE_STATES:
                 if job.pause_event.is_set():
@@ -371,6 +487,12 @@ class JobManager:
     def request_checkpoint(self, job_id: str) -> Job:
         """Ask a running train job to write checkpoint.ply now. A paused job already has one (written at pause)."""
         job = self.get(job_id)
+        if job.spec.get("kind") == "pipeline":
+            child = self._current_child(job)
+            if child is None or child.spec.get("kind") != "train":
+                raise ApiError(409, "the pipeline isn't training yet")
+            self.request_checkpoint(child.id)
+            return child
         if job.state == "paused":
             if not (job.dir / "checkpoint.ply").is_file():
                 raise ApiError(409, "the job was paused before training started; there is nothing to save yet")
@@ -383,6 +505,21 @@ class JobManager:
 
     def delete(self, job_id: str) -> None:
         job = self.get(job_id)
+        if job.spec.get("kind") == "pipeline":
+            for child in self.children(job):
+                try:
+                    self.delete(child.id)
+                except ApiError:
+                    pass
+            with self.cond:
+                self.jobs.pop(job.id, None)
+                job.deleted = True
+            if job.state in FINAL_STATES:
+                shutil.rmtree(job.dir, ignore_errors=True)
+                self.drop_dataset(job.spec.get("workDatasetId", ""))
+            else:
+                job.cancel_event.set()        # the runner stops; finish_pipeline removes its folder and dataset
+            return
         with self.cond:
             if job.id in self.queue:
                 self.queue.remove(job.id)
@@ -407,8 +544,8 @@ class JobManager:
         return job
 
     def dataset_in_use(self, dataset_id: str) -> bool:
-        return any(j.spec.get("datasetId") == dataset_id and j.state not in FINAL_STATES
-                   for j in self.jobs.values())
+        return any((j.spec.get("datasetId") == dataset_id or j.spec.get("workDatasetId") == dataset_id)
+                   and j.state not in FINAL_STATES for j in self.jobs.values())
 
     # --------------------------------------------------------------- worker
     def _next_job(self, device: Optional[int]) -> Optional[Job]:
@@ -441,7 +578,7 @@ class JobManager:
             return
         self._housekept = now
         for job in list(self.jobs.values()):
-            if job.state != "paused":
+            if job.state != "paused" or job.spec.get("kind") == "pipeline":
                 continue
             age = now - float(job.status.get("pausedAt") or now)
             if job.status.get("origin") != "local" and age >= REMOTE_PAUSE_LIMIT:
@@ -843,6 +980,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)
         if "train" in caps and getattr(backend, "pausable", False):
             caps = caps + ["pause"]       # ≥ 1.4.0: POST /v1/jobs/{id}/pause|resume|checkpoint, checkpoint.ply
+        if "train" in caps and "process" in caps:
+            caps = caps + ["pipeline"]    # ≥ 1.6.0: POST /v1/pipeline (whole pipeline, client may go offline)
         if settings.local_enabled:
             caps = caps + ["local"]       # ≥ 1.4.0: POST /v1/datasets/local (the desktop app on this PC only)
         try:
@@ -1181,6 +1320,26 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                              origin=_origin(request))
         return {"jobId": job.id}
 
+    @app.post("/v1/pipeline")
+    async def create_pipeline_job(request: Request):
+        """Whole pipeline on this worker (capability "pipeline"): frames → masks → sky → camera solve → dataset →
+        training, each step a child job, so the client may go offline until it is done (PROTOCOL.md §4)."""
+        from .pipeline import PipelineError, validate_spec
+
+        body = await json_body(request)
+        dataset_id, root = _require_dataset(body, request)
+        if "process" not in backend.capabilities():
+            raise ApiError(400, "this worker can't process (install the processing models)")
+        try:
+            spec = validate_spec(body, root)
+        except PipelineError as e:
+            raise ApiError(400, f"invalid pipeline: {e}")
+        if spec.get("frames") and "frames" not in backend.capabilities():
+            raise ApiError(400, "this worker can't split videos (install the processing models)")
+        job = manager.submit_pipeline(dataset_id, _name(body, dataset_id), spec, priority=_priority(request, body),
+                                      origin=_origin(request))
+        return {"jobId": job.id}
+
     @app.post("/v1/census")
     async def create_census_job(request: Request):
         """Auto clean census: ``{"datasetId", "jobId": <completed train job>}`` or, from this PC only,
@@ -1317,7 +1476,14 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         return Response(status_code=204)
 
     def _job_file(request: Request, job_id: str, name: str) -> Path:
-        return _job(request, job_id).dir / name
+        job = _job(request, job_id)
+        path = job.dir / name
+        if not path.exists() and job.spec.get("kind") == "pipeline" and job.status.get("trainJobId") \
+                and name != "train.log":
+            child = manager.jobs.get(job.status["trainJobId"])      # previews / checkpoint of its training
+            if child is not None:
+                return child.dir / name
+        return path
 
     @app.get("/v1/jobs/{job_id}/preview.ply")
     def get_preview(job_id: str, request: Request):

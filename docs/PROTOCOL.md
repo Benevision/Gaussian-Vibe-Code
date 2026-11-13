@@ -296,6 +296,75 @@ translation, so a stereo pair maps in metres. SplatWork for Linux sends this for
 baseline (left = `I`, right = `{"R": I, "t": [b, 0, 0]}`). An older splatprep can't parse such a group, so the
 Node sends it only to its own worker (same version).
 
+**Whole pipeline jobs (worker ≥ 1.6.0, capability `pipeline`).** When a project's processing *and* training both
+go to one worker, the client sends the source and every setting once and the worker runs each stage on its own, so
+the client can go offline for the whole job and only download the result (and the prepared dataset) when it is back.
+
+| Method & path | Body | Response |
+|---|---|---|
+| `POST /v1/pipeline` | `{"datasetId","name","pipeline":{…},"priority"?}` | `{"jobId":"w…"}` — a job of kind `pipeline` |
+
+The upload is either the video (`POST /v1/datasets/file`, with a `frames` stage) or frames the client ingested itself
+(photos, 360° photo views): `images/` + `frames.json` (the `FrameSet` of `task: frames`, §6; `root` is ignored) and
+any masks it names.
+
+```jsonc
+"pipeline": {
+  "frames": {"request": {ProcessingRequest, task "frames"}},          // optional: split the uploaded video here
+  "staticRegions": false,                                              // mask parts of the frame that never change
+  "masks": {"request": {task "masks", "maskModel", …}, "dilatePixels": 4},  // optional
+  "sky": {"request": {task "masks", "maskModel": "sky", "invertMask": true}},  // optional; no sky model → skipped
+  "sfm": {"request": {features, matching, mapper, cameraModel, resizeMax, maxKeypoints, priorPoses},
+          "sequential": true,      // frames are a video in order (outlier check along the path)
+          "enforceRig": true},     // 360° views: re-derive each frame's views from its registered ones
+  "holdoutInterval": 8,            // every Nth camera is a holdout (null = none)
+  "level": true,                   // up → −Y, scene centre → origin (SplatWork's normalizeOrientation)
+  "train": {"config": {TrainingConfig}},                               // optional
+  "checkpoints": {"frames": "…", "masks": "…", "poses": "…", "done": "…"}   // opaque, echoed in pipeline.json
+}
+```
+
+Stages, in order: `frames` → `static` (fixed parts of the frame; also run for circular-fisheye footage, else
+`skipped`) → `masks` → `sky` → `sfm` (camera solve, then SplatWork's outlier check, 360° rig completion and dataset
+assembly with masks / sky / holdout) → `level` → `train`. The worker fills in what only the frames tell
+(`masksDir`, `skyMasksDir`, `singleCamera`, the 360° `rig`, `cameraModel: "fisheye"` for circular fisheye) and
+applies the mask rules of SplatWork (binarised, kept region eroded by `dilatePixels`, ANDed into `masks/<stem>.png`;
+frames whose mask keeps < 1 % stay unmasked, and the stage fails when that is more than half of them; sky only for
+frames with > 0.2 % sky). A solve that places fewer than 30 % of ≥ 10 frames fails the job.
+
+Each GPU step is an ordinary child job (`process` / `train`) in the shared queue with `"parentJobId"` = the pipeline,
+the pipeline's priority and origin. The pipeline itself never waits in the queue: it is `running` from the start
+(`paused` while its current step is paused), and its `JobStatus` adds:
+
+```jsonc
+{"kind": "pipeline", "stage": "sfm",               // current stage id
+ "stages": [{"id": "frames", "title": "Extracting frames", "state": "done",   // pending|running|done|skipped|failed|cancelled
+             "jobId": "p…", "prepStage": "frames", "summary": {…}, "message": null, "attempts": 1}, …],
+ "trainJobId": "j…",                               // the training child, once it exists
+ "step": 412, "totalSteps": 1000,                  // whole job ×1000; message = "<stage>: <step message>"
+ "outputDatasetId": "d…"}                          // the prepared dataset, from the end of `level` on
+```
+
+`prepStage` maps a stage to SplatWork's checkpoints (`frames`, `masks`, `poses`, `done`; `null` for training).
+While training runs the pipeline mirrors the child's `loss`, `psnr`, `evalPsnr`, `numGaussians`, `previewStep`,
+`checkpointStep` and `etaSeconds`; `GET /v1/jobs/{id}/preview.splat|preview.ply|checkpoint.ply` answer with the
+child's files, and `result.ply` (+ `sky.png` / `sky.json`) once the pipeline is `completed`. `pause` / `resume` /
+`checkpoint` act on the current step (pause: its training, or a step still queued; `409` otherwise); `cancel`
+cancels the current step and ends the job; `DELETE` removes the children and the working dataset too.
+
+The prepared dataset (`output.zip` of the pipeline, or `GET /v1/datasets/{outputDatasetId}/archive.zip`) holds the
+levelled `dataset.json`, `points3d.ply`, `frames.json`, `masks/`, `splatprep-*` layers, `sfm/` (undistorted copies,
+when the solve made them) and `.pipeline/`: `pipeline.json` (`{"format":"splatpipeline","version":1,"jobId",
+"stages":[…],"checkpoints"}`), `frames.frames.json` (+ `frames.files/`: the mask files that list names, as they were
+then), `masks.frames.json` (+ `masks.files/`), `poses.dataset.json` + `poses.points.ply` (the solved dataset before
+levelling) — enough for a client to record the same per-stage checkpoints a local run leaves. A video's images
+are typically fetched later (`archive.zip?only=images`), as with chaining.
+
+Restarts: the stages and their child jobs are persisted. After a worker restart the pipeline continues at its first
+unfinished stage: a child still queued or paused is waited for (a paused training resumes from its pause, see
+above), a processing child the restart interrupted runs again (at most 3 attempts per stage). If nothing usable was
+prepared, a failed or cancelled pipeline removes its working dataset.
+
 ```jsonc
 // JobStatus
 {
@@ -382,7 +451,7 @@ Feature/matcher ids: `colmap_sift`, `sift_lightglue`, `superpoint_lightglue`, `d
 | `POST /v1/datasets/compose` | `{"layers":[{"datasetId":"A"},{"datasetId":"B","prefix":"sub"}]}` | `{"datasetId":"…","hasDatasetJson":bool,"bytes":n}` — union of the layers' files (hard links, later layers win) |
 | `GET /v1/datasets/{id}/archive.zip[?only=…][&skip=…]` | – | the dataset's files as a zip |
 
-`GET /v1/info` adds `"capabilities": ["train","process"]` and `"models": ["superpoint_lightglue", …]` (those actually importable).
+`GET /v1/info` adds `"capabilities": ["train","process"]` (+ `"pipeline"`, §4) and `"models": ["superpoint_lightglue", …]` (those actually importable).
 
 **Chaining (worker ≥ 1.3.8, capability `chain`).** A completed processing job keeps its output on the worker as a
 dataset of its own, `JobStatus.outputDatasetId`, which the next request can use directly (`/v1/process` or, with a
