@@ -157,6 +157,8 @@ def test_health_check_against_a_fake_http_worker(tmp_path):
         d = reg.get(d.id)
         assert d.status == "online" and d.kind == "iphone" and d.name == "iPhone 16 Pro"
         assert d.throughput == 0.22 and not d.can_chain
+        # iPhones no longer act as workers: an older app that still answers is left out of the device list
+        assert reg.devices() == []
         srv.shutdown()
         srv.server_close()
         assert reg.check(d.id).status == "offline"

@@ -142,7 +142,7 @@ public final class SplatDevices {
 
     /// Remote devices (online first, then by name).
     public var remote: [SplatDeviceInfo] {
-        browser.workers.filter { !excludedNames.contains($0.name) }.map { w in
+        browser.workers.filter { !excludedNames.contains($0.name) && browser.health[$0.id]?.info?.kind?.lowercased() != "iphone" }.map { w in
             let h = browser.health[w.id]
             let info = h?.info
             var online = false
@@ -174,7 +174,7 @@ public final class SplatDevices {
 
     /// Online workers as clients + infos (for the pipeline, off the main actor).
     func snapshot() -> [(device: ComputeDevice, client: WorkerClient, info: WorkerInfo)] {
-        browser.workers.filter { !excludedNames.contains($0.name) }.compactMap { w in
+        browser.workers.filter { !excludedNames.contains($0.name) && browser.health[$0.id]?.info?.kind?.lowercased() != "iphone" }.compactMap { w in
             guard let h = browser.health[w.id], case .online = h.status, let info = h.info, let c = browser.client(for: w.id) else { return nil }
             return (ComputeScheduler.remoteDevice(w, info: info), c, info)
         }
@@ -525,8 +525,10 @@ struct PhoneTrainingRunner: LocalTrainingRunner {
         return Double(b.maxGaussians) >= 0.8 * Double(b.requestedGaussians) && b.maxImageSize == b.requestedImageSize
     }
 
+    /// `preview` (live view of block runs) isn't used on the phone: the copy would cost memory it doesn't have.
     func train(dataset: PreparedDataset, config: TrainingConfig,
-               progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void) async throws -> GaussianCloud {
+               progress: @escaping @Sendable (TrainingProgressSnapshot) -> Void,
+               preview: (@Sendable (GaussianCloud) -> Void)? = nil) async throws -> GaussianCloud {
         var cfg = config
         let budget = try TrainKit.budget(dataset: dataset, config: &cfg, availableBytes: TrainKit.availableMemory)
         SplatMaker.log.notice("\(budget.summary, privacy: .public)")

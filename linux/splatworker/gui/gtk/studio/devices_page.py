@@ -1,5 +1,5 @@
-"""Compute Devices: other workers on the network (SplatWork Nodes, the Mac with "Act as a worker", SplatWork
-Capture's Compute screen on an iPhone), found by Bonjour or added by address, with their health; and the
+"""Compute Devices: other workers on the network (SplatWork Nodes, Macs with "Act as a worker"), found by
+Bonjour or added by address, with their health; and the
 "Train on" row of the New Project dialog. Logic lives in ``studio/devices.py`` and ``studio/compute.py``."""
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ class DevicesPage(Gtk.Box):
                       "merged. Choose it per project in New Project → Training → Train on.")
         box.append(intro)
         self.list_group = group("Workers on the network",
-                                "SplatWork Nodes, Macs with “Act as a worker” and iPhones on SplatWork Capture’s "
-                                "Compute screen appear here by themselves (Bonjour _splatworker._tcp).")
+                                "SplatWork Nodes and Macs with “Act as a worker” appear here by themselves "
+                                "(Bonjour _splatworker._tcp).")
         self._rows = []
         box.append(self.list_group)
         self.hidden_row = plain_row("Hidden workers", "")
@@ -119,9 +119,9 @@ class DevicesPage(Gtk.Box):
     # ------------------------------------------------------------------ dialogs
     def add_dialog(self) -> None:
         dlg = Adw.AlertDialog(heading="Add worker",
-                              body="The address of a SplatWork Node (port 7878), a Mac with “Act as a worker” "
-                                   "(port 7879) or an iPhone’s Compute screen (port 7878). The access token is only needed "
-                                   "if that worker has one (SplatWork Node → Preferences → Access token).")
+                              body="The address of a SplatWork Node (port 7878) or a Mac with “Act as a worker” "
+                                   "(port 7879). The access token is only needed if that worker has one (SplatWork "
+                                   "Node → Preferences → Access token; on a Mac, Compute → Act as a worker).")
         lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         lb.add_css_class("boxed-list")
         addr = Adw.EntryRow(title="Address (host or host:port)")

@@ -7,7 +7,7 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     struct GPU: Codable, Hashable, Sendable { var name: String; var memoryMB: Int?; var freeMemoryMB: Int? }
     var name: String
     var version: Int?
-    /// e.g. "1.3.15" (Linux), "ios-1.0" (iPhone Compute screen).
+    /// e.g. "1.3.15" (Linux), "mac-1.0" (SplatWork's "act as a worker"); "ios-1.0" from retired iPhone workers.
     var workerVersion: String?
     var gpus: [GPU]?
     var backend: String?
@@ -23,8 +23,8 @@ struct WorkerInfo: Codable, Hashable, Sendable {
     /// Host RAM (worker ≥ 1.3.14).
     struct Memory: Codable, Hashable, Sendable { var totalMB: Int?; var availableMB: Int? }
     var memory: Memory?
-    /// What runs the worker: "iphone" (SplatWork Capture's Compute screen), "mac" (SplatWork's "act as a worker"),
-    /// nil for the SplatWork Node.
+    /// What runs the worker: "mac" (SplatWork's "act as a worker"), nil for the SplatWork Node. "iphone" comes from
+    /// older SplatWork Capture versions, which could act as workers; those are ignored.
     var kind: String?
     /// Worker ≥ 1.3.13: training images are streamed from disk when they don't fit in RAM.
     var streamsImages: Bool { capabilities?.contains("stream") ?? false }

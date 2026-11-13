@@ -32,20 +32,13 @@ struct WorkerJobStatus: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// The worker's state and request handling. Thread-safe (one lock); training runs one job at a time on a
-/// private serial queue. Knows nothing about UIKit / AppKit — the app layer drives it: `ComputeWorker` on the
-/// iPhone (Compute screen), `MacWorker` in SplatWork ("act as a worker"). Shared by both apps.
+/// private serial queue. Knows nothing about AppKit — `MacWorker` drives it in SplatWork ("act as a worker").
+/// (iPhones no longer act as workers; SplatWork Capture trains only its own scans.)
 final class WorkerEngine: @unchecked Sendable {
-    #if os(iOS)
-    static let workerVersion = "ios-1.0"
-    static let kind = "iphone"
-    static let backend = "Metal (SplatWork Capture, iPhone)"
-    static let deviceLabel = "the iPhone"
-    #else
     static let workerVersion = "mac-1.0"
     static let kind = "mac"
     static let backend = "Metal (SplatWork, Mac)"
     static let deviceLabel = "the Mac"
-    #endif
     static let logSubsystem = Bundle.main.bundleIdentifier ?? "SplatWorker"
     static let log = Logger(subsystem: WorkerEngine.logSubsystem, category: "worker")
 

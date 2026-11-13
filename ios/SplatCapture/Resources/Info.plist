@@ -39,7 +39,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>SplatWork Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac, and (Compute screen) lets SplatWork send training work to this iPhone.</string>
+	<string>SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac and hand training to your Macs and PCs.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIFileSharingEnabled</key>

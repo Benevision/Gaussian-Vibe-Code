@@ -309,8 +309,8 @@ enum SettingsCatalog {
               detail: "Same data + same settings + same seed = the same result. Change it to get a different random initialisation.",
               defaultValue: "42"),
         .init(id: "train.device", group: .trainingBasics, title: "Compute devices",
-              summary: "Tick the machines that may work on this project: this Mac, Linux GPU workers, iPhones running Compute.",
-              detail: "One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork Node with CUDA, typically 2–4× faster than an M4 Pro, with live previews). Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically. An iPhone with SplatWork Capture's Compute screen open takes small blocks.",
+              summary: "Tick the machines that may work on this project: this Mac, Linux GPU workers and other Macs acting as workers.",
+              detail: "One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork Node with CUDA, typically 2–4× faster than an M4 Pro, with live previews). Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically. Other Macs with Compute → Act as a worker turned on can take blocks too.",
               defaultValue: "This Mac", advanced: false),
 
         .init(id: "train.strategy", group: .densification, title: "Densification strategy",

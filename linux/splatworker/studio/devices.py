@@ -417,11 +417,15 @@ class DeviceRegistry:
         return Device(id=did, name=name or host, host=host, port=port, manual=True, token=self.store.tokens.get(did))
 
     def devices(self) -> List[Device]:
-        """Every known device (discovered minus hidden and this PC's own worker, plus manual), by name."""
+        """Every known device (discovered minus hidden, this PC's own worker and retired iPhone workers, plus
+        manual), by name."""
         with self._lock:
             own = set(self._own_names())
             ds = [d for d in self._discovered.values() if d.id not in self.store.hidden and d.name not in own]
             ds += list(self._manual.values())
+        # iPhones no longer act as workers (SplatWork Capture trains only its own scans); older versions of
+        # the app still advertise themselves, so they are left out.
+        ds = [d for d in ds if d.kind != "iphone"]
         apply_benchmarks(ds, self.bench_dir)
         return sorted(ds, key=lambda d: d.name.lower())
 

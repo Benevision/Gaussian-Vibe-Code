@@ -240,12 +240,17 @@ final class WorkerBrowser {
         if let d = try? JSONEncoder().encode(manual) { UserDefaults.standard.set(d, forKey: defaultsKey) }
     }
 
-    /// Bonjour names this app advertises itself (SplatWork's "act as a worker", the iPhone's Compute screen):
-    /// never listed as remote devices.
+    /// Bonjour names this app advertises itself (SplatWork's "act as a worker"): never listed as remote devices.
     var ownNames: Set<String> = [] { didSet { rebuild() } }
 
+    /// iPhones no longer act as workers (SplatWork Capture trains only its own scans); older versions of the app
+    /// still advertise themselves (TXT `kind=iphone`), so they are left out.
+    static func isRetiredWorker(_ w: WorkerEndpoint) -> Bool { w.txt["kind"]?.lowercased() == "iphone" }
+
     private func rebuild() {
-        workers = (discovered.values.filter { !hidden.contains($0.id) && !ownNames.contains($0.name) } + manual).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        workers = (discovered.values.filter { !hidden.contains($0.id) && !ownNames.contains($0.name) && !Self.isRetiredWorker($0) } + manual)
+            .filter { health[$0.id]?.info?.kind?.lowercased() != "iphone" }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     // MARK: Tokens
@@ -306,6 +311,7 @@ final class WorkerBrowser {
         }
         h.checkedAt = Date()
         health[id] = h
+        if h.info?.kind?.lowercased() == "iphone" { rebuild() }     // an older iPhone app answering as a worker
     }
 
     /// Records the worker's addresses and moves a discovered worker onto ethernet when that address answers.

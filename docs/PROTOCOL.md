@@ -175,6 +175,7 @@ Shared by the Metal trainer and the CUDA worker. Every key is optional; defaults
 
 * Default port **7878**, plain HTTP on the LAN (optionally behind TLS reverse proxy).
 * Discovery: the worker advertises Bonjour/mDNS service type **`_splatworker._tcp`**, TXT record `version=1`, `gpu=<name>`, `auth=1|0`, and (worker ≥ 1.3.10) `addrs=<ip>:<kind>,…` listing its LAN addresses preferred first (`ethernet` before `wifi`). `GET /v1/info` returns the same list as `"addresses": [{"address":"192.168.1.20","kind":"ethernet"}, …]`. SplatWork moves a discovered worker onto its first ethernet address that answers, falls back to the others if that address stops answering, and leaves manually added workers on the address the user typed. A discovered worker can be hidden from the list (Compute page) and added manually instead.
+* Worker kinds: SplatWork's "act as a worker" adds TXT `kind=mac` (and `"kind":"mac"` in `/v1/info`); SplatWork Node sends none. Older versions of SplatWork Capture advertised `kind=iphone`; iPhones no longer act as workers, and clients ignore workers of that kind.
 * Auth: if the worker has a token configured every request needs `Authorization: Bearer <token>`. Unauthenticated → `401`.
 * Errors: non-2xx with body `{"error": "message"}`.
 
@@ -400,9 +401,9 @@ The Mac app is always the coordinator. Per project the user picks **This Mac**, 
 * Workers accept `TrainingConfig.region` (optional) and `TrainingConfig.cameraIds` (optional list restricting which cameras are used).
 * SplatWork Node's Studio (worker ≥ 1.4.0) coordinates the same way with only the existing endpoints: it prepares
   on its own GPU, then trains on one chosen worker or block-parallel on itself + every online worker (SplatWork
-  Nodes, Macs with "Act as a worker", iPhones), using the Mac's split, placement and merge rules. Uploads carry a
+  Nodes and Macs with "Act as a worker"), using the Mac's split, placement and merge rules. Uploads carry a
   `Content-Length`; on `chain` workers the photos stay as a dataset of their own and later runs compose
-  `dataset.json` / masks / points over them; Macs and iPhones get one full upload per run, shared by their blocks.
+  `dataset.json` / masks / points over them; Macs get one full upload per run, shared by their blocks.
 
 ---
 

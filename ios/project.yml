@@ -23,17 +23,13 @@ targets:
     platform: iOS
     sources:
       - path: SplatCapture
-      # The training-worker server (Compute screen), shared with SplatWork's "act as a worker" mode
-      - path: ../mac/Sources/SplatStudio/Worker/WorkerEngine.swift
-      - path: ../mac/Sources/SplatStudio/Worker/HTTPServer.swift
-      - path: ../mac/Sources/SplatStudio/Worker/WorkerRouter.swift
       - path: ../mac/Sources/SplatStudio/Worker/ZipReader.swift
       - path: ../mac/Sources/SplatStudio/Worker/ZipWriter.swift
     dependencies:
       - target: SplatTrainKit
     # No com.apple.developer.kernel.increased-memory-limit entitlement: a personal (free) Apple developer team
-    # can't sign it ("requires a provisioning profile with the Increased Memory Limit feature"). The Compute
-    # screen sizes its splat budget from os_proc_available_memory() either way. With a paid team, add:
+    # can't sign it ("requires a provisioning profile with the Increased Memory Limit feature"). Training on
+    # the phone sizes its splat budget from os_proc_available_memory() either way. With a paid team, add:
     #   entitlements: { path: SplatCapture/Resources/SplatCapture.entitlements,
     #                   properties: { com.apple.developer.kernel.increased-memory-limit: true } }
     settings:
@@ -69,7 +65,7 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: "SplatWork Capture uses the camera and LiDAR scanner to record posed images and depth for training Gaussian splats."
-        NSLocalNetworkUsageDescription: "SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac, and (Compute screen) lets SplatWork send training work to this iPhone."
+        NSLocalNetworkUsageDescription: "SplatWork Capture looks for SplatWork on your local network so it can send captures to your Mac and hand training to your Macs and PCs."
         NSBonjourServices: [_splatcapture._tcp, _splatworker._tcp]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -118,6 +114,7 @@ targets:
       - path: ../mac/Sources/SplatStudio/Remote/WorkerBrowser.swift
       - path: ../mac/Sources/SplatStudio/Remote/ComputeScheduler.swift
       - path: ../mac/Sources/SplatStudio/Remote/BlockTraining.swift
+      - path: ../mac/Sources/SplatStudio/Remote/PauseController.swift
       - path: ../mac/Sources/SplatStudio/Remote/RemoteStore.swift
       - path: ../mac/Sources/SplatStudio/Remote/SystemBenchmark.swift
       # the public facade (TrainKit / TrainKitJob, also used by SplatWork's "act as a worker") and the

@@ -4,7 +4,6 @@ import SwiftUI
 struct SplatCaptureApp: App {
     @State private var settings = AppSettings()
     @State private var library = CaptureLibrary()
-    @State private var computeWorker = ComputeWorker()
     @State private var splatJobs = SplatJobs()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -13,13 +12,11 @@ struct SplatCaptureApp: App {
             RootView()
                 .environment(settings)
                 .environment(library)
-                .environment(computeWorker)
                 .environment(splatJobs)
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .background: computeWorker.appDidEnterBackground(); splatJobs.appDidEnterBackground()
-            case .active: computeWorker.appDidBecomeActive()
+            case .background: splatJobs.appDidEnterBackground()
             default: break
             }
         }
@@ -27,7 +24,6 @@ struct SplatCaptureApp: App {
 }
 
 struct RootView: View {
-    @State private var showCompute = false
     @State private var selfTestResult: SplatOutput?
     @State private var makeSplatItem: CaptureItem?
     @Environment(CaptureLibrary.self) private var library
@@ -52,10 +48,7 @@ struct RootView: View {
                 Label("ARKit not available", systemImage: "arkit")
             } description: {
                 Text("SplatWork Capture needs an iPhone with ARKit world tracking. It can't record in the Simulator.")
-            } actions: {
-                Button("Compute…") { showCompute = true }
             }
-            .sheet(isPresented: $showCompute) { ComputeView() }
         }
     }
 }

@@ -1077,7 +1077,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 
 ### Compute devices
 
-> Tick the machines that may work on this project: this Mac, Linux GPU workers, iPhones running Compute.
+> Tick the machines that may work on this project: this Mac, Linux GPU workers and other Macs acting as workers.
 
 | | |
 |---|---|
@@ -1088,7 +1088,7 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 115 sett
 **How it works.** One device ticked: everything runs there (this Mac: Metal trainer, no setup; a Linux worker: SplatWork Node with CUDA, typically 2–4× faster than an M4 Pro, with live previews).
 
 - Several: preparation runs on the fastest, and scenes of 400+ photos are split into spatial blocks shared between the ticked devices in proportion to their measured speed (Compute → Benchmark) and memory — a block only goes to a device it fits — then merged automatically.
-- An iPhone with SplatWork Capture's Compute screen open takes small blocks.
+- Other Macs with Compute → Act as a worker turned on can take blocks too.
 
 ## Training — densification
 

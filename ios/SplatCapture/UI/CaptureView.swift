@@ -7,7 +7,6 @@ struct CaptureView: View {
     @State private var model = CaptureViewModel()
     @State private var showLibrary = false
     @State private var showSettings = false
-    @State private var showCompute = false
     @State private var flash = false
     @State private var sendTarget: CaptureItem?
     @State private var makeTarget: CaptureItem?
@@ -68,7 +67,7 @@ struct CaptureView: View {
                     model.stopRecording()
                 }
             case .active:
-                if !showLibrary && !showSettings && !showCompute && makeTarget == nil { model.startSession(settings: settings.capture) }
+                if !showLibrary && !showSettings && makeTarget == nil { model.startSession(settings: settings.capture) }
             default: break
             }
         }
@@ -77,10 +76,6 @@ struct CaptureView: View {
         }
         .sheet(isPresented: $showSettings, onDismiss: { model.startSession(settings: settings.capture) }) {
             SettingsView()
-        }
-        // The AR session is paused while the Compute screen is up: training wants the whole GPU.
-        .fullScreenCover(isPresented: $showCompute, onDismiss: { model.startSession(settings: settings.capture) }) {
-            ComputeView()
         }
         .sheet(isPresented: $model.showFinished) {
             if let summary = model.lastSummary {
@@ -229,7 +224,6 @@ struct CaptureView: View {
                 }
                 HStack(spacing: 10) {
                     Spacer()
-                    circleButton("cpu", label: "Compute") { model.pauseSession(); showCompute = true }
                     circleButton("gearshape", label: "Settings") { showSettings = true }
                 }
                 .frame(maxWidth: .infinity)

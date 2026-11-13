@@ -740,7 +740,7 @@ struct ComputePicker: View {
                     }
                 }
                 if browser.workers.isEmpty {
-                    Text("No workers found — start SplatWork Node on a PC or Compute on an iPhone (or add one under Compute).")
+                    Text("No workers found — start SplatWork Node on a PC, or turn on Act as a worker on another Mac (or add one under Compute).")
                         .font(.caption).foregroundStyle(.secondary)
                 } else if selected.count > 1 {
                     Text("Several devices: big scenes are split into blocks shared between them; small ones train on the fastest.")

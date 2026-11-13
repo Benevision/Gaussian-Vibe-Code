@@ -3,9 +3,13 @@ import SwiftUI
 
 /// "Make splat": options + device checkboxes → progress → the result in the viewer.
 struct MakeSplatView: View {
+    static func duration(_ s: Double) -> String {
+        let t = Int(s)
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+    }
+
     let item: CaptureItem
     @Environment(SplatJobs.self) private var jobs
-    @Environment(ComputeWorker.self) private var computeWorker
     @Environment(\.dismiss) private var dismiss
     @State private var devices = SplatDevices.shared
     @State private var viewing: SplatOutput?
@@ -40,7 +44,6 @@ struct MakeSplatView: View {
                 Button("Stop", role: .destructive) { jobs.cancel() }
             }
             .onAppear {
-                devices.excludedNames = computeWorker.isEnabled ? [DeviceInfo.modelName] : []
                 devices.start()
             }
         }
@@ -131,7 +134,7 @@ struct MakeSplatView: View {
                 HStack {
                     Text(p.totalSteps > 0 ? "Step \(p.step.formatted()) / \(p.totalSteps.formatted())" : p.message).lineLimit(2)
                     Spacer()
-                    if let eta = p.eta, eta > 0 { Text("\(ComputeView.duration(eta)) left") }
+                    if let eta = p.eta, eta > 0 { Text("\(Self.duration(eta)) left") }
                 }
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 if p.totalSteps > 0 {
@@ -154,7 +157,7 @@ struct MakeSplatView: View {
             Button { viewing = out } label: { Label("View splat", systemImage: "cube.transparent").font(.headline) }
             ShareLink(item: out.plyURL) { Label("Share .ply", systemImage: "square.and.arrow.up") }
         } header: {
-            Text("\(splats.formatted()) splats in \(ComputeView.duration(seconds))")
+            Text("\(splats.formatted()) splats in \(Self.duration(seconds))")
         } footer: {
             Text("Saved in Files › On My iPhone › SplatWork Capture › Splats.")
         }
