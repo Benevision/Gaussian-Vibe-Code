@@ -49,7 +49,7 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
    1.6.0 (untested on real AMD / Intel hardware); training needs a decision on the path: see [GPU_SUPPORT.md](GPU_SUPPORT.md).
 2. **Linux parity with this release's Mac features:** the Projects list with stage checkpoints and resume, drone
    mode and the photo-location switch, Show Live View, block Retry / Leave Out / Pause.
-3. **A Windows app** with the Mac and Linux feature set.
+3. **A Windows app** with the Mac and Linux feature set: plan in [WINDOWS.md](WINDOWS.md).
 4. **Steam Frame capture:** recording with the stereo cameras and the IR cameras together, for room meshing that
    makes splats more accurate.
 
