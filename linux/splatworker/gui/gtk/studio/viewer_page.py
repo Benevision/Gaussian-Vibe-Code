@@ -191,7 +191,7 @@ class ViewerPage(Gtk.Box):
              lambda: np_("capture", None)),
             ("view-dual-symbolic", "Stereo footage", "Side-by-side, top-bottom or two-stream footage.",
              lambda: np_("stereo", None)),
-            ("media-tape-symbolic", "Home video", "Old VHS or camcorder tapes saved as a video file. Cleaned up and split into clips.",
+            ("video-x-generic-symbolic", "Home video", "Old VHS or camcorder tapes saved as a video file. Cleaned up and split into clips.",
              lambda: np_("homevideo", None)),
         ])
         tiles("Open", [

@@ -23,7 +23,7 @@ enum UISnapshots {
                     model.mode = mode
                     for page in pages(model) {
                         page.apply(model)
-                        try? await Task.sleep(for: .milliseconds(700))
+                        try? await Task.sleep(for: .seconds(page.wait))
                         snap(win, to: dir.appendingPathComponent("\(sname)-\(mode.rawValue)-\(page.name).png"))
                         if let sheet = win.attachedSheet {
                             snap(sheet, to: dir.appendingPathComponent("\(sname)-\(mode.rawValue)-\(page.name)-sheet.png"))
@@ -44,7 +44,7 @@ enum UISnapshots {
         }
     }
 
-    struct Page { var name: String; var apply: (AppModel) -> Void; var undo: (AppModel) -> Void = { _ in } }
+    struct Page { var name: String; var apply: (AppModel) -> Void; var undo: (AppModel) -> Void = { _ in }; var wait: Double = 0.7 }
 
     static func pages(_ m: AppModel) -> [Page] {
         var p: [Page] = [Page(name: "viewer") { $0.sidebar = .viewer; $0.inspectorTab = .view }]
@@ -60,6 +60,10 @@ enum UISnapshots {
         if let drone = ProcessInfo.processInfo.environment["SPLAT_UI_DRONE"] {   // a folder of drone photos
             p += [Page(name: "wizard-drone", apply: { $0.newProjectSource = .photos(folder: URL(fileURLWithPath: drone)); $0.newProjectStartStep = 0; $0.showNewProject = true },
                        undo: { $0.showNewProject = false })]
+        }
+        if let tape = ProcessInfo.processInfo.environment["SPLAT_UI_HOMEVIDEO"] {   // an old home video (analyse it first: --home-video-clips)
+            p += [Page(name: "wizard-homevideo", apply: { $0.newProjectSource = .homeVideo(URL(fileURLWithPath: tape)); $0.newProjectStartStep = 0; $0.showNewProject = true },
+                       undo: { $0.showNewProject = false }, wait: 8)]
         }
         if let proj = ProcessInfo.processInfo.environment["SPLAT_UI_PROJECT"] {
             p += [Page(name: "project") { $0.sidebar = .project(URL(fileURLWithPath: proj)) }]

@@ -21,8 +21,8 @@ services `_splatworker._tcp` / `_splatcapture._tcp`, the Mac module and binary `
 
 | Area | How | Coverage |
 |---|---|---|
-| Linux worker + studio core | `cd linux && python -m pytest -q tests` (no GPU needed; fake backends) | 304 tests: API, queue, pause/resume/shutdown, processing, datasets, devices, block training, GUI logic, formats, photo import |
-| splatprep | `cd tools && python -m pytest -q tests` (needs opencv-python-headless, scipy) | 107 tests |
+| Linux worker + studio core | `cd linux && python -m pytest -q tests` (no GPU needed; fake backends) | 362 passed + 25 skipped (2026-11-13): API, queue, pause/resume/shutdown, processing, datasets, devices, block training, GUI logic, formats, photo import, home video options |
+| splatprep | `cd tools && python -m pytest -q tests` (needs opencv-python-headless, scipy; PyAV for the home-video end-to-end test) | 129 tests, incl. home video restoration on synthetic tape artefacts |
 | Vulkan trainer (`linux/vktrain`, stages 1, 2a, 2b) | `vktrain-selftest` and `tests/test_vktrain.py` on Mesa lavapipe in `linux/vktrain/ci/Dockerfile` (CI: `vulkan-trainer.yml`; the pytest file skips without glslang + a Vulkan device) | every kernel against a double-precision CPU reference and finite differences (incl. the 2b image-space loss pipeline: skybox, colour correction, decoupled SSIM, depth / normal losses; transient masks against trainer.py's rule; the camera-pose gradient; compact Adam against a host reference); the host strategies; end-to-end `splatwork-vk-train train` runs on synthetic scenes (both strategies, pause / resume incl. the 2b state, checkpoint, cancel, region, and one run per 2b feature on a scene made for it: sky, per-photo colour shifts, depth maps, moving objects, noisy poses). Against the CUDA trainer on the RTX 4080: by hand, `compare_training.sh` (not run yet) |
 | Linux GTK interface | `linux/scripts/gui_smoke.py` under Xvfb in a Debian container with Mesa (OpenGL via llvmpipe): screenshots of every page | layout and wiring, not real GPUs |
 | Mac app | `swift build -c release`; headless CLI: `--prepare`, `--train [--blocks N]`, `--eval`, `--convert`, `--render`, `--survey`; UI snapshots with `SPLAT_UI_SNAPSHOTS=<dir>` (plus `SPLAT_UI_PROJECT`, `SPLAT_UI_DRONE`) | end to end on real photos; the trainer's gradients are checked |
@@ -42,6 +42,8 @@ Not covered by automated tests: CUDA training on real NVIDIA GPUs (done by hand 
 - After an NVIDIA driver update the Flatpak's matching driver extension may be missing; the setup screen shows the
   `flatpak install flathub org.freedesktop.Platform.GL.nvidia-<version>//1.4` command.
 - Drone video: locations from DJI flight logs (`.SRT`) aren't read yet.
+- Home video (VHS): SplatWork for Linux takes the clips to use as numbers (the project log lists them); the Mac's
+  clip list with pictures isn't mirrored there yet. Results depend heavily on the shot: see [VHS.md](VHS.md).
 - Processing on a worker is orchestrated step by step from the client; only training runs independently while the
   client is offline (worker-side whole-pipeline jobs are in progress).
 - The Mac release is ad-hoc signed (no Developer ID secrets in the repository), so it isn't notarized.

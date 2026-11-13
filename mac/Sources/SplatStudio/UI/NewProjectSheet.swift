@@ -280,6 +280,10 @@ struct NewProjectSheet: View {
     }
 
     @ViewBuilder private func sourceOptions(_ s: SourceDescription) -> some View {
+        if case .homeVideo = s {} else { preparationPanel(s) }
+    }
+
+    @ViewBuilder private func preparationPanel(_ s: SourceDescription) -> some View {
         PanelSection(title: "Preparation", systemImage: "slider.horizontal.3") {
             SettingRow(id: "source.maxImageSize") {
                 Picker("", selection: Binding(get: { options.maxImageSize ?? 0 }, set: { options.maxImageSize = $0 == 0 ? nil : $0 })) {

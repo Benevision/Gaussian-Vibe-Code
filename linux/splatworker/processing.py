@@ -39,6 +39,14 @@ def frames_available() -> bool:
         return False
 
 
+def homevideo_available() -> bool:
+    """Old home video restoration (frames request ``vhs``, splatprep ≥ 2026-11-13)."""
+    try:
+        return frames_available() and importlib.util.find_spec("splatprep.vhs") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def available_models() -> List[str]:
     """``splatprep.models.available_models()`` if importable, else []."""
     if not splatprep_available():

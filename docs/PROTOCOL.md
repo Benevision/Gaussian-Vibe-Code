@@ -289,6 +289,29 @@ calibration (`offlineCal` container tag): the baseline, per-eye intrinsics, whic
 fisheye image circle (written as `masks/<frame>_L.png` keep masks). Only the chosen frames' other eye is decoded on
 demand (two decoded frames held). Apple MV-HEVC spatial video needs VideoToolbox and stays Mac-only.
 
+**Old home video (worker ≥ 1.6.0, capability `homevideo`).** A `task: frames` request may carry `"vhs"` instead of
+plain extraction (`tools/splatprep/vhs.py`, `docs/dev/VHS.md`):
+
+```jsonc
+"vhs": {"analyseOnly": false,          // true: only find the clips (vhs.json + vhs-thumbs/), no frames
+        "clips": [1, 4],               // clip ids from vhs.json; null = every clip judged "good"
+        "totalFrames": 400,            // frames over all chosen clips (shared by camera travel, ≤ framesPerClip each)
+        "maxHeight": 576,              // output height in square pixels; tape holds no more
+        "denoise": true, "colour": true, "deinterlace": true, "repairDropouts": true, "maskOverlays": true,
+        "minClipSeconds": 4.0, "framesPerClip": 150}
+```
+
+Output in `outputDir`: `images/` (cropped, square pixels), `masks/` (only for clips with a burnt-in date stamp;
+255 = keep), `frames.json` whose frames carry `clip` and `cameraGroup`, `vhs.json` (file properties and clips:
+`id`, `start`, `end`, `verdict` = `good` | `rotationOnly` | `static` | `blurry` | `short` | `noSignal`, `reason`,
+`parallax`, `cameraTravel`, `zooms`, `overlay`, `thumbnail`, `selected`, `cameras`, `colour`; plus `used`),
+`vhs-thumbs/` and `vhs-analysis.npz` (per-frame measurements; a later request in the same folder reuses it instead
+of decoding the video again).
+
+An `sfm` request may carry `"cameraGroups": {"000012.jpg": 2000, …}` (image basename → group): the images of a group
+share one camera, every other image gets its own. Home video sends one group per clip, and a new group within a clip
+each time the lens has zoomed by more than ~8 %.
+
 **Rigs with a baseline (worker ≥ 1.4.0).** In an `sfm` request's `rig.groups`, a value may be
 `{"R": R, "t": [x, y, z]}` instead of `R` (`t` = camera centre in the rig frame, metres). Sensors are told apart by
 rotation and centre, views of one frame with a baseline are matched with each other, and the rig config holds the

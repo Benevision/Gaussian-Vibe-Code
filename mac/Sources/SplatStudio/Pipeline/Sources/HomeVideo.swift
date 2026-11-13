@@ -129,7 +129,7 @@ enum HomeVideoIngest {
                        progress: PipelineProgressHandler?) async throws -> FrameSet {
         let fm = FileManager.default
         try fm.ensureDirectory(dir)
-        if onWorker, let worker, let info = try? await worker.info(timeout: 10), info.canExtractFrames {
+        if onWorker, let worker, let info = try? await worker.info(timeout: 10), info.canRestoreHomeVideo {
             do {
                 return try await RemoteFrameExtraction.extract(video: video, options: VideoExtractionOptions(), equirect: nil, vhs: options.request,
                                                                into: dir, worker: worker, progress: progress)

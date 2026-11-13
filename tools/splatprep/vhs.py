@@ -280,7 +280,8 @@ class _Segment:
     grad_sum: Optional[np.ndarray] = None
     n: int = 0
     thumb: Optional[np.ndarray] = None   # a representative RGB thumbnail
-    thumb_score: float = -1.0
+    last_thumb_t: float = -1.0
+    thumbs: List[Tuple[float, float, np.ndarray]] = field(default_factory=list)   # (sharpness, comb, image) ~1 per s
 
 
 class _Tracker:
@@ -457,9 +458,9 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
             seg.thumb_sq += gf * gf
             seg.grad_sum += np.sqrt(gx * gx + gy * gy)
             seg.n += 1
-            if f.sharp > seg.thumb_score:
-                seg.thumb_score = f.sharp
-                seg.thumb = frame.reformat(width=320, height=int(round(320 / dar)), format="rgb24").to_ndarray()
+            if not seg.thumbs or t - seg.last_thumb_t >= 1.0:       # a candidate thumbnail about once a second
+                seg.last_thumb_t = t
+                seg.thumbs.append((f.sharp, f.comb, frame.reformat(width=240, height=int(round(240 / dar)), format="rgb24").to_ndarray()))
             now = _time.monotonic()
             if now - last > 0.5:
                 last = now
@@ -538,6 +539,13 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
                     cv2.imwrite(str(thumbs_dir / f"clip{k:03d}_overlay.png"), m)
                 seg_mask = m
                 c["_overlayMask"] = seg_mask
+        if seg.thumbs:
+            # a representative, sharp picture: the sharpest of the clean candidates below the top tenth (the very
+            # "sharpest" frames of a tape are often damaged ones: tearing and dropouts are all edges)
+            ok = [c for c in seg.thumbs if c[1] <= COMB_RATIO] or seg.thumbs
+            cap = float(np.percentile([c[0] for c in ok], 90))
+            seg.thumb = max((c for c in ok if c[0] <= cap), key=lambda c: c[0], default=ok[0])[2]
+            seg.thumbs = []
         if thumbs_dir is not None and seg.thumb is not None:
             thumbs_dir.mkdir(parents=True, exist_ok=True)
             p = thumbs_dir / f"clip{k:03d}.jpg"
@@ -573,12 +581,14 @@ def select_frames(frames: Sequence[_Frame], step: float, max_gap: float = 1.5, m
                   edge: float = 0.25) -> List[int]:
     """Pick frames of one clip: a new pick each time the camera has moved ``step`` (fraction of the width) or
     ``max_gap`` seconds have passed with some movement; within each stretch the sharpest frame wins. Repeats,
-    no-signal frames are never picked; combed frames only when nothing else is there, and frames with a
-    (repaired) dropout line less readily. Returns
-    positions in ``frames``."""
+    no-signal frames are never picked; combed frames only when nothing else is there, frames with a (repaired)
+    dropout line less readily, and sharpness counts only up to twice the clip's median. Returns positions in
+    ``frames``."""
     cand = [i for i, f in enumerate(frames) if f.unique and not f.nosignal]
     if not cand:
         return []
+    # far sharper than the clip's usual frame = usually tape damage (tearing is all edges), not a better picture
+    sharp_cap = 2.0 * float(np.median([frames[i].sharp for i in cand]))
     t0, t1 = frames[cand[0]].t + edge, frames[cand[-1]].t - edge
     cand = [i for i in cand if t0 <= frames[i].t <= t1] or cand
     picks: List[int] = []
@@ -598,7 +608,7 @@ def select_frames(frames: Sequence[_Frame], step: float, max_gap: float = 1.5, m
 
         def q(i: int) -> float:
             f = frames[i]
-            return f.sharp * (0.4 if f.comb > COMB_RATIO else 1.0) * (0.8 if f.dropout > DROPOUT_LEVEL else 1.0)
+            return min(f.sharp, sharp_cap) * (0.4 if f.comb > COMB_RATIO else 1.0) * (0.8 if f.dropout > DROPOUT_LEVEL else 1.0)
 
         best = max(stretch, key=q)
         if not picks or frames[best].t - frames[picks[-1]].t >= min_gap:
@@ -707,7 +717,7 @@ def temporal_denoise(center: np.ndarray, neighbours: Sequence[np.ndarray], sigma
 # prepare: analysis → selection → clean frames → FrameSet
 # ---------------------------------------------------------------------------
 
-ANALYSIS_VERSION = 2
+ANALYSIS_VERSION = 3
 _FIELDS = ("index", "t", "unique", "nosignal", "comb", "dropout", "sharp", "motion", "zoom", "parallax", "lo", "hi", "clip")
 
 
@@ -803,7 +813,7 @@ def prepare(video: Path, out_dir: Path, vo: Dict[str, Any], vhs_opts: Dict[str, 
         f"(each shown {info['repeatFactor']}×), {info['combedFrames']} combed, crop {info['crop']}, {len(clips)} clips")
     for c in clips:
         log(f"clip {c['id']}: {c['start']:.1f}–{c['end']:.1f} s {c['verdict']} ({c['reason']})"
-            + (f", parallax {c.get('parallax')}‰, zoom {c.get('zoomRange')}" if "parallax" in c else ""))
+            + (f", parallax {c.get('parallax')} %, zoom {c.get('zoomRange')}" if "parallax" in c else ""))
     if o["analyseOnly"]:
         progress(1.0, f"{len(clips)} clips")
         return {"vhs": summary, "numFrames": 0, "numImages": 0}

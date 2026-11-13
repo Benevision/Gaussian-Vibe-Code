@@ -43,7 +43,7 @@ from . import PRODUCT_NAME, PROTOCOL_VERSION, __version__
 from .backends import Backend, JobCancelled, JobContext, JobPaused, SubprocessBackend
 from .config import ConfigError, ServerSettings, TrainingConfig
 from .dataset import DatasetError, find_upload_root, parse_dataset
-from .processing import ProcessingError, validate_request
+from .processing import ProcessingError, homevideo_available, validate_request
 from .safezip import UnsafeArchive, safe_extract
 
 log = logging.getLogger("splatworker")
@@ -971,6 +971,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             caps = caps + ["maskpreview"]  # ≥ 1.4.0: processing task "maskpreview" (SAM 2 clicks, mask editor)
         if "frames" in caps:
             caps = caps + ["stereo"]      # ≥ 1.4.0: frames request "stereo" (two eyes → images/*_L, *_R)
+            if homevideo_available():
+                caps = caps + ["homevideo"]   # ≥ 1.6.0: frames request "vhs" (old tape restoration, clips), sfm "cameraGroups"
         caps = caps + ["priority"]        # ≥ 1.4.0: POST /v1/jobs/{id}/prioritize, JobStatus.priority / origin
         if "train" in caps:
             caps = caps + ["census"]      # ≥ 1.4.0: POST /v1/census (Auto clean)

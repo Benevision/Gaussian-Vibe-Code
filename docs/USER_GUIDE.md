@@ -66,6 +66,7 @@ Choose **New** (⌘N), or drop a folder, a video or a capture onto the window. T
 | **Photos folder** | Blurry and duplicate photos can be rejected. |
 | **Drone / aerial** | A folder of drone photos or a drone video, with the aerial settings below. Drone photos opened any other way are recognised too. |
 | **Video** | Frames per second or a target number of frames, and *Pick sharpest frame* (the sharpest frame in each window). |
+| **Home video** | Old VHS, Video8 or Hi8 tapes saved as a video file. See [Home video](#home-video-vhs-camcorder-tapes) below. |
 | **360° video / 360° photos** | Each equirectangular frame is cut into flat views (8 by default, 90° each). *Drop the floor view* skips the straight-down view showing the tripod or you. |
 | **Stereo footage** | Side-by-side, top/bottom, two files, Apple spatial video (MV-HEVC) or two video tracks. The baseline gives the scene metric scale; stereo depth is optional. |
 | **iPhone / headset capture** | Poses (and LiDAR depth) come with the capture. Options: use depth for supervision, build the starting splats from depth, drop frames with limited tracking. |
@@ -133,6 +134,35 @@ stage that failed.
 
 **Project layout:** `<project>/project.json` (source, settings and status), `<project>/dataset/` (posed images and
 `dataset.json`), and `<project>/outputs/*.ply` (results).
+
+### Home video (VHS, camcorder tapes)
+
+Choose the **Home video** tile (or *Change… → Home video*) and pick the digitised tape. SplatWork reads the whole
+file first (a minute or two for a long tape) and lists its **clips**. Clips are the shots between scene cuts. Each
+clip has a picture and a verdict:
+
+- **Good: the camera moves.** These clips are ticked. The camera travels, so there is depth to recover.
+- **Only turns: little depth.** The camera pans from one spot. You can tick these, but they rarely make a splat on
+  their own.
+- **Camera hardly moves**, **Mostly blurred.** Untick these unless nothing else shows the place.
+- Very short stretches and blank (blue or black) screens aren't listed.
+
+Clips that show the same place are joined into one scene. Clips that don't connect are left out of it. To make a
+splat of one of those, create another project with only that clip ticked.
+
+What happens to the frames:
+- **Picked frames.** Frames are picked where the camera has moved on and the picture is sharpest, not at a fixed
+  rate. Repeated frames, which are common in tape transfers, are skipped.
+- **Cleaned frames.** Black borders and the noisy band at the bottom of the picture are cropped. Stretched (non-square)
+  pixels are corrected. Interlaced frames are rebuilt and tracking lines are repaired. Each frame is denoised with its
+  neighbours, and each clip's colour cast is taken out. *Tape clean-up* turns the optional steps off.
+- **Date stamps.** A burnt-in date or time is masked when it's found.
+- **Cameras.** Each clip gets its own camera. A clip that zooms gets one camera per zoom setting.
+- **Training.** Training uses colour without view-dependent detail (SH degree 1) and ignores moving people and pets,
+  unless you changed the training settings yourself.
+
+What to expect: tape holds about 768 × 576 pixels of real detail, so splats from it are soft. Shots that walk
+through a place give the best results. Shots that only pan, zoom or follow a moving subject give little or no depth.
 
 ### Capture tips
 

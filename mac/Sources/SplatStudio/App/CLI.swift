@@ -212,6 +212,26 @@ enum CLI {
             print("sampled \(s.sampled), with location \(s.withLocation), drone: \(s.drone ?? "no")")
             exit(0)
         }
+        if let src = value("--home-video-clips") {
+            // The clips of an old home video and what each is good for: SplatStudio --home-video-clips <video>
+            let sem = DispatchSemaphore(value: 0)
+            var code: Int32 = 0
+            Task.detached {
+                do {
+                    let (a, dir) = try await HomeVideoIngest.analyse(video: URL(fileURLWithPath: src)) { p in
+                        if !p.message.isEmpty { print("  \(p.message)"); fflush(stdout) }
+                    }
+                    print("\(a.width)×\(a.height), \(a.summary) (analysis in \(dir.path))")
+                    for c in a.clips where c.offerable {
+                        print(String(format: "  clip %2d  %7.1f–%7.1f s  %-28@ parallax %5.1f %%  travel %5.2f%@", c.id, c.start, c.end,
+                                     c.verdictTitle as NSString, c.parallax ?? 0, c.cameraTravel ?? 0, c.zooms == true ? "  zooms" : ""))
+                    }
+                } catch { fputs("error: \(error.localizedDescription)\n", stderr); code = 1 }
+                sem.signal()
+            }
+            sem.wait()
+            exit(code)
+        }
         if let src = value("--prepare") {
             // Headless dataset preparation: SplatStudio --prepare <photos dir | video | capture> --out <project dir>
             //   [--solver auto|objectcapture|capture|<splatprep feature id>] [--mask none|people|dynamic]
