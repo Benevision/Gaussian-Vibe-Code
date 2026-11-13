@@ -1,6 +1,7 @@
 # Vulkan trainer (linux/vktrain): build it and run its kernel self-test (CPU reference + finite-difference
-# gradient checks) on Mesa lavapipe, software Vulkan, so no GPU is needed. Separate from the Flatpak workflow:
-# a failure here never blocks a build or release.
+# gradient checks) and end-to-end training runs of splatwork-vk-train on a synthetic dataset, on Mesa lavapipe
+# (software Vulkan), so no GPU is needed. Separate from the Flatpak workflow: a failure here never blocks a
+# build or release.
 name: Vulkan trainer
 
 on:
@@ -39,3 +40,8 @@ jobs:
         run: >
           docker run --rm -v "$PWD":/w -w /w/linux/vktrain splat-vk-test
           python3 compare_gsplat.py all --dir /tmp/cmp --vk-train ./build/splatwork-vk-train --no-gsplat
+      - name: Training runs (synthetic scene; both strategies, pause / resume, checkpoint, cancel, region)
+        run: >
+          docker run --rm -v "$PWD":/w -w /w/linux -e VKTRAIN_BUILD_DIR=/w/linux/vktrain/build splat-vk-test
+          python3 -m pytest -q -p no:cacheprovider tests/test_vktrain.py -k "not selftest and not dump"
+          --rootdir tests --noconftest -s

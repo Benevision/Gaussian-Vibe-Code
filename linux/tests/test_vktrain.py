@@ -187,8 +187,10 @@ def test_pause_resume_continues_the_same_run(build_dir, dataset, tmp_path, strat
     b = {m["step"]: m for m in of(first, "trace") + of(second, "trace")}
     assert sorted(b) == list(range(1, 321))
     assert (tmp_path / "p.ply").is_file() and not state.exists()
-    # separate runs drift apart a little (float-atomic order); they stay the same training
-    assert b[320]["loss"] == pytest.approx(a[320]["loss"], rel=0.1)
+    # separate runs drift apart (float-atomic order, then MCMC's opacity-weighted sampling); the same training still
+    mean = lambda t: sum(t[s]["loss"] for s in range(251, 321)) / 70   # noqa: E731
+    print(f"{strategy}: paused + resumed vs uninterrupted, mean loss 251-320: {mean(b):.5f} vs {mean(a):.5f}")
+    assert mean(b) == pytest.approx(mean(a), rel=0.1)
 
 
 def test_checkpoint_and_cancel_on_stdin(build_dir, dataset, tmp_path):
