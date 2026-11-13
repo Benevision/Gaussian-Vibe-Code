@@ -374,6 +374,34 @@ def finish_dataset(dataset_dir: Path, masks: Dict[str, str], sky: Dict[str, str]
     return {"cameras": len(doc.get("cameras", [])), "masked": nm, "sky": ns, "holdout": nh}
 
 
+def camera_groups_from_frames(dataset_dir: Path) -> Optional[Dict[str, int]]:
+    """splatprep ``cameraGroups`` from ``frames.json`` (home video: frames of one clip / zoom setting share a camera)."""
+    f = Path(dataset_dir) / "frames.json"
+    if not f.is_file():
+        return None
+    fs = json.loads(f.read_text(encoding="utf-8"))
+    g = {Path(fr["image"]).name: int(fr["cameraGroup"]) for fr in fs.get("frames", []) if "cameraGroup" in fr}
+    return g or None
+
+
+def home_video_report(dataset_dir: Path) -> List[str]:
+    """Plain-words lines about the clips splatprep found (``vhs.json``), for the project log."""
+    f = Path(dataset_dir) / "vhs.json"
+    if not f.is_file():
+        return []
+    v = json.loads(f.read_text(encoding="utf-8"))
+    used = set(v.get("used") or [])
+    out = [f"home video: {v.get('width')}×{v.get('height')}, pixel aspect {v.get('pixelAspect')}, "
+           f"{v.get('uniqueFps')} unique frames/s, {len(v.get('clips', []))} clips"]
+    for c in v.get("clips", []):
+        if c.get("verdict") in ("short", "noSignal"):
+            continue
+        mark = "used" if c["id"] in used else "left out"
+        out.append(f"  clip {c['id'] + 1}: {c['start']:.0f}–{c['end']:.0f} s, {c['reason']} — {mark}"
+                   + (f", {c['selected']} frames" if c.get("selected") else ""))
+    return out
+
+
 def rig_from_frames(dataset_dir: Path) -> Optional[Dict]:
     """splatprep ``rig`` hint for 360° views from ``frames.json`` (one group per 360° frame)."""
     f = Path(dataset_dir) / "frames.json"

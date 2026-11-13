@@ -45,6 +45,8 @@ def stage_titles(o: ProjectOptions, train: bool = True) -> List[str]:
     s: List[str] = []
     if o.source_kind in ("video", "video360", "stereo"):
         s.append("Extracting frames")
+    elif o.source_kind == "homevideo":
+        s.append("Restoring home video")
     elif o.source_kind == "photos360":
         s.append("Splitting 360° photos")
     elif o.source_kind in ("photos", "capture"):
@@ -255,6 +257,20 @@ class LocalPipeline:
             for r in st["rejected"][:20]:
                 self._log(f"skipped {r['item']}: {r['reason']}")
             self._stereo_frames(ds)
+        elif o.source_kind == "homevideo":
+            self._stage("Restoring home video")
+            shutil.rmtree(ds / "masks", ignore_errors=True)
+            vid = self._register(self._video_folder(src))
+            req = o.frames_request(src.name)
+            req["outputDir"] = f"_frames_{uuid.uuid4().hex[:6]}"
+            self._process(vid, req, "home video", ds)
+            for line in importers.home_video_report(ds):
+                self._log(line)
+            if (ds / "masks").is_dir():          # burnt-in date stamps: one more mask layer
+                layer = ds / "splatprep-masks" / "frames"
+                shutil.rmtree(layer, ignore_errors=True)
+                layer.mkdir(parents=True)
+                (ds / "masks").rename(layer / "masks")
         elif o.source_kind in ("video", "video360", "stereo"):
             self._stage("Extracting frames")
             shutil.rmtree(ds / "masks", ignore_errors=True)        # stacked masks of an earlier run
@@ -376,6 +392,9 @@ class LocalPipeline:
             rig = importers.rig_from_frames(ds)
             if rig:
                 req["rig"] = rig
+            groups = importers.camera_groups_from_frames(ds)
+            if groups:
+                req["cameraGroups"] = groups          # home video: a camera per clip (or zoom setting)
             if o.source_kind == "stereo":
                 from . import stereo
 

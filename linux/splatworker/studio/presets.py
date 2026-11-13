@@ -80,7 +80,8 @@ FEATURES = [("superpoint_lightglue", "SuperPoint + LightGlue"), ("aliked_lightgl
             ("vggt", "VGGT (feed-forward)")]
 MASK_MODELS = [("none", "None"), ("person", "Remove people & pets"), ("sam2_auto", "Remove moving things")]
 SOURCE_KINDS = {
-    "photos": "Photos folder", "video": "Video", "video360": "360° video", "photos360": "360° photos folder",
+    "photos": "Photos folder", "video": "Video", "homevideo": "Home video (VHS, camcorder tape)",
+    "video360": "360° video", "photos360": "360° photos folder",
     "stereo": "Stereo footage", "capture": "iPhone / headset capture",
     "colmap": "COLMAP project", "nerfstudio": "Nerfstudio transforms.json", "dataset": "Prepared dataset",
 }
@@ -133,6 +134,9 @@ class ProjectOptions:
     auto_train: bool = True
     train_on: str = "local"                  # net.placement: "local" (this PC) | "all" (block-parallel) | device id
     split_above: int = 400                   # net.blockThreshold: "all" splits scenes with this many photos or more
+    home_frames: int = 400                   # source.homeVideoFrames: frames over all clips (home video)
+    home_clips: str = ""                     # home video: clip numbers to use ("2, 5"; empty = every usable clip)
+    home_restore: bool = True                # source.homeVideoRestore: denoise, colour, tracking-line repair
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -164,7 +168,19 @@ class ProjectOptions:
             req["equirect"] = self.equirect_options()
         if self.source_kind == "stereo":
             req["stereo"] = self.stereo_options()
+        if self.source_kind == "homevideo":
+            req["vhs"] = self.home_video_options()
         return req
+
+    def home_clip_ids(self) -> Optional[List[int]]:
+        """Clip numbers as the user sees them (1-based) → splatprep clip ids; None = every usable clip."""
+        ids = [int(t) - 1 for t in self.home_clips.replace(";", ",").replace(" ", ",").split(",") if t.strip().isdigit()]
+        return sorted({i for i in ids if i >= 0}) or None
+
+    def home_video_options(self) -> Dict[str, Any]:
+        """splatprep ``frames`` request ``vhs`` (tools/splatprep/vhs.py): old tape footage restored and split into clips."""
+        return {"clips": self.home_clip_ids(), "totalFrames": int(self.home_frames), "denoise": self.home_restore,
+                "colour": self.home_restore, "repairDropouts": self.home_restore}
 
     def equirect_options(self) -> Dict[str, Any]:
         """The Mac's ``Equirect360Options`` for 360° video (worker) and 360° photos (this side)."""
@@ -210,4 +226,11 @@ class ProjectOptions:
         return req
 
     def train_config(self) -> Dict[str, Any]:
-        return training_config(self.preset, self.train_overrides)
+        cfg = training_config(self.preset)
+        if self.source_kind == "homevideo":
+            # as on the Mac: tape colour carries no view-dependent detail, and people walk through most shots
+            cfg["shDegree"] = min(int(cfg.get("shDegree", 3)), 1)
+            cfg["transientMasking"] = True
+            cfg["maxImageSize"] = min(int(cfg.get("maxImageSize", 1600)), 1024)
+        cfg.update(self.train_overrides or {})
+        return cfg

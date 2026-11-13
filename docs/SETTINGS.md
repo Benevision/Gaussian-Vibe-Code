@@ -1,12 +1,12 @@
 # SplatWork — settings reference
 
-Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
+Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 119 settings. **Easy** settings are always visible; **Advanced** ones appear when the toolbar is set to Advanced. The same text is in the app under **Help → Settings Reference** and behind every ⓘ button.
 
 ## Contents
 
 - [Viewer](#viewer) — 20 settings
 - [Editing](#editing) — 7 settings
-- [Sources & frame extraction](#sources--frame-extraction) — 15 settings
+- [Sources & frame extraction](#sources--frame-extraction) — 17 settings
 - [Camera solving (SfM)](#camera-solving-sfm) — 10 settings
 - [Masking](#masking) — 4 settings
 - [Training — basics](#training--basics) — 9 settings
@@ -477,6 +477,8 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 sett
 | [Maximum image size](#maximum-image-size) | 1600 px | 800–8192 px | Advanced |
 | [Frames per second to extract](#frames-per-second-to-extract) | 2 fps | 0.5–30 | Easy |
 | [Target frame count](#target-frame-count) | 0 (use fps) | 0–3000 | Easy |
+| [Frames from the tape](#frames-from-the-tape) | 400 | 50–2000 | Easy |
+| [Tape clean-up](#tape-clean-up) | All on | – | Advanced |
 | [Pick sharpest frame](#pick-sharpest-frame) | On | – | Easy |
 | [Reject blurry photos](#reject-blurry-photos) | 0.35 | 0–0.9 | Advanced |
 | [360°: views per frame](#360-views-per-frame) | 8 around (16 views) | 3–16 | Easy |
@@ -540,6 +542,37 @@ Generated from `SettingsCatalog.swift` (`SplatStudio --dump-settings`). 117 sett
 **When to change it**
 
 - More frames = better coverage but slower camera solving (exhaustive matching grows quadratically).
+
+### Frames from the tape
+
+> How many frames to pick across the ticked clips.
+
+| | |
+|---|---|
+| **Default** | 400 |
+| **Range** | 50–2000 |
+| **Mode** | Easy |
+| **ID** | `source.homeVideoFrames` |
+
+**How it works.** Frames are shared between the clips by how far the camera moves in each, and picked where the camera has moved on and the picture is sharpest — not at a fixed rate.
+
+- Tape holds about 768 × 576 pixels of real detail, so frames are small and 300–600 solve quickly.
+
+### Tape clean-up
+
+> Denoise over neighbouring frames, even out each clip's colour, repair tracking lines.
+
+| | |
+|---|---|
+| **Default** | All on |
+| **Mode** | Advanced |
+| **ID** | `source.homeVideoRestore` |
+
+**How it works.** Denoising lines up the frames either side of each picked frame and averages them where they agree, so tape noise drops while moving people don't smear.
+
+- Colour takes out each clip's colour cast with one setting for the whole clip (frame-to-frame drift is left to training's appearance correction).
+- Tracking lines are thin bright streaks across part of a line; they are filled from the picture around them.
+- Black borders and the noisy band at the bottom are always cropped, pixels made square and interlaced frames rebuilt.
 
 ### Pick sharpest frame
 

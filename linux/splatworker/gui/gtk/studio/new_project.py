@@ -27,7 +27,7 @@ class NewProjectDialog(Adw.Window):
         self.o = ProjectOptions(name="", source_kind=kind or "photos", source=source or "")
         if self.o.source_kind in ("video360", "photos360"):
             self.o.max_image_size = 1600
-        if self.o.source_kind in ("photos", "video", "video360", "photos360", "stereo"):
+        if self.o.source_kind in ("photos", "video", "video360", "photos360", "stereo", "homevideo"):
             self.o.sky = True
         self.parent_dir = controller.projects_root
 
@@ -116,7 +116,20 @@ class NewProjectDialog(Adw.Window):
                        subtitle="Right-eye images become training cameras too (double the coverage)."),
             switch_row("Stereo depth", o.stereo_depth, lambda v: setattr(o, "stereo_depth", v), "source.stereoDepth"),
         ]
-        for r in self.video_rows + self.r360_rows + self.photo_rows + self.stereo_rows:
+        self.home_clips_row = Adw.EntryRow(title="Clips to use (numbers, e.g. 2, 5; empty = every usable clip)")
+        self.home_clips_row.connect("changed", lambda r: setattr(o, "home_clips", r.get_text()))
+        self.home_rows = [
+            spin_row("Frames from the tape", 50, 2000, 50, o.home_frames, lambda v: setattr(o, "home_frames", int(v)),
+                     setting_id="source.homeVideoFrames"),
+            switch_row("Tape clean-up", o.home_restore, lambda v: setattr(o, "home_restore", v), "source.homeVideoRestore",
+                       subtitle="Denoise, even out each clip's colour, repair tracking lines. Borders, the noisy bottom "
+                                "band and non-square pixels are always fixed."),
+            self.home_clips_row,
+            plain_row(title="Clips", subtitle="The video is split at scene cuts and each clip judged; the project log "
+                                              "lists them (number, time, used or why not). Clips that show the same place "
+                                              "join into one scene."),
+        ]
+        for r in self.video_rows + self.r360_rows + self.photo_rows + self.stereo_rows + self.home_rows:
             prep.add(r)
         prep.add(spin_row("Hold out every Nth image", 0, 100, 1, o.holdout_every,
                           lambda v: setattr(o, "holdout_every", int(v)), setting_id="source.holdout"))
@@ -197,6 +210,8 @@ class NewProjectDialog(Adw.Window):
             r.set_visible(kind == "photos")
         for r in self.stereo_rows:
             r.set_visible(kind == "stereo")
+        for r in self.home_rows:
+            r.set_visible(kind == "homevideo")
         self.photos_btn.set_visible(kind == "stereo")
         self.right_row.set_visible(kind == "stereo" and self.o.stereo_layout == "separateFiles")
         posed = kind in ("colmap", "nerfstudio", "dataset")
@@ -208,6 +223,7 @@ class NewProjectDialog(Adw.Window):
         if kind == "capture":
             self.o.matching = "sequential"
         self.path_row.set_title({"photos": "Photos folder", "video": "Video file", "video360": "360° video file",
+                                 "homevideo": "Home video file (VHS, Video8, Hi8 … digitised)",
                                  "photos360": "Folder of 360° photos (2:1 equirectangular)",
                                  "stereo": "Stereo video (the left eye for two files) or photos folder",
                                  "capture": ".splatcapture folder", "colmap": "COLMAP project folder",

@@ -344,6 +344,28 @@
    "advanced": false
   },
   {
+   "id": "source.homeVideoFrames",
+   "group": "Sources & frame extraction",
+   "title": "Frames from the tape",
+   "summary": "How many frames to pick across the ticked clips.",
+   "detail": "Frames are shared between the clips by how far the camera moves in each, and picked where the camera has moved on and the picture is sharpest — not at a fixed rate. Tape holds about 768 × 576 pixels of real detail, so frames are small and 300–600 solve quickly.",
+   "defaultValue": "400",
+   "range": "50–2000",
+   "effects": "",
+   "advanced": false
+  },
+  {
+   "id": "source.homeVideoRestore",
+   "group": "Sources & frame extraction",
+   "title": "Tape clean-up",
+   "summary": "Denoise over neighbouring frames, even out each clip's colour, repair tracking lines.",
+   "detail": "Denoising lines up the frames either side of each picked frame and averages them where they agree, so tape noise drops while moving people don't smear. Colour takes out each clip's colour cast with one setting for the whole clip (frame-to-frame drift is left to training's appearance correction). Tracking lines are thin bright streaks across part of a line; they are filled from the picture around them. Black borders and the noisy band at the bottom are always cropped, pixels made square and interlaced frames rebuilt.",
+   "defaultValue": "All on",
+   "range": "",
+   "effects": "",
+   "advanced": true
+  },
+  {
    "id": "source.sharpestInWindow",
    "group": "Sources & frame extraction",
    "title": "Pick sharpest frame",
