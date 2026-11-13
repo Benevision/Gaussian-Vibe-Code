@@ -1,9 +1,17 @@
 #version 460
+#ifdef NATIVE_FLOAT_ATOMICS
+#extension GL_EXT_shader_atomic_float : require
+#endif
 #extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 // Projection backward (Mac: preprocess_backward, without the stage-2 regularisers and densification
 // statistics). From the per-splat screen-space gradients (acc, 12 floats, see raster_bwd) to position,
 // log-scale, quaternion, opacity logit and SH coefficients. Adds the view-dependent colour term
 // (dcolour/ddirection → position) that the Mac kernel leaves out; gsplat has it too.
+// pc.poseStripes > 0 (pose refinement): also the gradient w.r.t. the camera — dL/dW (world → camera rotation,
+// row-major), dL/dt (its translation) and dL/dcampos (the SH viewing directions) — summed over splats into
+// poseStripes copies of 15 floats (16 apart; the host sums them and applies the pose parametrisation's chain rule).
 #include "common.glsl"
 layout(local_size_x = 256) in;
 layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
@@ -19,10 +27,15 @@ layout(std430, binding = 9) writeonly buffer GScaleBuf { float gScale[]; };
 layout(std430, binding = 10) writeonly buffer GQuatBuf { float gQuat[]; };
 layout(std430, binding = 11) writeonly buffer GOpBuf { float gOp[]; };
 layout(std430, binding = 12) writeonly buffer GShBuf { float gSH[]; };
+DECLARE_ATOMIC_ACC(13)
+layout(push_constant) uniform PC { uint poseStripes; } pc;
 
 void main() {
     uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
-    if (i >= F.count) return;
+    bool live = i < F.count;
+    float pose[15];
+    for (int k = 0; k < 15; k++) pose[k] = 0.0;
+    if (live) {
     float gop = 0.0;
     vec3 gls = vec3(0.0);
     vec3 gp = vec3(0.0);
@@ -160,11 +173,28 @@ void main() {
                 float cd = dot(vec3(sh[i * 48 + k * 3], sh[i * 48 + k * 3 + 1], sh[i * 48 + k * 3 + 2]), dc);
                 gdir += cd * gb[k];
             }
-            gp += (gdir - dir * dot(dir, gdir)) / dlen;
+            vec3 gproj = (gdir - dir * dot(dir, gdir)) / dlen;
+            gp += gproj;
+            for (int k = 0; k < 3; k++) pose[12 + k] = -gproj[k];   // dir = normalize(p − campos)
+        }
+        if (pc.poseStripes > 0u) {
+            // t = W p + t0 → dW += dt pᵀ, dt0 = dt;  T = J W → dW += Jᵀ dT
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++) pose[r * 3 + c] = dt[r] * p[c] + Jm[0][r] * dT[0][c] + Jm[1][r] * dT[1][c];
+            for (int k = 0; k < 3; k++) pose[9 + k] = dt[k];
         }
     }
     gPos[i * 3] = gp.x; gPos[i * 3 + 1] = gp.y; gPos[i * 3 + 2] = gp.z;
     gScale[i * 3] = gls.x; gScale[i * 3 + 1] = gls.y; gScale[i * 3 + 2] = gls.z;
     gQuat[i * 4] = gq.x; gQuat[i * 4 + 1] = gq.y; gQuat[i * 4 + 2] = gq.z; gQuat[i * 4 + 3] = gq.w;
     gOp[i] = gop;
+    }
+    if (pc.poseStripes > 0u) {
+        uint wg = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+        uint slot = ((wg * gl_NumSubgroups + gl_SubgroupID) % pc.poseStripes) * 16u;
+        for (int k = 0; k < 15; k++) {
+            float s = subgroupAdd(pose[k]);
+            if (subgroupElect() && s != 0.0) accAdd(slot + uint(k), s);
+        }
+    }
 }

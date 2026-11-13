@@ -1,0 +1,27 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Learned skybox, forward (Mac: sky_composite; trainer.py: pred = render + (1 − alpha) · sky(direction)). Runs after
+// raster_fwd drew the splats over a black background: img.rgb += T_final · sigmoid(panorama) at the pixel's
+// viewing direction (common.glsl sky_tap).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) buffer ImgBuf { float img[]; };
+layout(std430, binding = 2) readonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 3) readonly buffer SkyBuf { float sky[]; };
+layout(push_constant) uniform PC { vec4 r0; vec4 r1; vec4 r2; uint W; uint H; float penalty; uint hasMask; } pc;
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= F.width || p.y >= F.height) return;
+    uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+    float T = finalT[pid];
+    SkyTap t = sky_tap(F, p, pc.r0.xyz, pc.r1.xyz, pc.r2.xyz, pc.W, pc.H);
+    vec3 c = vec3(0.0);
+    for (int k = 0; k < 4; k++) {
+        uint b = t.idx[k] * 3u;
+        c += t.w[k] * vec3(sigmoid1(sky[b]), sigmoid1(sky[b + 1u]), sigmoid1(sky[b + 2u]));
+    }
+    img[pid] += T * c.x;
+    img[hw + pid] += T * c.y;
+    img[2u * hw + pid] += T * c.z;
+}

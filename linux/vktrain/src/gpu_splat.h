@@ -14,6 +14,38 @@ struct AdamGroup {
     uint32_t period = 1, split = 1;
 };
 
+// The optional parts of the loss (stage 2b), set per step by the training loop (trainer.cpp) before forwardLoss /
+// backwardStep. Everything off by default: the loss is then the stage-2a L1 + SSIM.
+struct LossFeatures {
+    // Learned skybox (trainer.py Skybox): the backdrop is sigmoid(panorama) at the pixel's direction; raster_fwd
+    // then runs over a black background (RenderOpts.bg must be 0). skyRot = B · Rᵀ (camera → sky coordinates).
+    bool sky = false;
+    Buffer* skyTex = nullptr;     // logits [H][W][3]
+    Buffer* skyGrad = nullptr;    // same layout, accumulated (zeroed by backwardStep)
+    Buffer* skyM = nullptr;       // its Adam moments (backwardStep with StepExtras.skyLr > 0)
+    Buffer* skyV = nullptr;
+    uint32_t skyW = 0, skyH = 0;
+    float skyRot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    bool skyMask = false;         // aux holds a sky mask (setAux): coverage penalty
+    float skyPenalty = 0;         // −skyAlphaWeight / max(Σ mask, 1)
+    // Per-photo colour correction (trainer.py AppearanceCorrection / BilateralGrid), parameters from setCorrection.
+    enum Corr { None = 0, Affine = 1, Grid = 2 } corr = None;
+    bool decoupledSSIM = false;   // ssim_split (only with a correction)
+    // Transient masking (trainer.py TransientMasker): the threshold is updated every step; weights applied when active.
+    bool transient = false, transientActive = false;
+    float transientSensitivity = 3.0f;
+    // Depth supervision / depth-normal loss on ED = D / alpha against the map from setDepthTarget.
+    float depthScale = 0;         // depth weight / #valid pixels (0: off)
+    float normalScale = 0;        // normalWeight / #pixels (0: off)
+    bool edgeAware = true;
+    int normalK = 1;              // sensor normal spacing (trainer.py: round(W / sensor width), ≥ 1)
+    // Pose refinement: accumulate dL/d(world → camera) in backwardStep (readPoseGrad).
+    bool pose = false;
+    bool anyDepth() const { return depthScale > 0 || normalScale > 0; }
+};
+constexpr uint32_t CORR_STRIPES = 32, POSE_STRIPES = 32;
+constexpr int BILAGRID_SIZE = 12 * 8 * 16 * 16;
+
 class GpuSplat {
 public:
     explicit GpuSplat(Context& ctx);
@@ -44,6 +76,8 @@ public:
         bool absGrad = false;
         float noiseScaler = 0;     // mcmc_noise.comp (0: off)
         uint32_t noiseSeed = 0, noiseStep = 0;
+        float skyLr = 0;           // > 0 with feat.sky: Adam step of the panorama (its own count, skySteps ≥ 1)
+        int skySteps = 0;
     };
     // Backward passes, regularisers, densification statistics, Adam and MCMC noise in one submission.
     void backwardStep(const std::array<AdamGroup, 5>& groups, const StepExtras& ex);
@@ -51,6 +85,27 @@ public:
     void setState(const Params& p, const Params* m1, const Params* m2, int steps);
     void getMoments(Params& m1, Params& m2) const;
     std::vector<float> image() const;          // the rendered rgb planes [3][h][w] of the last forward
+
+    // ---- stage 2b loss features (see LossFeatures)
+    LossFeatures feat;
+    void setCorrection(const float* params, size_t count);   // 12 (affine) or BILAGRID_SIZE (grid) floats
+    void setAux(const std::vector<uint32_t>& aux);           // per pixel of the current camera: sky mask in bits 0–7
+    void setDepthTarget(const float* d, int w, int h, int viewW, int viewH);   // sensor / prior map, photo size
+    // forward() plus the skybox and the colour correction: the image the loss (or evaluation) sees.
+    uint32_t forwardComposite();
+    // The image-space loss pipeline alone on the current img / finalT (tests): sky composite, correction, transient
+    // masks, L1 + SSIM, depth losses → gradImg; then imageBackward() (correction and sky backward → dL/d raw image).
+    double imageLoss(double* l1 = nullptr, double* ssim = nullptr);
+    void imageBackward();
+    // Reductions read back after backwardStep.
+    std::vector<float> readCorrGrad() const;   // 12 (summed over the stripes) or BILAGRID_SIZE
+    void readPoseGrad(double out[15]) const;   // dL/dW (row-major), dL/dt, dL/dcampos
+    struct TransientState { float threshold = 0; bool hasThreshold = false; uint32_t outliers = 0; };
+    TransientState transientState() const;
+    void setTransientState(float threshold, bool has);
+    double depthLossSum() const { return lastStats_[3]; }    // Σ ew·|ED − d| of the last forwardLoss
+    double normalLossSum() const { return lastStats_[4]; }
+    double normalValid() const { return lastStats_[5]; }
 
     // Standalone primitives (own submission), used by the tests.
     void sortPairs(Buffer& keys, Buffer& vals, uint32_t count, int bits);
@@ -76,8 +131,19 @@ public:
     Buffer p2d, conicO, rgbd, rects, tilesTouched, depthKeys, sortVals, offsets;
     Buffer tileKeys, tileVals, ranges;
     Buffer img, finalT, nContrib, target, planes, mu, tmp, dmaps, stats, gradImg, acc;
+    // stage 2b (allocated when a feature first needs them)
+    Buffer raw, gradRaw, aux, weight, resid, dED, nbuf, hist, tstate, corrBuf, corrGrad, poseAcc, depthT, dummy;
 
 private:
+    void ensureFeatureBuffers();
+    void recordImageLoss();             // after raster_fwd: sky, correction, transient, SSIM, loss gradient, depth
+    void recordImageBackward();         // correction backward, sky backward (before raster_bwd)
+    void recordComposite();             // sky composite + correction apply
+    struct SkyPC { float r0[4], r1[4], r2[4]; uint32_t W, H; float penalty; uint32_t hasMask; };
+    SkyPC skyPC() const;
+    uint32_t depthW_ = 0, depthH_ = 0, viewW_ = 0, viewH_ = 0;
+    int corrCount_ = 0;
+    double lastStats_[8] = {};
     void reserveSort(uint32_t count);
     void reserveScan(uint32_t count);
     void recordSort(Buffer& keys, Buffer& vals, uint32_t count, int bits);
@@ -85,7 +151,6 @@ private:
     void recordBlur(Buffer& src, Buffer& dst, uint32_t planesCount);
     uint32_t recordForwardPhase1();      // records phase 1, submits, returns the tile instance count
     void recordForwardPhase2(uint32_t m);
-    void recordLoss();
     double lossFromStats(double* l1, double* ssim, double* sqErr);
     void dispatch1D(const char* kernel, const std::vector<const Buffer*>& bufs, const void* pc, uint32_t pcSize, uint32_t groups);
     Buffer sortKeysB_, sortValsB_, hist_;

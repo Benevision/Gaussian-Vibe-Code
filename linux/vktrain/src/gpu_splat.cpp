@@ -21,12 +21,22 @@ GpuSplat::GpuSplat(Context& ctx) : ctx_(ctx) {
     for (float& w : ssimWindow_) w = float(w / s);
     frame = ctx_.createBuffer(sizeof(Frame));
     stats = ctx_.createBuffer(16 * sizeof(float));
+    hist = ctx_.createBuffer(2048 * 4);
+    tstate = ctx_.createBuffer(4 * 4);
+    corrBuf = ctx_.createBuffer(size_t(BILAGRID_SIZE) * 4);
+    corrGrad = ctx_.createBuffer(size_t(std::max<int>(BILAGRID_SIZE, int(CORR_STRIPES) * 12)) * 4);
+    poseAcc = ctx_.createBuffer(size_t(POSE_STRIPES) * 16 * 4);
+    dummy = ctx_.createBuffer(16);
+    ctx_.begin();
+    for (Buffer* b : {&hist, &tstate, &corrBuf, &corrGrad, &poseAcc, &dummy}) ctx_.fill(*b, 0);
+    ctx_.submitWait();
 }
 
 GpuSplat::~GpuSplat() {
     Buffer* all[] = {&frame, &p2d, &conicO, &rgbd, &rects, &tilesTouched, &depthKeys, &sortVals, &offsets, &tileKeys,
                      &tileVals, &ranges, &img, &finalT, &nContrib, &target, &planes, &mu, &tmp, &dmaps, &stats,
-                     &gradImg, &acc, &sortKeysB_, &sortValsB_, &hist_};
+                     &gradImg, &acc, &sortKeysB_, &sortValsB_, &hist_, &raw, &gradRaw, &aux, &weight, &resid, &dED, &nbuf,
+                     &hist, &tstate, &corrBuf, &corrGrad, &poseAcc, &depthT, &dummy};
     for (Buffer* b : all) ctx_.destroy(*b);
     for (int k = 0; k < 5; k++) {
         ctx_.destroy(params[k]); ctx_.destroy(grads[k]); ctx_.destroy(m1[k]); ctx_.destroy(m2[k]);
@@ -85,19 +95,184 @@ void GpuSplat::setCamera(const Camera& cam, const RenderOpts& opt) {
         width = cam.width; height = cam.height;
         tilesX = int(frameData.tilesX); tilesY = int(frameData.tilesY);
         size_t hw = size_t(width) * height;
-        for (Buffer* b : {&img, &finalT, &nContrib, &target, &planes, &mu, &tmp, &dmaps, &gradImg, &ranges}) ctx_.destroy(*b);
+        for (Buffer* b : {&img, &finalT, &nContrib, &target, &planes, &mu, &tmp, &dmaps, &gradImg, &ranges, &raw, &gradRaw, &aux,
+                          &weight, &resid, &dED, &nbuf})
+            ctx_.destroy(*b);
         img = ctx_.createBuffer(hw * 4 * 4);
         finalT = ctx_.createBuffer(hw * 4);
         nContrib = ctx_.createBuffer(hw * 4);
         target = ctx_.createBuffer(hw * 4);
-        planes = ctx_.createBuffer(hw * 15 * 4);
-        mu = ctx_.createBuffer(hw * 15 * 4);
-        tmp = ctx_.createBuffer(hw * 15 * 4);
-        dmaps = ctx_.createBuffer(hw * 9 * 4);
-        gradImg = ctx_.createBuffer(hw * 4 * 4);
+        gradImg = ctx_.createBuffer(hw * 5 * 4);
         ranges = ctx_.createBuffer(size_t(tilesX) * tilesY * 2 * 4);
+        ctx_.begin();
+        ctx_.fill(gradImg, 0);   // plane 4 (extra dL/dT) stays zero for callers that upload only planes 0–3
+        ctx_.submitWait();
     }
+    ensureFeatureBuffers();
     ctx_.upload(frame, &frameData, sizeof(Frame));
+}
+
+void GpuSplat::ensureFeatureBuffers() {
+    if (width == 0 || height == 0) return;
+    size_t hw = size_t(width) * height;
+    bool split = feat.decoupledSSIM && feat.corr != LossFeatures::None;
+    size_t np = split ? 18 : 15;
+    ctx_.ensure(planes, hw * np * 4);
+    ctx_.ensure(mu, hw * np * 4);
+    ctx_.ensure(tmp, hw * np * 4);
+    ctx_.ensure(dmaps, hw * (split ? 12 : 9) * 4);
+    if (feat.corr != LossFeatures::None) { ctx_.ensure(raw, hw * 3 * 4); ctx_.ensure(gradRaw, hw * 3 * 4); }
+    if (feat.sky) ctx_.ensure(aux, hw * 4);
+    if (feat.transient) { ctx_.ensure(weight, hw * 4); ctx_.ensure(resid, hw * 4); }
+    if (feat.anyDepth()) { ctx_.ensure(dED, hw * 4); ctx_.ensure(nbuf, hw * 4 * 4); }
+}
+
+void GpuSplat::setCorrection(const float* params, size_t count) {
+    if (count != 12 && count != size_t(BILAGRID_SIZE)) throw Error("colour correction: 12 or 24576 parameters expected");
+    ctx_.upload(corrBuf, params, count * 4);
+    corrCount_ = int(count);
+}
+
+void GpuSplat::setAux(const std::vector<uint32_t>& a) {
+    if (a.size() != size_t(width) * height) throw Error("aux size does not match the camera");
+    ctx_.ensure(aux, a.size() * 4);
+    ctx_.upload(aux, a.data(), a.size() * 4);
+}
+
+void GpuSplat::setDepthTarget(const float* d, int w, int h, int viewW, int viewH) {
+    ctx_.ensure(depthT, size_t(w) * h * 4);
+    ctx_.upload(depthT, d, size_t(w) * h * 4);
+    depthW_ = uint32_t(w); depthH_ = uint32_t(h); viewW_ = uint32_t(viewW); viewH_ = uint32_t(viewH);
+}
+
+GpuSplat::SkyPC GpuSplat::skyPC() const {
+    SkyPC pc{};
+    for (int k = 0; k < 3; k++) { pc.r0[k] = feat.skyRot[k]; pc.r1[k] = feat.skyRot[3 + k]; pc.r2[k] = feat.skyRot[6 + k]; }
+    pc.W = feat.skyW; pc.H = feat.skyH;
+    pc.penalty = feat.skyPenalty;
+    pc.hasMask = feat.skyMask ? 1u : 0u;
+    return pc;
+}
+
+void GpuSplat::recordComposite() {
+    uint32_t gx = ceilDiv(uint32_t(width), 16), gy = ceilDiv(uint32_t(height), 16);
+    if (feat.sky) {
+        SkyPC pc = skyPC();
+        ctx_.dispatch("sky_composite", {&frame, &img, &finalT, feat.skyTex}, &pc, sizeof pc, gx, gy);
+    }
+    if (feat.corr != LossFeatures::None) {
+        uint32_t mode = uint32_t(feat.corr);
+        ctx_.dispatch("corr_apply", {&frame, &img, &raw, &corrBuf}, &mode, 4, gx, gy);
+    }
+}
+
+uint32_t GpuSplat::forwardComposite() {
+    ensureFeatureBuffers();
+    uint32_t m = recordForwardPhase1();
+    ctx_.begin();
+    recordForwardPhase2(m);
+    recordComposite();
+    ctx_.submitWait();
+    return m;
+}
+
+void GpuSplat::recordImageLoss() {
+    uint32_t gx = ceilDiv(uint32_t(width), 16), gy = ceilDiv(uint32_t(height), 16);
+    recordComposite();
+    bool weights = false;
+    if (feat.transient) {
+        ctx_.fill(hist, 0);
+        ctx_.dispatch("transient_hist", {&frame, &img, &target, &finalT, &resid, &hist}, nullptr, 0, gx, gy);
+        float sens = feat.transientSensitivity;
+        ctx_.dispatch("transient_thresh", {&frame, &hist, &tstate}, &sens, 4, 1, 1);
+        if (feat.transientActive) {
+            ctx_.dispatch("transient_weights", {&frame, &resid, &weight, &tstate}, nullptr, 0, gx, gy);
+            weights = true;
+        }
+    }
+    bool split = feat.decoupledSSIM && feat.corr != LossFeatures::None;
+    uint32_t flags = (weights ? 1u : 0u) | (split ? 2u : 0u);
+    ctx_.dispatch("ssim_prep", {&frame, &img, &target, &planes, weights ? &weight : &dummy, split ? &raw : &dummy}, &flags, 4, gx, gy);
+    recordBlur(planes, mu, split ? 18 : 15);
+    ctx_.fill(stats, 0);
+    uint32_t sp = split ? 1u : 0u;
+    ctx_.dispatch("ssim_terms", {&frame, &mu, &dmaps, &stats, &planes}, &sp, 4, gx, gy);
+    recordBlur(dmaps, mu, split ? 12 : 9);   // blur adjoint of the SSIM derivative maps (mu reused)
+    ctx_.dispatch("loss_grad", {&frame, &planes, &mu, &gradImg, split ? &gradRaw : &dummy}, &sp, 4, gx, gy);
+    if (feat.anyDepth()) {
+        if (!depthT.buf || depthW_ == 0) throw Error("depth losses without a depth map");
+        struct { uint32_t sw, sh, vw, vh; float sx, sy, depthScale, normalScale; uint32_t edgeAware; int32_t k; uint32_t pad0, pad1; } pc{};
+        pc.sw = depthW_; pc.sh = depthH_; pc.vw = viewW_; pc.vh = viewH_;
+        // torch F.interpolate(nearest) from the photo's size to this render's: source = floor(x · in/out) (float)
+        pc.sx = uint32_t(width) == viewW_ ? 0.0f : float(viewW_) / float(width);
+        pc.sy = uint32_t(height) == viewH_ ? 0.0f : float(viewH_) / float(height);
+        pc.depthScale = feat.depthScale;
+        pc.normalScale = feat.normalScale;
+        pc.edgeAware = feat.edgeAware ? 1u : 0u;
+        pc.k = feat.normalK;
+        ctx_.dispatch("depth_normal", {&frame, &img, &finalT, &target, &depthT, &dED, &nbuf, &stats}, &pc, sizeof pc, gx, gy);
+        ctx_.dispatch("depth_gather", {&frame, &img, &finalT, &dED, &nbuf, &gradImg}, nullptr, 0, gx, gy);
+    }
+}
+
+void GpuSplat::recordImageBackward() {
+    uint32_t gx = ceilDiv(uint32_t(width), 16), gy = ceilDiv(uint32_t(height), 16);
+    if (feat.corr != LossFeatures::None) {
+        bool split = feat.decoupledSSIM;
+        ctx_.fill(corrGrad, 0);
+        struct { uint32_t mode, direct, stripes; } pc{uint32_t(feat.corr), split ? 1u : 0u, CORR_STRIPES};
+        ctx_.dispatch("corr_backward", {&frame, &gradImg, &raw, &corrBuf, split ? &gradRaw : &dummy, &corrGrad}, &pc, sizeof pc, gx, gy);
+    }
+    if (feat.sky) {
+        if (feat.skyGrad) ctx_.fill(*feat.skyGrad, 0);
+        SkyPC pc = skyPC();
+        ctx_.dispatch("sky_backward", {&frame, &gradImg, &finalT, feat.skyTex, feat.skyMask ? &aux : &dummy,
+                                       feat.skyGrad ? feat.skyGrad : &dummy}, &pc, sizeof pc, gx, gy);
+    }
+}
+
+double GpuSplat::imageLoss(double* l1, double* ssim) {
+    ensureFeatureBuffers();
+    ctx_.begin();
+    recordImageLoss();
+    ctx_.submitWait();
+    return lossFromStats(l1, ssim, nullptr);
+}
+
+void GpuSplat::imageBackward() {
+    ctx_.begin();
+    recordImageBackward();
+    ctx_.submitWait();
+}
+
+std::vector<float> GpuSplat::readCorrGrad() const {
+    if (feat.corr == LossFeatures::Grid) return read<float>(corrGrad, size_t(BILAGRID_SIZE));
+    std::vector<float> s = read<float>(corrGrad, size_t(CORR_STRIPES) * 12), out(12, 0.0f);
+    for (uint32_t k = 0; k < CORR_STRIPES; k++)
+        for (int j = 0; j < 12; j++) out[size_t(j)] += s[size_t(k) * 12 + size_t(j)];
+    return out;
+}
+
+void GpuSplat::readPoseGrad(double out[15]) const {
+    std::vector<float> s = read<float>(poseAcc, size_t(POSE_STRIPES) * 16);
+    for (int j = 0; j < 15; j++) out[j] = 0;
+    for (uint32_t k = 0; k < POSE_STRIPES; k++)
+        for (int j = 0; j < 15; j++) out[j] += s[size_t(k) * 16 + size_t(j)];
+}
+
+GpuSplat::TransientState GpuSplat::transientState() const {
+    std::vector<uint32_t> s = read<uint32_t>(tstate, 3);
+    TransientState t;
+    std::memcpy(&t.threshold, &s[0], 4);
+    t.hasThreshold = s[1] != 0;
+    t.outliers = s[2];
+    return t;
+}
+
+void GpuSplat::setTransientState(float threshold, bool has) {
+    uint32_t s[3] = {0, has ? 1u : 0u, 0};
+    std::memcpy(&s[0], &threshold, 4);
+    ctx_.upload(tstate, s, sizeof s);
 }
 
 void GpuSplat::setTarget(const std::vector<uint32_t>& rgba) {
@@ -227,10 +402,11 @@ uint32_t GpuSplat::forward() {
 }
 
 double GpuSplat::forwardLoss(double* l1, double* ssim, double* sqErr) {
+    ensureFeatureBuffers();
     uint32_t m = recordForwardPhase1();
     ctx_.begin();
     recordForwardPhase2(m);
-    recordLoss();
+    recordImageLoss();
     ctx_.submitWait();
     return lossFromStats(l1, ssim, sqErr);
 }
@@ -247,19 +423,10 @@ void GpuSplat::recordBlur(Buffer& src, Buffer& dst, uint32_t planesCount) {
     ctx_.dispatch("blur", {&frame, &tmp, &dst}, &pc, sizeof(pc), gx, gy, planesCount);
 }
 
-void GpuSplat::recordLoss() {
-    uint32_t gx = ceilDiv(uint32_t(width), 16), gy = ceilDiv(uint32_t(height), 16);
-    ctx_.dispatch("ssim_prep", {&frame, &img, &target, &planes}, nullptr, 0, gx, gy);
-    recordBlur(planes, mu, 15);
-    ctx_.fill(stats, 0);
-    ctx_.dispatch("ssim_terms", {&frame, &mu, &dmaps, &stats, &planes}, nullptr, 0, gx, gy);
-    recordBlur(dmaps, mu, 9);   // blur adjoint of the SSIM derivative maps (mu reused)
-    ctx_.dispatch("loss_grad", {&frame, &planes, &mu, &gradImg}, nullptr, 0, gx, gy);
-}
-
 double GpuSplat::lossFromStats(double* l1, double* ssim, double* sqErr) {
-    float s[4];
+    float s[8];
     ctx_.download(stats, s, sizeof(s));
+    for (int k = 0; k < 8; k++) lastStats_[k] = s[k];
     double numel = double(width) * height * 3;
     double snumel = 3.0 / double(frameData.invSsimPixels);
     double lam = frameData.ssimWeight;
@@ -269,12 +436,7 @@ double GpuSplat::lossFromStats(double* l1, double* ssim, double* sqErr) {
     return (1 - lam) * s[0] / numel + lam * (1 - s[1] / snumel);
 }
 
-double GpuSplat::loss(double* l1, double* ssim) {
-    ctx_.begin();
-    recordLoss();
-    ctx_.submitWait();
-    return lossFromStats(l1, ssim, nullptr);
-}
+double GpuSplat::loss(double* l1, double* ssim) { return imageLoss(l1, ssim); }
 
 // ------------------------------------------------------------------ backward and optimiser
 
@@ -288,8 +450,11 @@ void GpuSplat::rasterBackward() {
 
 void GpuSplat::projectBackward() {
     ctx_.begin();
+    uint32_t stripes = feat.pose ? POSE_STRIPES : 0u;
+    if (feat.pose) ctx_.fill(poseAcc, 0);
     dispatch1D("preprocess_bwd", {&frame, &params[0], &params[1], &params[2], &params[3], &params[4], &acc, &tilesTouched,
-                                  &grads[0], &grads[1], &grads[2], &grads[3], &grads[4]}, nullptr, 0, ceilDiv(uint32_t(n), 256));
+                                  &grads[0], &grads[1], &grads[2], &grads[3], &grads[4], &poseAcc}, &stripes, 4,
+               ceilDiv(uint32_t(n), 256));
     ctx_.submitWait();
 }
 
@@ -312,11 +477,14 @@ void GpuSplat::backwardStep(const std::array<AdamGroup, 5>& groups, const StepEx
     const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
     float bc1 = 1.0f - std::pow(beta1, float(adamSteps)), bc2 = 1.0f - std::pow(beta2, float(adamSteps));
     ctx_.begin();
+    recordImageBackward();
     ctx_.fill(acc, 0);
     ctx_.dispatch("raster_bwd", {&frame, &ranges, &tileVals, &p2d, &conicO, &rgbd, &finalT, &nContrib, &gradImg, &acc},
                   nullptr, 0, uint32_t(tilesX), uint32_t(tilesY));
+    uint32_t stripes = feat.pose ? POSE_STRIPES : 0u;
+    if (feat.pose) ctx_.fill(poseAcc, 0);
     dispatch1D("preprocess_bwd", {&frame, &params[0], &params[1], &params[2], &params[3], &params[4], &acc, &tilesTouched,
-                                  &grads[0], &grads[1], &grads[2], &grads[3], &grads[4]}, nullptr, 0, ceilDiv(un, 256));
+                                  &grads[0], &grads[1], &grads[2], &grads[3], &grads[4], &poseAcc}, &stripes, 4, ceilDiv(un, 256));
     if (ex.wOp != 0 || ex.wScale != 0 || ex.wFlat != 0 || ex.wAniso != 0) {
         struct { float wOp, wScale, wFlat, wAniso, maxRatio; uint32_t n; } pc{ex.wOp, ex.wScale, ex.wFlat, ex.wAniso, ex.maxRatio, un};
         dispatch1D("reg_grad", {&params[1], &params[3], &grads[1], &grads[3]}, &pc, sizeof(pc), ceilDiv(un, 256));
@@ -330,6 +498,12 @@ void GpuSplat::backwardStep(const std::array<AdamGroup, 5>& groups, const StepEx
             groups[k].lr, groups[k].lr2, groups[k].period, groups[k].split, beta1, beta2, eps, bc1, bc2,
             uint32_t(n * Params::width(k))};
         dispatch1D("adam", {&params[k], &grads[k], &m1[k], &m2[k]}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
+    }
+    if (feat.sky && ex.skyLr > 0 && feat.skyM && feat.skyV && feat.skyGrad) {
+        float sb1 = 1.0f - std::pow(beta1, float(ex.skySteps)), sb2 = 1.0f - std::pow(beta2, float(ex.skySteps));
+        struct { float lr, lr2; uint32_t period, split; float beta1, beta2, eps, bc1, bc2; uint32_t n; } pc{
+            ex.skyLr, ex.skyLr, 1, 1, beta1, beta2, eps, sb1, sb2, feat.skyW * feat.skyH * 3};
+        dispatch1D("adam", {feat.skyTex, feat.skyGrad, feat.skyM, feat.skyV}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
     }
     if (ex.noiseScaler != 0) {
         struct { float scaler; uint32_t seed, step, n; } pc{ex.noiseScaler, ex.noiseSeed, ex.noiseStep, un};

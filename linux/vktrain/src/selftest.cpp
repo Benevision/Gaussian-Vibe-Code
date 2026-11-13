@@ -15,6 +15,7 @@
 
 #include "cpu_ref.h"
 #include "gpu_splat.h"
+#include "models.h"
 #include "strategy.h"
 
 using namespace vkt;
@@ -777,6 +778,614 @@ void testTrainingKernels(Context& ctx, GpuSplat& gs) {
     }
 }
 
+// ------------------------------------------------------------------ stage 2b: the image-space loss pipeline
+// Sky composite, per-photo colour correction (affine / bilateral grid), decoupled SSIM, depth supervision and the
+// depth-normal loss on ED = D / alpha, the sky coverage penalty: the GPU loss and its gradients w.r.t. the rendered
+// colour, depth plane and T_final, the sky panorama and the correction parameters, against central finite
+// differences of a double-precision reference written from trainer.py's formulas (render detached in the target,
+// the bilateral grid's luminance guide and the normal-validity decisions frozen at the base point, as in torch).
+
+struct PipeCase {
+    std::string name;
+    int w = 48, h = 40, viewW = 48, viewH = 40;
+    bool sky = false, skyMask = false;
+    int corr = 0;   // 0 none, 1 affine, 2 bilateral grid
+    bool split = false;
+    bool depth = false, normal = false, edge = true;
+    int sensorW = 24, sensorH = 20;
+    uint64_t seed = 1;
+};
+
+struct Pipe {
+    PipeCase pc;
+    Camera cam;
+    double bg[3] = {0.2, 0.5, 0.7};
+    double lam = 0.25;
+    std::vector<double> C, T, D;   // render: rgb planes over black, T_final, Σ α·T·z
+    std::vector<uint32_t> target;
+    std::vector<uint8_t> skym;
+    std::vector<double> tex;       // sky logits [sH][sW][3]
+    int sW = 16, sH = 8;
+    float rot[9] = {};
+    std::vector<double> corr;
+    std::vector<float> sensor;
+    double skyW = 0.05, dw = 0.3, nw = 0.2;
+    int k = 1;
+    double count = 0;              // valid depth pixels
+    std::vector<double> y, guide, ntgt, cor;
+    std::vector<uint8_t> nvalid;
+};
+
+const double* ssimWindowD() {
+    static double w[11];
+    static bool init = false;
+    if (!init) {
+        double s = 0;
+        for (int k = 0; k < 11; k++) s += w[k] = double(float(std::exp(-double((k - 5) * (k - 5)) / (2.0 * 1.5 * 1.5))));
+        for (double& v : w) v = double(float(v / s));
+        init = true;
+    }
+    return w;
+}
+
+double sensorAtRef(const Pipe& P, int x, int y) {
+    const PipeCase& c = P.pc;
+    if (x < 0 || y < 0 || x >= c.w || y >= c.h) return 0;
+    uint32_t xv = uint32_t(x), yv = uint32_t(y);
+    if (c.w != c.viewW) xv = std::min(uint32_t(std::floor(float(x) * (float(c.viewW) / float(c.w)))), uint32_t(c.viewW - 1));
+    if (c.h != c.viewH) yv = std::min(uint32_t(std::floor(float(y) * (float(c.viewH) / float(c.h)))), uint32_t(c.viewH - 1));
+    uint32_t xs = ((2 * xv + 1) * uint32_t(c.sensorW)) / (2 * uint32_t(c.viewW));
+    uint32_t ys = ((2 * yv + 1) * uint32_t(c.sensorH)) / (2 * uint32_t(c.viewH));
+    return P.sensor[size_t(ys) * size_t(c.sensorW) + xs];
+}
+
+double lumRef(const Pipe& P, size_t q) {
+    uint32_t t = P.target[q];
+    return (0.299 * double(t & 255u) + 0.587 * double((t >> 8) & 255u) + 0.114 * double((t >> 16) & 255u)) / 255.0;
+}
+
+double ewRef(const Pipe& P, int x, int y) {
+    if (!P.pc.edge) return 1.0;
+    int W = P.pc.w, H = P.pc.h;
+    size_t q = size_t(y) * W + x;
+    double gx = (x >= 1 && x + 1 < W) ? (lumRef(P, q + 1) - lumRef(P, q - 1)) * 0.5 : 0.0;
+    double gy = (y >= 1 && y + 1 < H) ? (lumRef(P, q + size_t(W)) - lumRef(P, q - size_t(W))) * 0.5 : 0.0;
+    return std::exp(-10.0 * std::sqrt(gx * gx + gy * gy));
+}
+
+void skyColRef(const Pipe& P, const std::vector<double>& tex, int x, int y, double out[3]) {
+    const Camera& c = P.cam;
+    double dc[3] = {(x + 0.5 - c.cx) / c.fx, (y + 0.5 - c.cy) / c.fy, 1.0};
+    double s[3];
+    for (int i = 0; i < 3; i++) s[i] = P.rot[i * 3] * dc[0] + P.rot[i * 3 + 1] * dc[1] + P.rot[i * 3 + 2] * dc[2];
+    double l = std::sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+    for (double& v : s) v /= l;
+    double lon = std::atan2(s[0], s[2]), lat = std::asin(std::clamp(s[1], -1.0, 1.0));
+    double gx = lon / M_PI, gy = -lat / (M_PI / 2);
+    double ix = std::clamp(((gx + 1) * P.sW - 1) * 0.5, 0.0, double(P.sW - 1));
+    double iy = std::clamp(((gy + 1) * P.sH - 1) * 0.5, 0.0, double(P.sH - 1));
+    int x0 = int(std::floor(ix)), y0 = int(std::floor(iy));
+    int x1 = std::min(x0 + 1, P.sW - 1), y1 = std::min(y0 + 1, P.sH - 1);
+    double ax = ix - x0, ay = iy - y0;
+    int idx[4] = {y0 * P.sW + x0, y0 * P.sW + x1, y1 * P.sW + x0, y1 * P.sW + x1};
+    double w[4] = {(1 - ax) * (1 - ay), ax * (1 - ay), (1 - ax) * ay, ax * ay};
+    for (int ch = 0; ch < 3; ch++) {
+        out[ch] = 0;
+        for (int k = 0; k < 4; k++) out[ch] += w[k] / (1 + std::exp(-tex[size_t(idx[k]) * 3 + size_t(ch)]));
+    }
+}
+
+// trainer.py's loss on the given render; freeze = true records the detached / decided quantities.
+double pipeLoss(Pipe& P, const std::vector<double>& C, const std::vector<double>& T, const std::vector<double>& D,
+                const std::vector<double>& tex, const std::vector<double>& corr, bool freeze, double parts[4] = nullptr) {
+    const PipeCase& c = P.pc;
+    int W = c.w, H = c.h;
+    size_t hw = size_t(W) * H;
+    std::vector<double> raw(3 * hw), cor(3 * hw);
+    if (freeze) { P.guide.assign(hw, 0); P.y.assign(3 * hw, 0); }
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            size_t p = size_t(y) * W + x;
+            double b[3] = {P.bg[0], P.bg[1], P.bg[2]};
+            if (c.sky) skyColRef(P, tex, x, y, b);
+            for (int ch = 0; ch < 3; ch++) raw[ch * hw + p] = C[ch * hw + p] + T[p] * b[ch];
+            double xr[3] = {raw[p], raw[hw + p], raw[2 * hw + p]};
+            if (freeze) P.guide[p] = std::clamp(0.299 * xr[0] + 0.587 * xr[1] + 0.114 * xr[2], 0.0, 1.0);
+            double cf[12];
+            if (c.corr == 1) {
+                for (int r = 0; r < 3; r++) { for (int k = 0; k < 3; k++) cf[r * 4 + k] = corr[size_t(r * 3 + k)]; cf[r * 4 + 3] = corr[size_t(9 + r)]; }
+            } else if (c.corr == 2) {
+                double g[3] = {(x + 0.5) / W * 15.0, (y + 0.5) / H * 15.0, P.guide[p] * 7.0};
+                int i0[3];
+                double f[3];
+                const int lim[3] = {14, 14, 6};
+                for (int a = 0; a < 3; a++) { i0[a] = std::clamp(int(std::floor(g[a])), 0, lim[a]); f[a] = std::clamp(g[a] - i0[a], 0.0, 1.0); }
+                for (int k = 0; k < 12; k++) {
+                    double v = 0;
+                    for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+                        double wt = (dx ? f[0] : 1 - f[0]) * (dy ? f[1] : 1 - f[1]) * (dz ? f[2] : 1 - f[2]);
+                        v += wt * corr[((size_t(k) * 8 + size_t(i0[2] + dz)) * 16 + size_t(i0[1] + dy)) * 16 + size_t(i0[0] + dx)];
+                    }
+                    cf[k] = v;
+                }
+            }
+            for (int r = 0; r < 3; r++)
+                cor[r * hw + p] = c.corr ? cf[r * 4] * xr[0] + cf[r * 4 + 1] * xr[1] + cf[r * 4 + 2] * xr[2] + cf[r * 4 + 3] : xr[r];
+            if (freeze) {
+                uint32_t t = P.target[p];
+                double m = double(t >> 24) / 255.0;
+                for (int ch = 0; ch < 3; ch++) P.y[ch * hw + p] = m * double((t >> (8 * ch)) & 255u) / 255.0 + (1 - m) * cor[ch * hw + p];
+            }
+        }
+    if (freeze) P.cor = cor;
+    double l1 = 0;
+    for (size_t i = 0; i < 3 * hw; i++) l1 += std::abs(cor[i] - P.y[i]);
+    l1 /= double(3 * hw);
+    const double* wn = ssimWindowD();
+    const double C1 = 0.0001, C2 = 0.0009;
+    double sumS = 0;
+    for (int ch = 0; ch < 3; ch++) {
+        const double* xc = &cor[ch * hw];
+        const double* xr = &raw[ch * hw];
+        const double* yy = &P.y[ch * hw];
+        for (int y = 5; y + 5 < H; y++)
+            for (int x = 5; x + 5 < W; x++) {
+                double s[6] = {0, 0, 0, 0, 0, 0};   // E[c], E[y], E[r²] / E[c²], E[y²], E[r·y] / E[c·y], E[r]
+                for (int dy = -5; dy <= 5; dy++)
+                    for (int dx = -5; dx <= 5; dx++) {
+                        size_t q = size_t(y + dy) * W + size_t(x + dx);
+                        double wt = wn[dx + 5] * wn[dy + 5];
+                        double a = xc[q], b = yy[q], rr = c.split ? xr[q] : xc[q];
+                        s[0] += wt * a; s[1] += wt * b; s[2] += wt * rr * rr; s[3] += wt * b * b; s[4] += wt * rr * b; s[5] += wt * rr;
+                    }
+                double lum = (2 * s[0] * s[1] + C1) / (s[0] * s[0] + s[1] * s[1] + C1);
+                double sr = s[2] - s[5] * s[5], sy = s[3] - s[1] * s[1], sry = s[4] - s[5] * s[1];
+                double cs = (2 * sry + C2) / (sr + sy + C2);
+                sumS += lum * cs;
+            }
+    }
+    double meanS = sumS / double(3 * (W - 10) * (H - 10));
+    double photo = (1 - P.lam) * l1 + P.lam * (1 - meanS);
+    std::vector<double> ed(hw);
+    for (size_t p = 0; p < hw; p++) ed[p] = D[p] / std::max(1 - T[p], 1e-10);
+    double dsum = 0, nsum = 0, pen = 0;
+    if (c.depth)
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                double d = sensorAtRef(P, x, y);
+                if (d > 0) dsum += ewRef(P, x, y) * std::abs(ed[size_t(y) * W + x] - d);
+            }
+    if (c.normal) {
+        if (freeze) { P.nvalid.assign(hw, 0); P.ntgt.assign(3 * hw, 0); }
+        auto ray = [&](double u, double v, double out[3]) { out[0] = (u - P.cam.cx) / P.cam.fx; out[1] = (v - P.cam.cy) / P.cam.fy; out[2] = 1; };
+        auto cross = [](const double a[3], const double b[3], double o[3]) {
+            o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0];
+        };
+        int k = P.k;
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                size_t p = size_t(y) * W + x;
+                if (freeze) {
+                    bool ok = x >= k && y >= k && x + k < W && y + k < H && 1 - T[p] > 0.9;
+                    if (ok) {
+                        double e = ed[p], tol = 0.10 * std::max(e, 1e-9);
+                        double nb[4] = {ed[p - 1], ed[p + 1], ed[p - size_t(W)], ed[p + size_t(W)]};
+                        ok = e > 0;
+                        for (double v : nb) ok = ok && v > 0 && std::abs(v - e) < tol;
+                    }
+                    if (ok) {
+                        double c0 = sensorAtRef(P, x, y), sl = sensorAtRef(P, x - k, y), sr = sensorAtRef(P, x + k, y);
+                        double su = sensorAtRef(P, x, y - k), sd = sensorAtRef(P, x, y + k), tol = 0.05 * std::max(c0, 1e-9);
+                        ok = c0 > 0;
+                        for (double v : {sl, sr, su, sd}) ok = ok && v > 0 && std::abs(v - c0) < tol;
+                        if (ok) {
+                            double a1[3], a2[3], a3[3], a4[3], e1[3], e2[3], m[3];
+                            ray(x + k, y, a1); ray(x - k, y, a2); ray(x, y + k, a3); ray(x, y - k, a4);
+                            for (int i = 0; i < 3; i++) { e1[i] = a1[i] * sr - a2[i] * sl; e2[i] = a3[i] * sd - a4[i] * su; }
+                            cross(e1, e2, m);
+                            double lm = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+                            ok = lm > 1e-12;
+                            if (ok) for (int i = 0; i < 3; i++) P.ntgt[p * 3 + size_t(i)] = m[i] / lm;
+                        }
+                    }
+                    P.nvalid[p] = ok;
+                }
+                if (!P.nvalid[p]) continue;
+                double al[3], ar[3], au[3], ad[3], e1[3], e2[3], m[3];
+                ray(x - 1, y, al); ray(x + 1, y, ar); ray(x, y - 1, au); ray(x, y + 1, ad);
+                for (int i = 0; i < 3; i++) {
+                    e1[i] = ar[i] * ed[p + 1] - al[i] * ed[p - 1];
+                    e2[i] = ad[i] * ed[p + size_t(W)] - au[i] * ed[p - size_t(W)];
+                }
+                cross(e1, e2, m);
+                double lm = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+                double cc = 0;
+                for (int i = 0; i < 3; i++) cc += m[i] / lm * P.ntgt[p * 3 + size_t(i)];
+                cc = std::clamp(cc, -1.0, 1.0);
+                double hh = std::max(0.5 * (1 - cc), 0.0);
+                nsum += ewRef(P, x, y) * (hh + std::sqrt(hh + 1e-4));
+            }
+    }
+    if (c.sky && c.skyMask) {
+        double ms = 0, s = 0;
+        for (size_t p = 0; p < hw; p++) { double m = P.skym[p] / 255.0; ms += m; s += (1 - T[p]) * m; }
+        pen = P.skyW * s / std::max(ms, 1.0);
+    }
+    if (parts) { parts[0] = photo; parts[1] = dsum; parts[2] = nsum; parts[3] = pen; }
+    double total = photo + pen;
+    if (c.depth && P.count > 0) total += P.dw / P.count * dsum;
+    if (c.normal) total += P.nw / double(hw) * nsum;
+    return total;
+}
+
+void testImagePipeline(Context& ctx, GpuSplat& gs, bool quick) {
+    std::vector<PipeCase> cases;
+    {
+        PipeCase a; a.name = "sky+affine+split+depth+normal"; a.sky = a.skyMask = true; a.corr = 1; a.split = true;
+        a.depth = a.normal = true; a.seed = 3; cases.push_back(a);
+        PipeCase b; b.name = "grid+depth(scaled view)"; b.corr = 2; b.depth = true; b.viewW = 60; b.viewH = 50;
+        b.sensorW = 30; b.sensorH = 25; b.seed = 4; cases.push_back(b);
+        PipeCase c; c.name = "sky+grid+split+normal"; c.sky = true; c.corr = 2; c.split = true; c.normal = true; c.edge = false;
+        c.seed = 5; cases.push_back(c);
+    }
+    for (const PipeCase& pc : cases) {
+        Rng r(pc.seed);
+        Pipe P;
+        P.pc = pc;
+        int W = pc.w, H = pc.h;
+        size_t hw = size_t(W) * H;
+        const double eye[3] = {0.3, -0.2, -3.0}, origin[3] = {0, 0, 0};
+        P.cam = lookAt(eye, origin, 0.2, 40, 42, 24, 20, W, H);
+        P.C.resize(3 * hw); P.T.resize(hw); P.D.resize(hw); P.target.resize(hw); P.skym.assign(hw, 0);
+        double ph[3] = {r.uni(0, 6), r.uni(0, 6), r.uni(0, 6)};
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                size_t p = size_t(y) * W + x;
+                bool open = x >= W * 6 / 10;
+                double T = open ? r.uni(0.3, 0.9) : r.uni(0.01, 0.07);
+                P.T[p] = T;
+                double z = 2.0 + 0.004 * x + 0.003 * y + 0.02 * std::sin(0.2 * x + 0.1 * y);
+                P.D[p] = (1 - T) * z;
+                uint32_t t = 0;
+                for (int ch = 0; ch < 3; ch++) {
+                    P.C[ch * hw + p] = (1 - T) * (0.45 + 0.3 * std::sin(0.3 * x + 0.2 * y + ph[ch]));
+                    double v = 0.5 + 0.3 * std::sin(0.25 * x - 0.15 * y + ph[ch] + 1) + r.uni(-0.1, 0.1);
+                    t |= uint32_t(std::clamp(v, 0.0, 1.0) * 255 + 0.5) << (8 * ch);
+                }
+                uint32_t m = r.below(10) == 0 ? uint32_t(r.below(256)) : 255u;
+                P.target[p] = t | (m << 24);
+                if (open) P.skym[p] = r.below(5) == 0 ? uint8_t(r.below(256)) : 255;
+            }
+        P.tex.resize(size_t(P.sW) * P.sH * 3);
+        for (double& v : P.tex) v = r.normal();
+        double up[3] = {0, -1, 0};
+        skyRotation(skyBasis(up), P.cam.w2c, P.rot);
+        if (pc.corr == 1) {
+            P.corr.assign(12, 0.0);
+            for (int k = 0; k < 9; k++) P.corr[size_t(k)] = (k % 4 == 0 ? 1.0 : 0.0) + 0.1 * r.normal();
+            for (int k = 9; k < 12; k++) P.corr[size_t(k)] = 0.05 * r.normal();
+        } else if (pc.corr == 2) {
+            std::vector<float> id = BilateralGridModel::identity();
+            P.corr.resize(id.size());
+            for (size_t k = 0; k < id.size(); k++) P.corr[k] = id[k] + 0.05 * r.normal();
+        }
+        P.sensor.resize(size_t(pc.sensorW) * pc.sensorH);
+        for (int y = 0; y < pc.sensorH; y++)
+            for (int x = 0; x < pc.sensorW; x++) {
+                double vx = (x + 0.5) * pc.viewW / pc.sensorW * double(W) / pc.viewW, vy = (y + 0.5) * pc.viewH / pc.sensorH * double(H) / pc.viewH;
+                P.sensor[size_t(y) * pc.sensorW + x] = r.below(20) == 0 ? 0.0f : float(1.9 + 0.006 * vx + 0.001 * vy);
+            }
+        P.k = std::max(1, int(std::nearbyint(double(W) / pc.sensorW)));
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) P.count += sensorAtRef(P, x, y) > 0;
+
+        double parts[4];
+        double Lc = pipeLoss(P, P.C, P.T, P.D, P.tex, P.corr, true, parts);
+
+        // ---- GPU
+        gs.feat = LossFeatures();
+        Buffer texB, texG;
+        double msum = 0;
+        for (uint8_t m : P.skym) msum += m / 255.0;
+        if (pc.sky) {
+            std::vector<float> tf(P.tex.begin(), P.tex.end());
+            texB = ctx.createBuffer(tf.size() * 4);
+            texG = ctx.createBuffer(tf.size() * 4);
+            ctx.upload(texB, tf.data(), tf.size() * 4);
+            gs.feat.sky = true; gs.feat.skyTex = &texB; gs.feat.skyGrad = &texG;
+            gs.feat.skyW = uint32_t(P.sW); gs.feat.skyH = uint32_t(P.sH);
+            std::copy(P.rot, P.rot + 9, gs.feat.skyRot);
+            gs.feat.skyMask = pc.skyMask;
+            gs.feat.skyPenalty = float(-P.skyW / std::max(msum, 1.0));
+        }
+        gs.feat.corr = LossFeatures::Corr(pc.corr);
+        gs.feat.decoupledSSIM = pc.split;
+        gs.feat.depthScale = pc.depth ? float(P.dw / P.count) : 0.0f;
+        gs.feat.normalScale = pc.normal ? float(P.nw / double(hw)) : 0.0f;
+        gs.feat.edgeAware = pc.edge;
+        gs.feat.normalK = P.k;
+        RenderOpts opt;
+        opt.ssimValid = true;
+        opt.ssimWeight = float(P.lam);
+        opt.hasDepth = pc.depth || pc.normal;
+        for (int k = 0; k < 3; k++) opt.bg[k] = pc.sky ? 0.0f : float(P.bg[k]);
+        gs.setCamera(P.cam, opt);
+        gs.setTarget(P.target);
+        std::vector<float> im(4 * hw), tf(hw);
+        for (size_t i = 0; i < 3 * hw; i++) im[i] = float(P.C[i] + (pc.sky ? 0.0 : P.T[i % hw] * P.bg[i / hw]));   // raster_fwd's C + T·bg
+        for (size_t p = 0; p < hw; p++) { im[3 * hw + p] = float(P.D[p]); tf[p] = float(P.T[p]); }
+        ctx.upload(gs.img, im.data(), im.size() * 4);
+        ctx.upload(gs.finalT, tf.data(), tf.size() * 4);
+        if (pc.sky) {
+            std::vector<uint32_t> aux(hw);
+            for (size_t p = 0; p < hw; p++) aux[p] = P.skym[p];
+            gs.setAux(aux);
+        }
+        if (pc.corr) {
+            std::vector<float> cf(P.corr.begin(), P.corr.end());
+            gs.setCorrection(cf.data(), cf.size());
+        }
+        if (pc.depth || pc.normal) gs.setDepthTarget(P.sensor.data(), pc.sensorW, pc.sensorH, pc.viewW, pc.viewH);
+        double Lg = gs.imageLoss();
+        double dsumG = gs.depthLossSum(), nsumG = gs.normalLossSum();
+        gs.imageBackward();
+        std::vector<float> G = gs.read<float>(gs.gradImg, 5 * hw);
+        std::vector<float> texGrad = pc.sky ? gs.read<float>(texG, P.tex.size()) : std::vector<float>();
+        std::vector<float> corrGrad = pc.corr ? gs.readCorrGrad() : std::vector<float>();
+        const std::string sc = pc.name;
+        addRow("image loss pipeline", "photometric loss value", sc, std::abs(Lg - parts[0]) / parts[0], 2e-4);
+        if (pc.depth) addRow("image loss pipeline", "depth loss sum", sc, std::abs(dsumG - parts[1]) / parts[1], 1e-4);
+        if (pc.normal) {
+            addRow("image loss pipeline", "normal loss sum", sc, std::abs(nsumG - parts[2]) / std::max(parts[2], 1e-12), 1e-3);
+            addRow("image loss pipeline", "normal-valid pixels (info)", sc, gs.normalValid(), 0, true);
+        }
+        std::printf("  [%s] loss %.6f (photometric %.6f, depth sum %.4f, normal sum %.4f, sky penalty %.5f)\n", sc.c_str(), Lc,
+                    parts[0], parts[1], parts[2], parts[3]);
+
+        // ---- finite differences
+        auto L = [&]() { return pipeLoss(P, P.C, P.T, P.D, P.tex, P.corr, false); };
+        auto fdOf = [&](std::vector<double>& v, size_t i, auto&& lossFn) {
+            double x0 = v[i], h = 1e-6 * std::max(1.0, std::abs(x0));
+            v[i] = x0 + h; double lp = lossFn();
+            v[i] = x0 - h; double lm = lossFn();
+            v[i] = x0;
+            return (lp - lm) / (2 * h);
+        };
+        auto nearKink = [&](size_t p) {   // |corrected − target| or |ED − d| near (but not exactly) 0: the L1 kinks
+            for (int ch = 0; ch < 3; ch++) {
+                double dlt = std::abs(P.cor[size_t(ch) * hw + p] - P.y[size_t(ch) * hw + p]);
+                if (dlt > 0 && dlt < 1e-4) return true;
+            }
+            double e = P.D[p] / std::max(1 - P.T[p], 1e-10);
+            int x = int(p % size_t(W)), y = int(p / size_t(W));
+            double d = sensorAtRef(P, x, y);
+            return pc.depth && d > 0 && std::abs(e - d) < 1e-4;
+        };
+        int samples = quick ? 24 : 60;
+        std::vector<double> ga[5], fd[5];   // colour, depth plane, T, sky, correction
+        for (int s = 0; s < samples; s++) {
+            size_t p = size_t(r.below(int(hw)));
+            if (nearKink(p)) continue;
+            int ch = r.below(3);
+            size_t i = size_t(ch) * hw + p;
+            ga[0].push_back(G[i]);
+            fd[0].push_back(fdOf(P.C, i, L));
+        }
+        for (int s = 0; s < samples; s++) {
+            size_t p = size_t(r.below(int(hw)));
+            if (nearKink(p)) continue;
+            ga[1].push_back(G[3 * hw + p]);
+            fd[1].push_back(fdOf(P.D, p, L));
+            double gT = G[4 * hw + p];
+            if (!pc.sky) for (int ch = 0; ch < 3; ch++) gT += P.bg[ch] * G[size_t(ch) * hw + p];
+            ga[2].push_back(gT);
+            fd[2].push_back(fdOf(P.T, p, L));
+        }
+        if (pc.sky) {
+            std::vector<size_t> used;
+            for (size_t i = 0; i < texGrad.size(); i++) if (texGrad[i] != 0.0f) used.push_back(i);
+            std::shuffle(used.begin(), used.end(), r.g);
+            used.resize(std::min<size_t>(used.size(), size_t(samples)));
+            for (size_t i : used) { ga[3].push_back(texGrad[i]); fd[3].push_back(fdOf(P.tex, i, L)); }
+            addRow("image loss pipeline", "sky texels with gradient (info)", sc, double(used.size()), 0, true);
+        }
+        if (pc.corr) {
+            std::vector<size_t> idx;
+            if (pc.corr == 1) for (size_t i = 0; i < 12; i++) idx.push_back(i);
+            else {
+                for (size_t i = 0; i < corrGrad.size(); i++) if (corrGrad[i] != 0.0f) idx.push_back(i);
+                std::shuffle(idx.begin(), idx.end(), r.g);
+                idx.resize(std::min<size_t>(idx.size(), size_t(samples)));
+                idx.push_back(0);   // a cell no pixel uses: zero
+            }
+            for (size_t i : idx) { ga[4].push_back(corrGrad[i]); fd[4].push_back(fdOf(P.corr, i, L)); }
+        }
+        const char* names[5] = {"dL/drender rgb", "dL/ddepth plane", "dL/dT_final", "dL/dsky logits", "dL/dcorrection"};
+        for (int k = 0; k < 5; k++)
+            if (!ga[k].empty()) addRow("image loss pipeline", names[k], sc, relErr(ga[k], fd[k], 5e-2), 2e-3);
+        if (texB.buf) { ctx.destroy(texB); ctx.destroy(texG); }
+        gs.feat = LossFeatures();
+    }
+}
+
+// Transient masking: the GPU threshold (histogram median) against the exact median of the per-pixel errors, and the
+// masks against trainer.py's rule (solid 3×3 regions, 16×16 patch vote) evaluated on the CPU at that threshold.
+void testTransient(Context& ctx, GpuSplat& gs) {
+    Rng r(91);
+    const int W = 64, H = 48;
+    size_t hw = size_t(W) * H;
+    Camera cam = lookAt(std::array<double, 3>{0, 0, -3}.data(), std::array<double, 3>{0, 0, 0}.data(), 0, 50, 50, 32, 24, W, H);
+    std::vector<uint32_t> tgt(hw);
+    std::vector<float> im(4 * hw, 0.0f), T(hw);
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            size_t p = size_t(y) * W + x;
+            bool blob = x >= 4 && x < 26 && y >= 8 && y < 30;              // a moving object: solid, mostly one tile
+            bool smallBlob = x >= 40 && x < 46 && y >= 34 && y < 40;       // solid but inside a mostly good patch
+            bool speck = r.below(40) == 0;                                 // scattered outliers
+            double err = (blob || smallBlob || speck) ? 0.6 : r.uni(0.0, 0.12);
+            uint32_t t = 255u << 24;
+            for (int c = 0; c < 3; c++) {
+                int v = 40 + r.below(170);
+                t |= uint32_t(v) << (8 * c);
+                im[size_t(c) * hw + p] = float(v / 255.0 + (r.below(2) ? err : -err));
+            }
+            tgt[p] = t;
+            T[p] = (x >= 18 && x < 24 && y >= 10 && y < 16) ? 0.5f : 0.01f;   // a thinly covered corner of the blob
+        }
+    gs.feat = LossFeatures();
+    gs.feat.transient = gs.feat.transientActive = true;
+    gs.feat.transientSensitivity = 3.0f;
+    RenderOpts opt;
+    opt.ssimValid = true;
+    gs.setCamera(cam, opt);
+    gs.setTarget(tgt);
+    gs.setTransientState(0.0f, false);
+    ctx.upload(gs.img, im.data(), im.size() * 4);
+    ctx.upload(gs.finalT, T.data(), T.size() * 4);
+    gs.imageLoss();
+    GpuSplat::TransientState st = gs.transientState();
+    std::vector<float> wgt = gs.read<float>(gs.weight, hw);
+    std::vector<double> res(hw);
+    for (size_t p = 0; p < hw; p++) {
+        float s = 0;
+        for (int c = 0; c < 3; c++) s += std::abs(im[size_t(c) * hw + p] - float((tgt[p] >> (8 * c)) & 255u) / 255.0f);
+        res[p] = double(s / 3.0f);
+    }
+    std::vector<double> sorted = res;
+    std::sort(sorted.begin(), sorted.end());
+    double med = sorted[(hw - 1) / 2];
+    double tCpu = std::max(med * 3.0, 0.10);
+    addRow("transient masking", "threshold vs exact median rule", "64x48", std::abs(st.threshold - tCpu), 3.0 / 2048 + 1e-6);
+    double thr = st.threshold;
+    std::vector<int> out(hw), keep(hw);
+    for (size_t p = 0; p < hw; p++) out[p] = T[p] < 0.05f && res[p] > thr;
+    size_t dropped = 0, mismatch = 0;
+    for (int ty = 0; ty < (H + 15) / 16; ty++)
+        for (int tx = 0; tx < (W + 15) / 16; tx++) {
+            int inl = 0;
+            std::vector<size_t> px;
+            for (int y = ty * 16; y < ty * 16 + 16; y++)
+                for (int x = tx * 16; x < tx * 16 + 16; x++) {
+                    if (x >= W || y >= H) { inl++; continue; }
+                    int s = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int xx = x + dx, yy = y + dy;
+                            if (xx >= 0 && yy >= 0 && xx < W && yy < H) s += out[size_t(yy) * W + size_t(xx)];
+                        }
+                    size_t p = size_t(y) * W + x;
+                    keep[p] = s < 7;
+                    inl += keep[p];
+                    px.push_back(p);
+                }
+            bool patchOk = inl / 256.0 >= 0.6;
+            for (size_t p : px) {
+                if (patchOk) keep[p] = 1;
+                dropped += !keep[p];
+                mismatch += (keep[p] != 0) != (wgt[p] != 0.0f);
+            }
+        }
+    addRow("transient masking", "mask pixels differing from the CPU rule", "64x48", double(mismatch), 0);
+    addRow("transient masking", "outlier pixels dropped (info)", "64x48", double(dropped), 0, true);
+    addRow("transient masking", "GPU outlier count vs dropped", "64x48", std::abs(double(st.outliers) - double(dropped)), 0);
+    gs.feat = LossFeatures();
+}
+
+// Pose refinement: dL/d(the 9 correction numbers) from the GPU's camera gradient and the host chain rule, against
+// finite differences of the double-precision reference render + loss with the corrected camera (frozen structure).
+void testPose(Context& ctx, GpuSplat& gs, bool quick) {
+    (void)ctx;
+    Rng r(57);
+    const int W = 64, H = 48;
+    const double eye[3] = {1.5, -1.0, -3.2}, origin[3] = {0, 0, 0};
+    Camera base = lookAt(eye, origin, 0.15, 58, 60, 31, 25, W, H);
+    RenderOpts opt;
+    opt.shDegree = 2;
+    opt.antialiased = true;
+    opt.bg[0] = 0.3f; opt.bg[1] = 0.2f; opt.bg[2] = 0.1f;
+    Params P = randomScene(r, quick ? 150 : 300, eye, 2);
+    std::vector<uint32_t> tgt = randomTarget(r, W, H);
+    double d0[9];
+    for (double& v : d0) v = 0.03 * r.normal();
+    Camera cam = base;
+    refinedW2c(base.w2c, d0, cam.w2c);
+    gs.feat = LossFeatures();
+    gs.feat.pose = true;
+    gs.setParams(P);
+    gs.setCamera(cam, opt);
+    gs.setTarget(tgt);
+    gs.forward();
+    gs.loss();
+    gs.rasterBackward();
+    gs.projectBackward();
+    double g15[15], gd[9];
+    gs.readPoseGrad(g15);
+    refinedW2c(base.w2c, d0, cam.w2c);
+    poseChain(base.w2c, d0, g15, gd);
+    // reference with the structure decided at d0
+    ref::Cam rc = ref::makeCam(cam, opt);
+    ref::ParamsD PD = ref::toDouble(P);
+    std::vector<ref::Proj> cpuP = ref::projectAll(PD, rc, true);
+    ref::Structure stC;
+    std::vector<double> im, fT;
+    std::vector<uint32_t> nC;
+    ref::rasterDecide(cpuP, rc, im, fT, nC, &stC);
+    std::vector<double> tP = targetPlanes(tgt, W, H);
+    auto L = [&](const double* d) {
+        Camera c2 = base;
+        refinedW2c(base.w2c, d, c2.w2c);
+        ref::Cam rc2 = ref::makeCam(c2, opt);
+        std::vector<ref::Proj> pr = cpuP;
+        for (int i = 0; i < PD.n; i++) if (pr[size_t(i)].valid) ref::project(PD, rc2, i, pr[size_t(i)], false);
+        std::vector<double> img;
+        ref::rasterFrozen(pr, stC, rc2, img);
+        return ref::loss(img, tP, W, H, opt.ssimWeight);
+    };
+    std::vector<double> ga, fd;
+    for (int j = 0; j < 9; j++) {
+        double d[9];
+        std::copy(d0, d0 + 9, d);
+        double h = 1e-6;
+        d[j] = d0[j] + h; double lp = L(d);
+        d[j] = d0[j] - h; double lm = L(d);
+        ga.push_back(gd[j]);
+        fd.push_back((lp - lm) / (2 * h));
+    }
+    addRow("pose refinement (preprocess_bwd)", "dL/d(translation, 6D rotation)", "64x48", relErr(ga, fd, 5e-2), 2e-2);
+    gs.feat = LossFeatures();
+}
+
+// raster_bwd's extra dL/dT_final plane: a background b is the same as bg = 0 with plane 4 = b · dL/drgb.
+void testExtraTPlane(Context& ctx, GpuSplat& gs) {
+    Rng r(17);
+    const int W = 64, H = 48;
+    size_t hw = size_t(W) * H;
+    const double eye[3] = {0.4, 0.3, -3.6}, origin[3] = {0, 0, 0};
+    Camera cam = lookAt(eye, origin, -0.1, 55, 55, 32, 24, W, H);
+    Params P = randomScene(r, 200, eye, 1);
+    RenderOpts opt;
+    opt.shDegree = 1;
+    opt.bg[0] = 0.7f; opt.bg[1] = 0.4f; opt.bg[2] = 0.9f;
+    gs.feat = LossFeatures();
+    gs.setParams(P);
+    gs.setCamera(cam, opt);
+    gs.forward();
+    std::vector<float> G(5 * hw, 0.0f);
+    for (size_t i = 0; i < 4 * hw; i++) G[i] = float(r.uni(-1, 1));
+    ctx.upload(gs.gradImg, G.data(), G.size() * 4);
+    gs.rasterBackward();
+    std::vector<float> a1 = gs.read<float>(gs.acc, size_t(gs.n) * 12);
+    RenderOpts o2 = opt;
+    o2.bg[0] = o2.bg[1] = o2.bg[2] = 0.0f;
+    gs.setCamera(cam, o2);
+    for (size_t p = 0; p < hw; p++) G[4 * hw + p] = opt.bg[0] * G[p] + opt.bg[1] * G[hw + p] + opt.bg[2] * G[2 * hw + p];
+    ctx.upload(gs.gradImg, G.data(), G.size() * 4);
+    gs.rasterBackward();
+    std::vector<float> a2 = gs.read<float>(gs.acc, size_t(gs.n) * 12);
+    std::vector<double> x(a2.begin(), a2.end()), y(a1.begin(), a1.end());
+    addRow("rasterize bwd", "extra dL/dT plane = background term", "64x48", relErr(x, y), 1e-4);
+}
+
 // Host-side strategies: counts and invariants (they run on the CPU, once per test run).
 void testStrategies() {
     g_path = "host";
@@ -929,6 +1538,10 @@ int main(int argc, char** argv) {
             testAdam(ctx, gs);
             testLossVariants(ctx, gs);
             testTrainingKernels(ctx, gs);
+            testExtraTPlane(ctx, gs);
+            testImagePipeline(ctx, gs, quick);
+            testTransient(ctx, gs);
+            testPose(ctx, gs, quick);
             testFit(gs, quick ? std::min(fitSteps, 150) : fitSteps);
             std::printf("  path %s took %.1f s\n", name.c_str(),
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - tp).count());

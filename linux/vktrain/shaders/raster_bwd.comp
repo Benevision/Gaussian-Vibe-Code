@@ -58,7 +58,8 @@ void main() {
     float T = Tfinal;
     uint last = inside ? nContrib[pid] : 0u;
     vec4 dpix = inside ? vec4(gradImg[pid], gradImg[hw + pid], gradImg[2u * hw + pid], gradImg[3u * hw + pid]) : vec4(0.0);
-    float bgDot = dot(F.bg.xyz, dpix.xyz);   // dL/dT_final from the constant background
+    // dL/dT_final: the constant background, plus plane 4 (sky colour, sky penalty, normalised-depth terms)
+    float bgDot = inside ? dot(F.bg.xyz, dpix.xyz) + gradImg[4u * hw + pid] : 0.0;
     vec4 accumRec = vec4(0.0), lastColor = vec4(0.0);
     float lastAlpha = 0.0;
     uint contributor = uint(toDo);

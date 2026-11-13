@@ -1,0 +1,131 @@
+#version 460
+#ifdef NATIVE_FLOAT_ATOMICS
+#extension GL_EXT_shader_atomic_float : require
+#endif
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+// Depth supervision and the depth-normal consistency loss, on the rendered expected depth ED = D / max(alpha, 1e-10)
+// (gsplat "RGB+ED": D = Σ α·T·z is img plane 3, alpha = 1 − T_final), against a sensor (or prior) depth map
+// sampled like trainer.py: resize_nearest to the photo's size, then F.interpolate(nearest) to a progressive scale.
+//  * depth (pc.depthScale = depthWeight / #valid pixels, 0 = off): L = Σ_valid ew·|ED − d|;
+//  * normals (pc.normalScale = normalWeight / #pixels, 0 = off): trainer.py normal_consistency_loss — camera-space
+//    normals of ED (central differences over 1 px, neighbours within 10 %) and of the sensor depth (over k px,
+//    within 5 %), at pixels where both are valid and alpha > 0.9: L = Σ ew·[(1−c)/2 + sqrt((1−c)/2 + 1e-4)].
+// ew = exp(−10·|∇ luminance of the photo|) when pc.edgeAware (DN-Splatter), else 1. Writes dL/dED of the pixel's
+// own depth term (dED) and, per pixel, the normal term's gradient w.r.t. its 4 neighbours' ED (nbuf, 4 planes:
+// left, right, up, down), gathered without atomics by depth_gather. Loss sums: stats[3] depth, [4] normal,
+// [5] normal-valid pixel count.
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer ImgBuf { float img[]; };
+layout(std430, binding = 2) readonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 3) readonly buffer TgtBuf { uint target[]; };
+layout(std430, binding = 4) readonly buffer DepthBuf { float depthT[]; };
+layout(std430, binding = 5) writeonly buffer DEdBuf { float dED[]; };
+layout(std430, binding = 6) writeonly buffer NBuf { float nbuf[]; };
+DECLARE_ATOMIC_ACC(7)
+layout(push_constant) uniform PC {
+    uint sw; uint sh; uint vw; uint vh;   // sensor map size, the photo's loaded size
+    float sx; float sy;                   // render → photo pixel scale (torch nearest: floor(x · s)); 0 = same size
+    float depthScale; float normalScale;
+    uint edgeAware; int k; uint pad0; uint pad1;
+} pc;
+
+float sensorAt(int x, int y) {
+    if (x < 0 || y < 0 || x >= int(F.width) || y >= int(F.height)) return 0.0;
+    uint xv = pc.sx > 0.0 ? min(uint(floor(float(x) * pc.sx)), pc.vw - 1u) : uint(x);
+    uint yv = pc.sy > 0.0 ? min(uint(floor(float(y) * pc.sy)), pc.vh - 1u) : uint(y);
+    uint xs = ((2u * xv + 1u) * pc.sw) / (2u * pc.vw), ys = ((2u * yv + 1u) * pc.sh) / (2u * pc.vh);
+    float d = depthT[ys * pc.sw + xs];
+    return (d > 0.0 && !isinf(d) && !isnan(d)) ? d : 0.0;
+}
+float edAt(uint q) {
+    uint hw = F.width * F.height;
+    return img[3u * hw + q] / max(1.0 - finalT[q], 1e-10);
+}
+float lumAt(uint q) {
+    uint t = target[q];
+    return (LUMA_R * float(t & 255u) + LUMA_G * float((t >> 8u) & 255u) + LUMA_B * float((t >> 16u) & 255u)) / 255.0;
+}
+vec3 ray(float u, float v) { return vec3((u - F.intr.z) / F.intr.x, (v - F.intr.w) / F.intr.y, 1.0); }
+
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    bool inb = p.x < F.width && p.y < F.height;
+    uint W = F.width, H = F.height, hw = W * H, pid = p.y * W + p.x;
+    float lossD = 0.0, lossN = 0.0, validN = 0.0;
+    if (inb) {
+        float ew = 1.0;
+        if (pc.edgeAware != 0u) {
+            float gx = (p.x >= 1u && p.x + 1u < W) ? (lumAt(pid + 1u) - lumAt(pid - 1u)) * 0.5 : 0.0;
+            float gy = (p.y >= 1u && p.y + 1u < H) ? (lumAt(pid + W) - lumAt(pid - W)) * 0.5 : 0.0;
+            ew = exp(-10.0 * sqrt(gx * gx + gy * gy));
+        }
+        int x = int(p.x), y = int(p.y);
+        float own = 0.0;
+        float ec = edAt(pid);
+        if (pc.depthScale > 0.0) {
+            float d = sensorAt(x, y);
+            if (d > 0.0) {
+                float e = ec - d;
+                own = pc.depthScale * ew * (e > 0.0 ? 1.0 : (e < 0.0 ? -1.0 : 0.0));
+                lossD = ew * abs(e);
+            }
+        }
+        dED[pid] = own;
+        float s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+        int k = pc.k;
+        bool ok = pc.normalScale > 0.0 && x >= k && y >= k && x + k < int(W) && y + k < int(H) && 1.0 - finalT[pid] > 0.9;
+        float Dl = 0.0, Dr = 0.0, Du = 0.0, Dd = 0.0;
+        vec3 t = vec3(0.0);
+        if (ok) {   // the rendered depth's normal is valid (1 px, within 10 %)
+            Dl = edAt(pid - 1u); Dr = edAt(pid + 1u); Du = edAt(pid - W); Dd = edAt(pid + W);
+            float tol = 0.10 * max(ec, 1e-9);
+            ok = ec > 0.0 && Dl > 0.0 && Dr > 0.0 && Du > 0.0 && Dd > 0.0 && abs(Dl - ec) < tol && abs(Dr - ec) < tol &&
+                 abs(Du - ec) < tol && abs(Dd - ec) < tol;
+        }
+        if (ok) {   // the sensor normal (k px, within 5 %)
+            float c0 = sensorAt(x, y), sl = sensorAt(x - k, y), sr = sensorAt(x + k, y), su = sensorAt(x, y - k), sd = sensorAt(x, y + k);
+            float tol = 0.05 * max(c0, 1e-9);
+            ok = c0 > 0.0 && sl > 0.0 && sr > 0.0 && su > 0.0 && sd > 0.0 && abs(sl - c0) < tol && abs(sr - c0) < tol &&
+                 abs(su - c0) < tol && abs(sd - c0) < tol;
+            if (ok) {
+                float fk = float(k);
+                vec3 e1 = ray(float(x) + fk, float(y)) * sr - ray(float(x) - fk, float(y)) * sl;
+                vec3 e2 = ray(float(x), float(y) + fk) * sd - ray(float(x), float(y) - fk) * su;
+                vec3 m = cross(e1, e2);
+                float lm = length(m);
+                ok = lm > 1e-12;
+                if (ok) t = m / lm;
+            }
+        }
+        if (ok) {
+            vec3 al = ray(float(x) - 1.0, float(y)), ar = ray(float(x) + 1.0, float(y));
+            vec3 au = ray(float(x), float(y) - 1.0), ad = ray(float(x), float(y) + 1.0);
+            vec3 e1 = ar * Dr - al * Dl, e2 = ad * Dd - au * Du;
+            vec3 m = cross(e1, e2);
+            float lm = length(m);
+            if (lm > 1e-12) {
+                vec3 n = m / lm;
+                float c = dot(n, t);
+                float cc = clamp(c, -1.0, 1.0);
+                float h = max(0.5 * (1.0 - cc), 0.0);
+                float sq = sqrt(h + 1e-4);
+                lossN = ew * (h + sq);
+                validN = 1.0;
+                float dLdc = (c >= -1.0 && c <= 1.0) ? pc.normalScale * ew * (-0.5 - 0.25 / sq) : 0.0;
+                vec3 gm = dLdc * (t - c * n) / lm;   // dL/dm through n = m / |m|
+                vec3 g1 = cross(e2, gm), g2 = cross(gm, e1);
+                s0 = -dot(g1, al); s1 = dot(g1, ar); s2 = -dot(g2, au); s3 = dot(g2, ad);
+            }
+        }
+        nbuf[pid] = s0; nbuf[hw + pid] = s1; nbuf[2u * hw + pid] = s2; nbuf[3u * hw + pid] = s3;
+    }
+    lossD = subgroupAdd(lossD); lossN = subgroupAdd(lossN); validN = subgroupAdd(validN);
+    if (subgroupElect()) {
+        if (lossD != 0.0) accAdd(3u, lossD);
+        if (validN != 0.0) { accAdd(4u, lossN); accAdd(5u, validN); }
+    }
+}

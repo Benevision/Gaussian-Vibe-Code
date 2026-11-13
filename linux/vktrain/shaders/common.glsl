@@ -112,4 +112,62 @@ float hash_normal(uint seed, uint step, uint idx, uint k) {
     return sqrt(-2.0 * log(u1)) * cos(6.283185307179586 * u2);
 }
 
+// One float-accumulation buffer per kernel: binding B holds `atomicAcc`, added to with accAdd(i, v) — a native
+// float atomic (GL_EXT_shader_atomic_float, NATIVE_FLOAT_ATOMICS builds) or a compare-and-swap loop on the bits.
+#ifdef NATIVE_FLOAT_ATOMICS
+#define DECLARE_ATOMIC_ACC(B) \
+    layout(std430, binding = B) buffer AtomicAccBuf { float atomicAcc[]; }; \
+    void accAdd(uint i, float v) { atomicAdd(atomicAcc[i], v); }
+#else
+#define DECLARE_ATOMIC_ACC(B) \
+    layout(std430, binding = B) buffer AtomicAccBuf { uint atomicAcc[]; }; \
+    void accAdd(uint i, float v) { \
+        uint old = atomicAcc[i]; \
+        for (;;) { \
+            uint nv = floatBitsToUint(uintBitsToFloat(old) + v); \
+            uint prev = atomicCompSwap(atomicAcc[i], old, nv); \
+            if (prev == old) break; \
+            old = prev; \
+        } \
+    }
+#endif
+
+const float LUMA_R = 0.299, LUMA_G = 0.587, LUMA_B = 0.114;
+
+// ---- learned skybox (linux/splatworker/skybox.py): an equirectangular panorama of logits [H][W][rgb] (W = 2H),
+// sampled like torch grid_sample(bilinear, padding "border", align_corners=False) at
+// (longitude / π, −latitude / (π/2)) of the pixel's viewing direction in the sky basis (right, up, forward).
+// rot rows: M = B · Rᵀ, camera direction → sky coordinates.
+struct SkyTap { uint idx[4]; float w[4]; uint key; };
+SkyTap sky_tap(Frame F, uvec2 p, vec3 r0, vec3 r1, vec3 r2, uint W, uint H) {
+    vec3 dc = vec3((float(p.x) + 0.5 - F.intr.z) / F.intr.x, (float(p.y) + 0.5 - F.intr.w) / F.intr.y, 1.0);
+    vec3 s = normalize(vec3(dot(r0, dc), dot(r1, dc), dot(r2, dc)));
+    float lon = atan(s.x, s.z), lat = asin(clamp(s.y, -1.0, 1.0));
+    float gx = lon / 3.141592653589793, gy = -lat / 1.5707963267948966;
+    float ix = clamp(((gx + 1.0) * float(W) - 1.0) * 0.5, 0.0, float(W - 1u));
+    float iy = clamp(((gy + 1.0) * float(H) - 1.0) * 0.5, 0.0, float(H - 1u));
+    float fx0 = floor(ix), fy0 = floor(iy);
+    uint x0 = uint(fx0), y0 = uint(fy0);
+    uint x1 = min(x0 + 1u, W - 1u), y1 = min(y0 + 1u, H - 1u);
+    float ax = ix - fx0, ay = iy - fy0;
+    SkyTap t;
+    t.idx[0] = y0 * W + x0; t.idx[1] = y0 * W + x1; t.idx[2] = y1 * W + x0; t.idx[3] = y1 * W + x1;
+    t.w[0] = (1.0 - ax) * (1.0 - ay); t.w[1] = ax * (1.0 - ay); t.w[2] = (1.0 - ax) * ay; t.w[3] = ax * ay;
+    t.key = y0 * W + x0;
+    return t;
+}
+float sigmoid1(float x) { return 1.0 / (1.0 + exp(-x)); }
+
+// ---- per-photo local colour correction (trainer.py BilateralGrid): 12 coefficient grids of 8 (luminance) × 16 (y)
+// × 16 (x), index ((k·8 + z)·16 + y)·16 + x, k = row·4 + column of the 3×4 transform [A | b]. Sampled like torch
+// grid_sample(trilinear, border, align_corners=True) at ((x+½)/W, (y+½)/H, clamp(luminance, 0, 1)).
+const int BG_W = 16, BG_H = 16, BG_D = 8;
+int bg_index(int k, int z, int y, int x) { return ((k * BG_D + z) * BG_H + y) * BG_W + x; }
+void bg_coords(uvec2 p, uint W, uint H, float lum, out ivec3 i0, out vec3 f) {
+    vec3 g = vec3((float(p.x) + 0.5) / float(W) * float(BG_W - 1), (float(p.y) + 0.5) / float(H) * float(BG_H - 1),
+                  clamp(lum, 0.0, 1.0) * float(BG_D - 1));
+    i0 = clamp(ivec3(floor(g)), ivec3(0), ivec3(BG_W - 2, BG_H - 2, BG_D - 2));
+    f = clamp(g - vec3(i0), 0.0, 1.0);
+}
+
 #endif

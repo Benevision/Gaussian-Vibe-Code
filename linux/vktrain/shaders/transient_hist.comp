@@ -1,0 +1,34 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Transient masking, step 1 (trainer.py TransientMasker; Mac: residual_hist). Per pixel the error
+// r = mean over rgb of |pred − photo| (pred after colour correction, photo composited, before the loss mask) into
+// a histogram of NBINS bins over [0, 1) (for the image's median error), and resid = r where the render covers the
+// pixel (alpha > 0.95), else −1 (thin coverage is never an outlier: "not learned yet").
+#include "common.glsl"
+#define NBINS 2048u
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer ImgBuf { float img[]; };
+layout(std430, binding = 2) readonly buffer TgtBuf { uint target[]; };
+layout(std430, binding = 3) readonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 4) writeonly buffer ResidBuf { float resid[]; };
+layout(std430, binding = 5) buffer HistBuf { uint hist[]; };
+shared uint sh[NBINS];
+void main() {
+    uint tid = gl_LocalInvocationIndex;
+    for (uint b = tid; b < NBINS; b += 256u) sh[b] = 0u;
+    barrier();
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x < F.width && p.y < F.height) {
+        uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+        uint t = target[pid];
+        float r = 0.0;
+        for (uint c = 0u; c < 3u; c++) r += abs(img[c * hw + pid] - float((t >> (8u * c)) & 255u) / 255.0);
+        r /= 3.0;
+        resid[pid] = (1.0 - finalT[pid]) > 0.95 ? r : -1.0;
+        atomicAdd(sh[min(NBINS - 1u, uint(r * float(NBINS)))], 1u);
+    }
+    barrier();
+    for (uint b = tid; b < NBINS; b += 256u)
+        if (sh[b] != 0u) atomicAdd(hist[b], sh[b]);
+}

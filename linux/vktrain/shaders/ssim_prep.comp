@@ -1,28 +1,44 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
-// Loss, step 1 (Mac: ssim_prep): per channel the five planes x, y, x², y², xy that the SSIM window blurs.
+// Loss, step 1 (Mac: ssim_prep): per channel the planes that the SSIM window blurs.
 // Target pixels are RGBA8 (r | g<<8 | b<<16 | a<<24); the alpha byte is the loss mask m = a/255 (255 = train on
 // the pixel): target := m·photo + (1 − m)·render, the render treated as a constant (as trainer.py's
 // gt·mask + pred.detach()·(1 − mask)), so masked-out pixels carry no error and no gradient.
+// pc.flags bit 0: multiply m by the transient-masking weight (0 = outlier, trainer.py TransientMasker: gt := pred).
+// pc.flags bit 1: decoupled SSIM (trainer.py ssim_split): 6 planes per channel — corrected render c, target y,
+//                 raw², y², raw·y, raw (raw = the render before colour correction); else 5: x, y, x², y², xy.
 #include "common.glsl"
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
 layout(std430, binding = 1) readonly buffer ImgBuf { float img[]; };
 layout(std430, binding = 2) readonly buffer TgtBuf { uint target[]; };
 layout(std430, binding = 3) writeonly buffer PlaneBuf { float planes[]; };
+layout(std430, binding = 4) readonly buffer WeightBuf { float weight[]; };
+layout(std430, binding = 5) readonly buffer RawBuf { float raw[]; };
+layout(push_constant) uniform PC { uint flags; } pc;
 void main() {
     uvec2 p = gl_GlobalInvocationID.xy;
     if (p.x >= F.width || p.y >= F.height) return;
     uint hw = F.width * F.height, pid = p.y * F.width + p.x;
     uint t = target[pid];
     float m = float(t >> 24u) / 255.0;
+    if ((pc.flags & 1u) != 0u) m *= weight[pid];
+    bool split = (pc.flags & 2u) != 0u;
+    uint np = split ? 6u : 5u;
     for (uint c = 0u; c < 3u; c++) {
         float x = img[c * hw + pid];
         float y = m * (float((t >> (8u * c)) & 255u) / 255.0) + (1.0 - m) * x;
-        planes[(c * 5u + 0u) * hw + pid] = x;
-        planes[(c * 5u + 1u) * hw + pid] = y;
-        planes[(c * 5u + 2u) * hw + pid] = x * x;
-        planes[(c * 5u + 3u) * hw + pid] = y * y;
-        planes[(c * 5u + 4u) * hw + pid] = x * y;
+        planes[(c * np + 0u) * hw + pid] = x;
+        planes[(c * np + 1u) * hw + pid] = y;
+        planes[(c * np + 3u) * hw + pid] = y * y;
+        if (split) {
+            float r = raw[c * hw + pid];
+            planes[(c * np + 2u) * hw + pid] = r * r;
+            planes[(c * np + 4u) * hw + pid] = r * y;
+            planes[(c * np + 5u) * hw + pid] = r;
+        } else {
+            planes[(c * np + 2u) * hw + pid] = x * x;
+            planes[(c * np + 4u) * hw + pid] = x * y;
+        }
     }
 }

@@ -1,0 +1,64 @@
+#version 460
+#ifdef NATIVE_FLOAT_ATOMICS
+#extension GL_EXT_shader_atomic_float : require
+#endif
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_vote : require
+// Learned skybox, backward (Mac: sky_backward). From dL/dpred (gradImg rgb, after the colour-correction backward):
+//  * dL/dT_final per pixel = sky colour · g, plus the sky-coverage penalty on sky-masked pixels (trainer.py:
+//    skyAlphaWeight · Σ alpha·m / max(Σ m, 1), alpha = 1 − T: pc.penalty = −skyAlphaWeight / max(Σ m, 1) per unit m),
+//    added to gradImg plane 4 (read by raster_bwd);
+//  * the panorama logit gradients T · g · w · σ(1 − σ), accumulated with float atomics. Neighbouring pixels mostly
+//    hit the same 2×2 texels: the subgroup is reduced per distinct footprint (one atomic per texel and footprint).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) buffer GradBuf { float gradImg[]; };
+layout(std430, binding = 2) readonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 3) readonly buffer SkyBuf { float sky[]; };
+layout(std430, binding = 4) readonly buffer AuxBuf { uint aux[]; };   // low byte: sky mask (255 = sky)
+DECLARE_ATOMIC_ACC(5)
+layout(push_constant) uniform PC { vec4 r0; vec4 r1; vec4 r2; uint W; uint H; float penalty; uint hasMask; } pc;
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    bool inb = p.x < F.width && p.y < F.height;
+    uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+    float vals[12];
+    for (int k = 0; k < 12; k++) vals[k] = 0.0;
+    uint key = 0xFFFFFFFFu;
+    SkyTap t;
+    for (int k = 0; k < 4; k++) { t.idx[k] = 0u; t.w[k] = 0.0; }
+    t.key = 0u;
+    bool pending = false;
+    if (inb) {
+        t = sky_tap(F, p, pc.r0.xyz, pc.r1.xyz, pc.r2.xyz, pc.W, pc.H);
+        key = t.key;
+        vec3 g = vec3(gradImg[pid], gradImg[hw + pid], gradImg[2u * hw + pid]);
+        float T = finalT[pid];
+        vec3 c = vec3(0.0);
+        for (int k = 0; k < 4; k++) {
+            uint b = t.idx[k] * 3u;
+            vec3 s = vec3(sigmoid1(sky[b]), sigmoid1(sky[b + 1u]), sigmoid1(sky[b + 2u]));
+            c += t.w[k] * s;
+            vec3 d = T * t.w[k] * g * s * (1.0 - s);
+            vals[k * 3] = d.x; vals[k * 3 + 1] = d.y; vals[k * 3 + 2] = d.z;
+        }
+        float dT = dot(c, g);
+        if (pc.hasMask != 0u) dT += pc.penalty * float(aux[pid] & 255u) / 255.0;
+        gradImg[4u * hw + pid] += dT;
+        pending = T > 0.0 && any(notEqual(g, vec3(0.0)));
+    }
+    // One pass per distinct footprint in the subgroup; every lane takes part (subgroup operations in uniform flow).
+    while (subgroupAny(pending)) {
+        uint k0 = subgroupMin(pending ? key : 0xFFFFFFFFu);
+        bool mine = pending && key == k0;
+        uint leader = subgroupMin(mine ? gl_SubgroupInvocationID : 0xFFFFFFFFu);
+        for (int k = 0; k < 12; k++) {
+            float s = subgroupAdd(mine ? vals[k] : 0.0);
+            if (gl_SubgroupInvocationID == leader && s != 0.0) accAdd(t.idx[k / 3] * 3u + uint(k % 3), s);
+        }
+        if (mine) pending = false;
+    }
+}

@@ -1,0 +1,42 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Transient masking, step 3 (trainer.py TransientMasker.apply; Mac: transient_weights). One workgroup per 16×16
+// tile (the tiles of trainer.py's 16×16 patch vote). A pixel is an outlier when its error is above the threshold
+// and the render covers it; it is dropped from the loss (weight 0, ssim_prep: target := render) when it lies in a
+// solid outlier region (≥ 7 of its 3×3 neighbourhood, outside the image counting as inliers) and its 16×16 patch
+// is < 60 % inliers (the patch padded past the image edge with inliers, as trainer.py's F.pad(value=1)).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer ResidBuf { float resid[]; };
+layout(std430, binding = 2) writeonly buffer WeightBuf { float weight[]; };
+layout(std430, binding = 3) buffer StateBuf { uint state[]; };
+shared uint outl[18][18];
+shared uint tileInliers;
+void main() {
+    uint tid = gl_LocalInvocationIndex;
+    uvec2 tg = gl_WorkGroupID.xy, lt = gl_LocalInvocationID.xy;
+    float thr = uintBitsToFloat(state[0]);
+    if (tid == 0u) tileInliers = 0u;
+    for (uint i = tid; i < 18u * 18u; i += 256u) {
+        int x = int(tg.x * 16u) + int(i % 18u) - 1, y = int(tg.y * 16u) + int(i / 18u) - 1;
+        uint o = 0u;
+        if (x >= 0 && y >= 0 && x < int(F.width) && y < int(F.height)) {
+            float r = resid[uint(y) * F.width + uint(x)];
+            o = (r >= 0.0 && r > thr) ? 1u : 0u;
+        }
+        outl[i / 18u][i % 18u] = o;
+    }
+    barrier();
+    uint s = 0u;
+    for (uint dy = 0u; dy < 3u; dy++) for (uint dx = 0u; dx < 3u; dx++) s += outl[lt.y + dy][lt.x + dx];
+    bool inlier = s < 7u;
+    uvec2 pix = tg * 16u + lt;
+    bool inside = pix.x < F.width && pix.y < F.height;
+    if (!inside || inlier) atomicAdd(tileInliers, 1u);   // outside the image: padding, counted as inlier
+    barrier();
+    if (!inside) return;
+    bool keep = inlier || float(tileInliers) / 256.0 >= 0.6;
+    weight[pix.y * F.width + pix.x] = keep ? 1.0 : 0.0;
+    if (!keep) atomicAdd(state[2], 1u);
+}

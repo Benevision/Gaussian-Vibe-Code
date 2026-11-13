@@ -337,6 +337,13 @@ DatasetInfo parseDataset(const std::string& dir) {
             if (!c["depth"].is_string()) throw DatasetError(label + ": depth must be a path");
             cam.depth = c["depth"].get<std::string>();
             ds.resolve(cam.depth);
+            auto dim = [&](const char* k) -> int {
+                if (!c.contains(k) || !c[k].is_number_integer() || c[k].get<int64_t>() <= 0 || c[k].get<int64_t>() > 1000000)
+                    throw DatasetError(label + ": depthWidth/depthHeight required with depth");
+                return int(c[k].get<int64_t>());
+            };
+            cam.depthWidth = dim("depthWidth");
+            cam.depthHeight = dim("depthHeight");
         }
         for (const char* key : {"mask", "sky"}) {
             if (c.contains(key) && !c[key].is_null()) {

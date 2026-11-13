@@ -10,6 +10,7 @@
 // stats[2] += Σ(clamp(x, 0, 1) − y)² (trainer.py's PSNR: the clamped render against the masked target).
 // With Frame.flags bit 1 ("valid" SSIM, as fused-ssim's padding="valid" in trainer.py) only window positions
 // that lie wholly inside the image count: elsewhere S is not summed and the derivative maps are zero.
+// pc.split = 1: decoupled SSIM (ssim_prep's 6-plane layout, 4 derivative maps per channel).
 #include "common.glsl"
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
@@ -31,6 +32,7 @@ void statAdd(uint i, float v) {
 }
 #endif
 layout(std430, binding = 4) readonly buffer PlaneBuf { float planes[]; };
+layout(push_constant) uniform PC { uint split; } pc;
 void main() {
     uvec2 p = gl_GlobalInvocationID.xy;
     bool inb = p.x < F.width && p.y < F.height;
@@ -39,21 +41,41 @@ void main() {
     float sumS = 0.0, sumL1 = 0.0, sumL2 = 0.0;
     bool validWin = (F.flags & 2u) == 0u ||
         (p.x >= 5u && p.y >= 5u && p.x + 5u < F.width && p.y + 5u < F.height);
+    bool split = pc.split != 0u;
+    uint np = split ? 6u : 5u;
     if (inb) {
         for (uint c = 0u; c < 3u; c++) {
-            float mx = mu[(c * 5u + 0u) * hw + pid], my = mu[(c * 5u + 1u) * hw + pid];
-            float mxx = mu[(c * 5u + 2u) * hw + pid], myy = mu[(c * 5u + 3u) * hw + pid], mxy = mu[(c * 5u + 4u) * hw + pid];
-            float sx = mxx - mx * mx, sy = myy - my * my, sxy = mxy - mx * my;
-            float A1 = 2.0 * mx * my + C1, A2 = 2.0 * sxy + C2, B1 = mx * mx + my * my + C1, B2 = sx + sy + C2;
-            float Q = 1.0 / (B1 * B2);
-            float S = A1 * A2 * Q;
-            // S/A1 and S/A2 written without dividing by A1, A2 (either can be exactly 0).
             float vw = validWin ? 1.0 : 0.0;
-            dmaps[(c * 3u + 0u) * hw + pid] = vw * (2.0 * my * A2 * Q - 2.0 * my * A1 * Q - 2.0 * mx * S / B1 + 2.0 * mx * S / B2);
-            dmaps[(c * 3u + 1u) * hw + pid] = vw * (-S / B2);
-            dmaps[(c * 3u + 2u) * hw + pid] = vw * (2.0 * A1 * Q);
+            float S;
+            if (!split) {
+                float mx = mu[(c * 5u + 0u) * hw + pid], my = mu[(c * 5u + 1u) * hw + pid];
+                float mxx = mu[(c * 5u + 2u) * hw + pid], myy = mu[(c * 5u + 3u) * hw + pid], mxy = mu[(c * 5u + 4u) * hw + pid];
+                float sx = mxx - mx * mx, sy = myy - my * my, sxy = mxy - mx * my;
+                float A1 = 2.0 * mx * my + C1, A2 = 2.0 * sxy + C2, B1 = mx * mx + my * my + C1, B2 = sx + sy + C2;
+                float Q = 1.0 / (B1 * B2);
+                S = A1 * A2 * Q;
+                // S/A1 and S/A2 written without dividing by A1, A2 (either can be exactly 0).
+                dmaps[(c * 3u + 0u) * hw + pid] = vw * (2.0 * my * A2 * Q - 2.0 * my * A1 * Q - 2.0 * mx * S / B1 + 2.0 * mx * S / B2);
+                dmaps[(c * 3u + 1u) * hw + pid] = vw * (-S / B2);
+                dmaps[(c * 3u + 2u) * hw + pid] = vw * (2.0 * A1 * Q);
+            } else {
+                // decoupled (trainer.py ssim_split): luminance of the corrected render c against y, contrast-structure of
+                // the raw render r against y. Derivative maps w.r.t. mu_c, mu_r, E[r²], E[r·y].
+                float mc = mu[(c * 6u + 0u) * hw + pid], my = mu[(c * 6u + 1u) * hw + pid];
+                float mrr = mu[(c * 6u + 2u) * hw + pid], myy = mu[(c * 6u + 3u) * hw + pid];
+                float mry = mu[(c * 6u + 4u) * hw + pid], mr = mu[(c * 6u + 5u) * hw + pid];
+                float A1 = 2.0 * mc * my + C1, B1 = mc * mc + my * my + C1;
+                float sr = mrr - mr * mr, sy = myy - my * my, sry = mry - mr * my;
+                float A2 = 2.0 * sry + C2, B2 = sr + sy + C2;
+                float lum = A1 / B1, cs = A2 / B2;
+                S = lum * cs;
+                dmaps[(c * 4u + 0u) * hw + pid] = vw * cs * (2.0 * my - 2.0 * mc * lum) / B1;
+                dmaps[(c * 4u + 1u) * hw + pid] = vw * lum * (-2.0 * my + 2.0 * mr * cs) / B2;
+                dmaps[(c * 4u + 2u) * hw + pid] = vw * (-lum * cs / B2);
+                dmaps[(c * 4u + 3u) * hw + pid] = vw * (2.0 * lum / B2);
+            }
             sumS += vw * S;
-            float x = planes[(c * 5u) * hw + pid], y = planes[(c * 5u + 1u) * hw + pid];
+            float x = planes[(c * np) * hw + pid], y = planes[(c * np + 1u) * hw + pid];
             float xc = clamp(x, 0.0, 1.0);
             sumL1 += abs(x - y); sumL2 += (xc - y) * (xc - y);
         }

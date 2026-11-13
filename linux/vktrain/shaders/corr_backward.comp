@@ -1,0 +1,87 @@
+#version 460
+#ifdef NATIVE_FLOAT_ATOMICS
+#extension GL_EXT_shader_atomic_float : require
+#endif
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_vote : require
+// Per-photo colour correction, backward (Mac: appearance_backward / bilagrid_backward, but with the exact grid
+// gradient over every pixel as trainer.py's autograd, not the Mac's every-4th-pixel estimate).
+// gradImg rgb holds dL/d(corrected); it becomes dL/d(raw) = [A]ᵀ g (+ gradRaw, the direct gradient of decoupled
+// SSIM's contrast-structure term, when pc.direct = 1). Parameter gradients go to the float accumulator:
+//   mode 1: 12 values (dM row-major, db), summed per subgroup into one of pc.stripes copies (host sums them);
+//   mode 2: the grid (12·8·16·16), one pass per distinct grid cell in the subgroup.
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) buffer GradBuf { float gradImg[]; };
+layout(std430, binding = 2) readonly buffer RawBuf { float raw[]; };
+layout(std430, binding = 3) readonly buffer ParBuf { float par[]; };
+layout(std430, binding = 4) readonly buffer DirectBuf { float gradRaw[]; };
+DECLARE_ATOMIC_ACC(5)
+layout(push_constant) uniform PC { uint mode; uint direct; uint stripes; } pc;
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    bool inb = p.x < F.width && p.y < F.height;
+    uint hw = F.width * F.height, pid = p.y * F.width + p.x;
+    vec3 g = vec3(0.0), x = vec3(0.0);
+    float c[12];
+    for (int k = 0; k < 12; k++) c[k] = 0.0;
+    ivec3 i0 = ivec3(0);
+    vec3 f = vec3(0.0);
+    if (inb) {
+        g = vec3(gradImg[pid], gradImg[hw + pid], gradImg[2u * hw + pid]);
+        x = vec3(raw[pid], raw[hw + pid], raw[2u * hw + pid]);
+        if (pc.mode == 1u) {
+            for (int r = 0; r < 3; r++) {
+                c[r * 4] = par[r * 3]; c[r * 4 + 1] = par[r * 3 + 1]; c[r * 4 + 2] = par[r * 3 + 2]; c[r * 4 + 3] = par[9 + r];
+            }
+        } else {
+            bg_coords(p, F.width, F.height, dot(x, vec3(LUMA_R, LUMA_G, LUMA_B)), i0, f);
+            for (int k = 0; k < 12; k++) {
+                float v = 0.0;
+                for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+                    float w = (dx != 0 ? f.x : 1.0 - f.x) * (dy != 0 ? f.y : 1.0 - f.y) * (dz != 0 ? f.z : 1.0 - f.z);
+                    v += w * par[bg_index(k, i0.z + dz, i0.y + dy, i0.x + dx)];
+                }
+                c[k] = v;
+            }
+        }
+        for (int col = 0; col < 3; col++) {
+            float v = c[col] * g.x + c[4 + col] * g.y + c[8 + col] * g.z;
+            if (pc.direct != 0u) v += gradRaw[uint(col) * hw + pid];
+            gradImg[uint(col) * hw + pid] = v;
+        }
+    }
+    // dL/d[A | b] at this pixel: g_r · (x, 1)
+    float xin[4] = float[4](x.x, x.y, x.z, 1.0);
+    if (pc.mode == 1u) {
+        float v[12];
+        for (int r = 0; r < 3; r++) { v[r * 3] = g[r] * x.x; v[r * 3 + 1] = g[r] * x.y; v[r * 3 + 2] = g[r] * x.z; v[9 + r] = g[r]; }
+        uint wg = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+        uint slot = ((wg * gl_NumSubgroups + gl_SubgroupID) % pc.stripes) * 12u;
+        for (int k = 0; k < 12; k++) {
+            float s = subgroupAdd(v[k]);
+            if (subgroupElect() && s != 0.0) accAdd(slot + uint(k), s);
+        }
+        return;
+    }
+    bool pending = inb && any(notEqual(g, vec3(0.0)));
+    uint key = uint(i0.x) | (uint(i0.y) << 8u) | (uint(i0.z) << 16u);
+    while (subgroupAny(pending)) {
+        uint k0 = subgroupMin(pending ? key : 0xFFFFFFFFu);
+        bool mine = pending && key == k0;
+        uint leader = subgroupMin(mine ? gl_SubgroupInvocationID : 0xFFFFFFFFu);
+        for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+            float w = (dx != 0 ? f.x : 1.0 - f.x) * (dy != 0 ? f.y : 1.0 - f.y) * (dz != 0 ? f.z : 1.0 - f.z);
+            for (int r = 0; r < 3; r++)
+                for (int col = 0; col < 4; col++) {
+                    float s = subgroupAdd(mine ? w * g[r] * xin[col] : 0.0);
+                    if (gl_SubgroupInvocationID == leader && s != 0.0)
+                        accAdd(uint(bg_index(r * 4 + col, i0.z + dz, i0.y + dy, i0.x + dx)), s);
+                }
+        }
+        if (mine) pending = false;
+    }
+}

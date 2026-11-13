@@ -1,0 +1,26 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Depth losses, step 2: dL/dED of each pixel = its own depth term + the normal terms of its 4 neighbours that used
+// it (depth_normal's nbuf slots), then through ED = D / max(1 − T, 1e-10) to the rendered depth plane
+// (gradImg plane 3) and to T_final (added to gradImg plane 4, read by raster_bwd).
+#include "common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer ImgBuf { float img[]; };
+layout(std430, binding = 2) readonly buffer TBuf { float finalT[]; };
+layout(std430, binding = 3) readonly buffer DEdBuf { float dED[]; };
+layout(std430, binding = 4) readonly buffer NBuf { float nbuf[]; };
+layout(std430, binding = 5) buffer GradBuf { float gradImg[]; };
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= F.width || p.y >= F.height) return;
+    uint W = F.width, hw = W * F.height, q = p.y * W + p.x;
+    float g = dED[q];
+    if (p.x + 1u < W) g += nbuf[q + 1u];               // the right neighbour's "left" slot
+    if (p.x > 0u) g += nbuf[hw + q - 1u];              // the left neighbour's "right" slot
+    if (p.y + 1u < F.height) g += nbuf[2u * hw + q + W];
+    if (p.y > 0u) g += nbuf[3u * hw + q - W];
+    float a = 1.0 - finalT[q];
+    gradImg[3u * hw + q] = g / max(a, 1e-10);
+    if (a > 1e-10) gradImg[4u * hw + q] += g * img[3u * hw + q] / (a * a);
+}

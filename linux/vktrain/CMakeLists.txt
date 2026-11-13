@@ -23,8 +23,10 @@ find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
 
 set(KERNELS preprocess preprocess_bwd radix_hist radix_scatter scan_block scan_add gather_counts duplicate_keys
             tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam atomic_probe
-            reg_grad grad_stats mcmc_noise)
-set(ATOMIC_KERNELS raster_bwd ssim_terms atomic_probe)
+            reg_grad grad_stats mcmc_noise
+            sky_composite sky_backward corr_apply corr_backward transient_hist transient_thresh transient_weights
+            depth_normal depth_gather)
+set(ATOMIC_KERNELS raster_bwd ssim_terms atomic_probe preprocess_bwd sky_backward corr_backward depth_normal)
 
 set(SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
 file(MAKE_DIRECTORY ${SPV_DIR})
@@ -81,7 +83,7 @@ bool hasNativeVariant(const char* name) {
 
 add_library(vktrain_core STATIC
   src/vk.cpp src/gpu_splat.cpp src/cpu_ref.cpp src/config.cpp src/dataset.cpp src/plyio.cpp src/strategy.cpp
-  src/trainer.cpp ${SPV_DIR}/shaders_registry.cpp ${SPV_HEADERS})
+  src/trainer.cpp src/models.cpp ${SPV_DIR}/shaders_registry.cpp ${SPV_HEADERS})
 target_include_directories(vktrain_core PUBLIC src PRIVATE ${SPV_DIR})
 target_include_directories(vktrain_core SYSTEM PUBLIC third_party)
 find_package(Threads REQUIRED)

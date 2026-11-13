@@ -22,6 +22,7 @@ struct CameraInfo {
     double fx = 0, fy = 0, cx = 0, cy = 0;
     double c2w[4][4] = {};   // row-major, OpenCV convention
     std::string depth, mask, sky;
+    int depthWidth = 0, depthHeight = 0;   // the depth map's size (float16 values)
     bool holdout = false;
     double exposure = 0;     // 0 = not recorded
 };

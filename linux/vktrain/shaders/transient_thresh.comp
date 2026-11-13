@@ -1,0 +1,32 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Transient masking, step 2 (one invocation): the image's median error from transient_hist's histogram (lower
+// median, linear within its bin), t = max(median · sensitivity, 0.10), and the threshold as an EMA over steps
+// (0.95 · old + 0.05 · t; the first step takes t), as trainer.py TransientMasker. State (uint words):
+// [0] threshold (float bits), [1] 1 once a threshold exists, [2] outlier count of this step (zeroed here).
+#include "common.glsl"
+#define NBINS 2048u
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) readonly buffer FrameBuf { Frame F; };
+layout(std430, binding = 1) readonly buffer HistBuf { uint hist[]; };
+layout(std430, binding = 2) buffer StateBuf { uint state[]; };
+layout(push_constant) uniform PC { float sensitivity; } pc;
+void main() {
+    uint n = F.width * F.height;
+    uint k = (n - 1u) / 2u;
+    uint cum = 0u;
+    float med = 1.0;
+    for (uint b = 0u; b < NBINS; b++) {
+        uint h = hist[b];
+        if (h > 0u && k < cum + h) {
+            med = (float(b) + (float(k - cum) + 0.5) / float(h)) / float(NBINS);
+            break;
+        }
+        cum += h;
+    }
+    float t = max(med * pc.sensitivity, 0.10);
+    float thr = state[1] != 0u ? uintBitsToFloat(state[0]) * 0.95 + t * 0.05 : t;
+    state[0] = floatBitsToUint(thr);
+    state[1] = 1u;
+    state[2] = 0u;
+}
