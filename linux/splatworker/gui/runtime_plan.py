@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -51,6 +52,21 @@ PYTHON_RUNTIME = PythonRuntime(
     sha256="1780de9ddda04e956d2a4a0ad09b7f5667d92f4f12cd0881ec939de5d542903f",
     size_bytes=43778272,
 )
+
+# SplatWork for Windows (docs/dev/WINDOWS.md): the same CPython for x86_64 Windows (python.exe at the archive root)
+PYTHON_RUNTIME_WINDOWS = PythonRuntime(
+    version="3.10.22",
+    url=("https://github.com/astral-sh/python-build-standalone/releases/download/20261009/"
+         "cpython-3.10.22%2B20261009-x86_64-pc-windows-msvc-install_only.tar.gz"),
+    sha256="cb023e83e42d8937ba77c7cf83641083c3b81e88e1226e1c694a347ae1924d54",
+    size_bytes=39573204,
+)
+# Profiles with no Windows wheels yet: cu128's gsplat 1.6 is built by our CI for Linux only.
+LINUX_ONLY_PROFILES = ("cu128",)
+
+
+def python_runtime(windows: Optional[bool] = None) -> PythonRuntime:
+    return PYTHON_RUNTIME_WINDOWS if (sys.platform == "win32" if windows is None else windows) else PYTHON_RUNTIME
 
 # Mirrors pyproject.toml [project.dependencies] + the non-torch part of [train]
 # (tests/test_gui_runtime_plan.py checks that they stay in sync).
@@ -235,7 +251,10 @@ def rocm_gsplat_published(prof: "ProcessingGpuProfile", opener: Callable[..., An
 
 def unpublished_profiles(opener: Callable[..., Any] = None, local_dir: Optional[Path] = None) -> List[str]:
     """Ids of profiles whose gsplat wheel is not (yet) downloadable — skipped by ``choose_profile``."""
-    return [p.id for p in GPU_PROFILES if gsplat_wheel_published(p, opener, local_dir=local_dir) is not True]
+    out = [p.id for p in GPU_PROFILES if gsplat_wheel_published(p, opener, local_dir=local_dir) is not True]
+    if sys.platform == "win32":
+        out += [pid for pid in LINUX_ONLY_PROFILES if pid not in out]
+    return out
 
 
 def profile_by_id(pid: str) -> Optional[GpuProfile]:
@@ -478,8 +497,8 @@ def build_plan(choice_or_id, paths: AppPaths, *, with_splatprep: bool = True,
     gpu = profile_by_id(profile_id)
     proc = processing_profile_by_id(profile_id)     # AMD / Intel PyTorch for processing (no training)
     target = paths.venv_staging_dir   # swapped into paths.venv_dir by the installer after "verify" passes
-    py = target / "bin" / "python"
-    rt = PYTHON_RUNTIME
+    py = target / "Scripts" / "python.exe" if sys.platform == "win32" else target / "bin" / "python"
+    rt = python_runtime()
 
     steps: List[Step] = [
         Step("python", f"Downloading Python {rt.version}",

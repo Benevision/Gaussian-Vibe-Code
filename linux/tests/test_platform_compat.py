@@ -146,3 +146,12 @@ def test_windows_run_key_with_fake_registry(monkeypatch):
     autostart.set_windows_run_key(False, [], FakeWinreg())
     autostart.set_windows_run_key(False, [], FakeWinreg())   # already off
     assert store == {}
+
+
+def test_windows_python_runtime_and_profiles(monkeypatch):
+    from splatworker.gui import runtime_plan as RP
+
+    rt = RP.python_runtime(windows=True)
+    assert "x86_64-pc-windows-msvc" in rt.url and len(rt.sha256) == 64 and rt.version == RP.PYTHON_RUNTIME.version
+    monkeypatch.setattr(RP.sys, "platform", "win32")
+    assert "cu128" in RP.unpublished_profiles(opener=lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))

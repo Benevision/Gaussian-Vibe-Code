@@ -27,7 +27,7 @@ from ..platform_compat import kill_tree, new_group_kwargs
 
 from .paths import AppPaths, worker_lib_dir
 from .pip_progress import PipProgressParser, human_bytes
-from .runtime_plan import PYTHON_RUNTIME, Plan, Step, child_pythonpath, verify_problems
+from .runtime_plan import Plan, Step, child_pythonpath, python_runtime, verify_problems
 
 RUNTIME_STATE_VERSION = 1
 VERIFY_PREFIX = "SPLATWORKER-VERIFY "
@@ -267,7 +267,7 @@ class Installer:
                                  with_splatprep=self.plan.with_splatprep,
                                  with_lightglue=self.plan.with_lightglue,
                                  splatprep_dir=str(self.plan.splatprep_dir) if self.plan.splatprep_dir else None,
-                                 verify=verify, python_version=verify.get("python") or PYTHON_RUNTIME.version,
+                                 verify=verify, python_version=verify.get("python") or python_runtime().version,
                                  installed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
             state.save(self.paths)
             self._log("=== setup finished")
@@ -358,7 +358,7 @@ class Installer:
         target_dir = self.paths.python_dir
         marker = target_dir / ".splatworker-sha256"
         if marker.is_file() and marker.read_text().strip() == step.sha256 and \
-                (target_dir / "bin" / "python3").exists():
+                self.paths.python_exe.exists():
             self._log("Python already downloaded")
             progress(1.0, "Already downloaded")
             return
@@ -382,7 +382,7 @@ class Installer:
         shutil.rmtree(target_dir, ignore_errors=True)
         os.replace(root, target_dir)
         shutil.rmtree(staging, ignore_errors=True)
-        if not (target_dir / "bin" / "python3").exists():
+        if not self.paths.python_exe.exists():
             raise InstallError("The Python download is incomplete", "bin/python3 missing", "Press Retry.")
         marker.write_text(step.sha256 or "")
         archive.unlink(missing_ok=True)
