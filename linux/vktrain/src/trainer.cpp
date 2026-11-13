@@ -372,7 +372,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
 
         // trainer.py evaluate(): holdout PSNR of the clamped render over the black (or fixed) background,
         // masked pixels scored against the render itself, averaged over the holdout photos.
-        auto evaluate = [&](int shDeg) -> double {
+        auto evaluate = [&](int shDeg, bool dump = false) -> double {
             if (nEval == 0) return NAN;
             double sum = 0;
             for (size_t k = nTrain; k < views.size(); k++) {
@@ -393,6 +393,22 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                         double gt = c[ch] * a + (1 - a) * evalBg[ch];
                         gt = gt * m + pred * (1 - m);
                         se += (pred - gt) * (pred - gt);
+                    }
+                }
+                if (dump && !opt.dumpEval.empty()) {
+                    fs::create_directories(opt.dumpEval);
+                    for (int which = 0; which < 2; which++) {
+                        std::ofstream f((fs::path(opt.dumpEval) / fmt("eval%zu_%s.ppm", k - nTrain, which ? "target" : "render")).string(),
+                                        std::ios::binary);
+                        f << "P6\n" << v.width << " " << v.height << "\n255\n";
+                        for (size_t p = 0; p < hw; p++) {
+                            float c[3], a, m;
+                            v.pixel(p, c, a, m);
+                            for (int ch = 0; ch < 3; ch++) {
+                                double val = which ? c[ch] : std::clamp(double(im[size_t(ch) * hw + p]), 0.0, 1.0);
+                                f.put(char(uint8_t(std::lround(val * 255))));
+                            }
+                        }
                     }
                 }
                 double mse = se / double(hw * 3);
@@ -606,7 +622,7 @@ int runTraining(const TrainOptions& opt, const TrainConfig& cfg, Control& ctl, E
                 psnrEma = std::isnan(psnrEma) ? p : 0.9 * psnrEma + 0.1 * p;
             }
             if (cfg.evalInterval && nEval && (cur % cfg.evalInterval == 0 || cur == cfg.iterations)) {
-                lastEval = evaluate(shDeg);
+                lastEval = evaluate(shDeg, cur == cfg.iterations);
                 em.log(fmt("step %lld: holdout PSNR %.2f dB", (long long)cur, lastEval));
             }
             if (previewInterval > 0 && !opt.jobDir.empty() && cur % previewInterval == 0 && cur < cfg.iterations) {
