@@ -41,7 +41,7 @@ double readValue(const uint8_t* p, const std::string& t, bool bigEndian) {
     uint8_t b[8];
     size_t n = typeSize(t);
     std::memcpy(b, p, n);
-    if (bigEndian) std::reverse(b, b + n);
+    if (bigEndian && n >= 2 && n <= 8) std::reverse(b, b + n);
     if (t == "char" || t == "int8") { int8_t v; std::memcpy(&v, b, 1); return v; }
     if (t == "uchar" || t == "uint8") return b[0];
     if (t == "short" || t == "int16") { int16_t v; std::memcpy(&v, b, 2); return v; }
