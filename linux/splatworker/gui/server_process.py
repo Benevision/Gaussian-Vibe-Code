@@ -158,7 +158,8 @@ def port_problem(port: int, host: str = "0.0.0.0") -> Optional[str]:
 def explain_exit(lines: Sequence[str], returncode: Optional[int], port: int) -> str:
     text = "\n".join(lines[-80:])
     low = text.lower()
-    if "address already in use" in low or "errno 98" in low:
+    if ("address already in use" in low or "errno 98" in low or "errno 10048" in low
+            or "only one usage of each socket address" in low):
         return port_problem(port) or f"Port {port} is already in use."
     if "no module named" in low:
         m = re.search(r"No module named '([^']+)'", text)

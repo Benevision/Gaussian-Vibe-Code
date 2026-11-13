@@ -49,10 +49,12 @@ def _stop_when_stdin_closes() -> None:
     import threading
 
     def watch():
+        # os.read on the raw descriptor: a daemon thread blocked in sys.stdin.buffer.read holds the buffer's lock,
+        # and Python aborts at exit when a daemon thread holds the stdin lock
         try:
-            while sys.stdin.buffer.read(4096):
+            while os.read(0, 4096):
                 pass
-        except (OSError, ValueError, AttributeError):
+        except OSError:
             return
         signal.raise_signal(signal.SIGINT)
 

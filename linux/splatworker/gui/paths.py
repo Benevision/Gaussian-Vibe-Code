@@ -78,7 +78,8 @@ class AppPaths:
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None, windows: Optional[bool] = None) -> "AppPaths":
         env = os.environ if env is None else env
-        if _is_windows(windows):
+        xdg_set = any(env.get(k) for k in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"))
+        if _is_windows(windows) and not xdg_set:   # explicit XDG folders win (tests, a portable setup)
             # %APPDATA%\SplatWork (settings, token; roams), %LOCALAPPDATA%\SplatWork (runtime, data, cache)
             home = Path(env.get("USERPROFILE") or os.path.expanduser("~"))
             roaming = Path(env.get("APPDATA") or home / "AppData" / "Roaming")
