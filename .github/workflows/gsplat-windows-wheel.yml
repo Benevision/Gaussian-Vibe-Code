@@ -1,0 +1,122 @@
+# gsplat 1.6 (unreleased) for SplatWork for Windows' "cu128" runtime profile: PyTorch 2.7.1 + CUDA 12.8, RTX 20 →
+# RTX 50 series. The Windows twin of the gsplat-wheel job in splat-worker-flatpak.yml, built from the same pin
+# (linux/flatpak/gsplat-pin.env) with the CUDA 12.8 toolkit and MSVC; no GPU is needed to compile.
+#
+# The wheel is cached under a key derived from the pin, so it compiles once per pin. The Pages job in
+# splat-worker-flatpak.yml restores that cache and publishes the wheel next to the Linux one at
+# https://benevision.github.io/SplatWork/wheels/ (pip picks the win_amd64 file by its platform tag).
+name: gsplat Windows wheel
+
+on:
+  push:
+    branches: [main, "claude/windows-app-*"]
+    paths: ["linux/flatpak/gsplat-pin.env", ".github/workflows/gsplat-windows-wheel.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gsplat-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wheel:
+    runs-on: windows-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read pin
+        id: pin
+        shell: bash
+        run: |
+          grep -v '^#' linux/flatpak/gsplat-pin.env | sed '/^$/d' >> "$GITHUB_OUTPUT"
+          echo "key=gsplat-win-$(sha256sum linux/flatpak/gsplat-pin.env | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Cache wheel
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: wheels-win
+          key: ${{ steps.pin.outputs.key }}
+      - name: Use a wheel attached to a GitHub Release
+        id: release
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p wheels-win
+          tag="gsplat-${{ steps.pin.outputs.GSPLAT_VERSION }}-${{ steps.pin.outputs.CUDA_TAG }}"
+          if gh release download "$tag" --repo "${{ github.repository }}" --pattern "gsplat-*win_amd64.whl" --dir wheels-win 2>/dev/null; then
+            ls -la wheels-win; echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no release $tag with a Windows wheel: compiling"; echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: CUDA toolkit
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "12.8.1"
+          method: network
+          sub-packages: '["nvcc", "cudart", "thrust", "nvtx", "nvrtc_dev", "visual_studio_integration", "cublas_dev", "cusparse_dev", "cusolver_dev", "curand_dev", "cufft_dev"]'
+      - uses: actions/setup-python@v5
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        with:
+          python-version: "3.10"   # the worker's GPU runtime is CPython 3.10
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        with:
+          arch: x64
+      - name: Get gsplat at the pinned commit
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip wheel setuptools ninja numpy
+          python -m pip install "torch==${{ steps.pin.outputs.TORCH_VERSION }}" --index-url https://download.pytorch.org/whl/${{ steps.pin.outputs.CUDA_TAG }}
+          git config --global core.longpaths true
+          # a short build folder: MSVC and nvcc still hit the 260-character path limit in deep object paths
+          git clone --recursive https://github.com/nerfstudio-project/gsplat.git /c/g
+          cd /c/g
+          git checkout ${{ steps.pin.outputs.GSPLAT_COMMIT }}
+          git submodule update --init --recursive
+          TAG="pt$(echo ${{ steps.pin.outputs.TORCH_VERSION }} | cut -d. -f1,2 | tr -d .)${{ steps.pin.outputs.CUDA_TAG }}"
+          sed -i "s/^__version__ = .*/__version__ = \"${{ steps.pin.outputs.GSPLAT_VERSION }}+${TAG}\"/" gsplat/version.py
+          tail -1 gsplat/version.py
+          # same upstream fix as on Linux: host-compiled Utils.cpp uses nvcc's two-argument cudaEventCreate
+          sed -i -E 's/cudaEventCreate\(([^,()]+), *cudaEventDisableTiming\)/cudaEventCreateWithFlags(\1, cudaEventDisableTiming)/g' gsplat/cuda/csrc/*.cpp
+          grep -c cudaEventCreateWithFlags gsplat/cuda/csrc/Utils.cpp || true
+      # Built from PowerShell, not Git Bash: Git's own link.exe in /usr/bin would shadow MSVC's linker.
+      - name: Build gsplat wheel
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        shell: pwsh
+        working-directory: C:\g
+        env:
+          TORCH_CUDA_ARCH_LIST: ${{ steps.pin.outputs.TORCH_CUDA_ARCH_LIST }}
+          MAX_JOBS: "4"
+          BUILD_EXPERIMENTAL: "0"
+          DISTUTILS_USE_SDK: "1"
+          # the runner's Visual Studio can be newer than CUDA 12.8 officially lists
+          NVCC_APPEND_FLAGS: "-allow-unsupported-compiler"
+        run: |
+          nvcc --version
+          (Get-Command cl).Source; (Get-Command link).Source
+          python -m pip wheel -v --no-deps --no-build-isolation -w "$env:GITHUB_WORKSPACE\wheels-win" . *>&1 |
+            Tee-Object -FilePath "$env:GITHUB_WORKSPACE\gsplat-build.log" |
+            Select-String -Pattern '^\s*\[\d+/\d+\]|error|FAILED|Successfully built' | ForEach-Object { $_.Line.Substring(0, [Math]::Min(400, $_.Line.Length)) }
+          if (-not (Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win\gsplat-*win_amd64.whl" -ErrorAction SilentlyContinue)) { exit 1 }
+          Get-ChildItem "$env:GITHUB_WORKSPACE\wheels-win"
+      - name: Check the wheel imports (no GPU here, so only the module and its extension load)
+        if: steps.cache.outputs.cache-hit != 'true' && steps.release.outputs.found != 'true'
+        shell: bash
+        run: |
+          python -m pip install --no-deps wheels-win/gsplat-*win_amd64.whl
+          cd "$RUNNER_TEMP" && python -c "import gsplat, gsplat.cuda._backend as b; print('gsplat', gsplat.__version__, 'extension', b.__file__)" || \
+            python -c "import gsplat; print('gsplat', gsplat.__version__)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gsplat-windows
+          path: |
+            wheels-win
+            gsplat-build.log
