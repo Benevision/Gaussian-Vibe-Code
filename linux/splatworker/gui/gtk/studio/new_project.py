@@ -116,7 +116,7 @@ class NewProjectDialog(Adw.Window):
                        subtitle="Right-eye images become training cameras too (double the coverage)."),
             switch_row("Stereo depth", o.stereo_depth, lambda v: setattr(o, "stereo_depth", v), "source.stereoDepth"),
         ]
-        self.home_clips_row = Adw.EntryRow(title="Clips to use (numbers, e.g. 2, 5; empty = every usable clip)")
+        self.home_clips_row = Adw.EntryRow(title="Clips to use (numbers, e.g. 2, 5; empty = the best clip)")
         self.home_clips_row.connect("changed", lambda r: setattr(o, "home_clips", r.get_text()))
         self.home_rows = [
             spin_row("Frames from the tape", 50, 2000, 50, o.home_frames, lambda v: setattr(o, "home_frames", int(v)),
@@ -126,8 +126,8 @@ class NewProjectDialog(Adw.Window):
                                 "band and non-square pixels are always fixed."),
             self.home_clips_row,
             plain_row(title="Clips", subtitle="The video is split at scene cuts and each clip judged; the project log "
-                                              "lists them (number, time, used or why not). Clips that show the same place "
-                                              "join into one scene."),
+                                              "lists them (number, time, used or why not). Without numbers the clip with "
+                                              "the most depth is used; list clips of the same place to join them."),
         ]
         for r in self.video_rows + self.r360_rows + self.photo_rows + self.stereo_rows + self.home_rows:
             prep.add(r)

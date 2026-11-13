@@ -13,6 +13,23 @@ SplatWork for Linux is published to its Flatpak repository on every change and c
   are combined. On a 1,227-photo property survey the cameras went from a median 48 m off GPS (scene doubled) to
   0.96 m. If a solve still doesn't match GPS, preparation stops with a clear message instead of training on it
   (turn off *Use photo locations* to keep it anyway).
+- **Home video (VHS, camcorder tapes), new:** a *Home video* tile on the Mac and in SplatWork for Linux turns
+  digitised old tapes into splats.
+  - The video is read once and split into clips at scene cuts. Each clip gets a verdict: the camera moves; it only
+    turns; it hardly moves; it's blurred; it's mostly moving people, water or a car; it's too short; or the picture
+    is blank. The clip with the most depth is ticked; tick others of the same place to join them.
+  - Frames are picked where the camera has moved on and the picture is sharpest. Repeated frames from tape transfers
+    are skipped.
+  - Each frame is cleaned: black borders and the head-switching band are cropped, pixels are made square, interlaced
+    frames are rebuilt, tracking lines are repaired, the frame is denoised with its neighbours, and each clip's colour
+    cast is taken out. Burnt-in date stamps are masked.
+  - Each clip, and each zoom setting within a clip, gets its own camera. A ticked clip that the solve can't place
+    with the others (its cameras land on one spot, or it gets an impossible zoom) is left out, with the reason.
+  - Training uses SH degree 1 and ignores moving people.
+  - It runs on the Mac or on a Linux worker. Results and limits are in `docs/dev/VHS.md`.
+- **Video with non-square pixels is no longer stretched:** PAL / NTSC captures and re-encoded tape transfers store
+  pixels that aren't square. Their frames are now resampled to square pixels on the Mac and on Linux workers, so the
+  camera solve isn't given a squashed picture.
 - **SplatWork for Windows (new, untested on real hardware):** the Linux worker and studio, with the same GTK 4
   interface, packaged for Windows 10 / 11 as an `.msi` installer and a portable `.zip`.
   - It includes the Projects list, the new project flow, the viewer and editor, Compute devices and the setup

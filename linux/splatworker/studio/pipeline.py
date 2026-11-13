@@ -395,6 +395,9 @@ class LocalPipeline:
             groups = importers.camera_groups_from_frames(ds)
             if groups:
                 req["cameraGroups"] = groups          # home video: a camera per clip (or zoom setting)
+                travel = importers.clip_travel(ds)
+                if travel:
+                    req["clipTravel"] = travel
             if o.source_kind == "stereo":
                 from . import stereo
 

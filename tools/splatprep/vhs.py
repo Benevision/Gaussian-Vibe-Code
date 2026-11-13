@@ -22,7 +22,7 @@ Request (``task: frames``): ``video``, ``outputDir``, ``videoOptions`` (``target
 ``encoding``), and ``vhs``:
 
 * ``analyseOnly`` — only write ``vhs.json`` (the clips) and thumbnails, no frames;
-* ``clips`` — ids of the clips to use (default: every clip with verdict ``good``);
+* ``clips`` — ids of the clips to use (default: the recommended clip — the best ``good`` one);
 * ``maxHeight`` (576) — output height; SD tape holds no more vertical detail than PAL's 576 lines;
 * ``denoise`` (true), ``colour`` (true), ``deinterlace`` (true), ``repairDropouts`` (true), ``maskOverlays`` (true);
 * ``minClipSeconds`` (4), ``framesPerClip`` (max frames per clip, 150).
@@ -265,6 +265,7 @@ class _Frame:
     sharp: float = 0.0
     motion: float = 0.0        # median feature motion to the previous unique frame, fraction of the width
     zoom: float = 0.0          # log scale change to the previous unique frame
+    rigid: float = -1.0        # % of tracks over the window that fit one rigid camera motion (−1 = unknown)
     parallax: float = -1.0     # % of tracks over ~0.5 s that fit the epipolar geometry but no homography (−1 = unknown)
     mean: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     lo: float = 0.0
@@ -297,7 +298,7 @@ class _Tracker:
         self.prev = None
         self.tracks = []
 
-    def step(self, g: np.ndarray) -> Tuple[float, float, float]:
+    def step(self, g: np.ndarray) -> Tuple[float, float, float, float]:
         """→ (motion since the last frame as a fraction of the width, log zoom over the window (0 when there is
         parallax: moving towards the scene also scales the picture), parallax over the window: the % of tracks that
         fit the two views' epipolar geometry but not a homography — near 0 when the camera only turns or zooms)."""
@@ -305,7 +306,7 @@ class _Tracker:
 
         h, w = g.shape
         motion = zoom = 0.0
-        parallax = -1.0
+        parallax = rigid = -1.0
         if self.prev is not None and self.tracks:
             p0 = np.float32([t[-1] for t in self.tracks]).reshape(-1, 1, 2)
             p1, st, _ = cv2.calcOpticalFlowPyrLK(self.prev, g, p0, None, winSize=(15, 15), maxLevel=3,
@@ -330,6 +331,8 @@ class _Tracker:
                     tol = w / 320.0
                     H, _ = cv2.findHomography(a, b, cv2.RANSAC, 2.0 * tol)
                     F, fin = cv2.findFundamentalMat(a, b, cv2.FM_RANSAC, 1.0 * tol, 0.99)
+                    if fin is not None:
+                        rigid = float(100.0 * fin.mean())
                     if H is not None and F is not None and fin is not None and fin.sum() >= 12:
                         fin = fin.reshape(-1).astype(bool)
                         pa = cv2.perspectiveTransform(a[fin].reshape(-1, 1, 2), H).reshape(-1, 2)
@@ -345,7 +348,7 @@ class _Tracker:
             if pts is not None:
                 self.tracks += [[(float(p[0]), float(p[1]))] for p in pts.reshape(-1, 2)]
         self.prev = g
-        return motion, zoom, parallax
+        return motion, zoom, parallax, rigid
 
 
 def _open(video: Path):
@@ -438,7 +441,7 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
             luma = core @ np.float32([0.299, 0.587, 0.114])
             f.lo, f.hi = (float(v) for v in np.percentile(luma, [1, 99.5]))
             g2 = cv2.resize(mid, (2 * tw, 2 * th), interpolation=cv2.INTER_AREA)
-            f.motion, f.zoom, f.parallax = tracker.step(g2)
+            f.motion, f.zoom, f.parallax, f.rigid = tracker.step(g2)
             n_sig += 1
             if n_sig % 4 == 1:          # every 4th picture frame (counting repeats would alias with 2× / 4× cadences)
                 col_acc += mid.mean(axis=0)
@@ -508,12 +511,14 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
             continue
         sharp = float(np.median([f.sharp for f in sig]))
         motion = float(np.sum([f.motion for f in sig]))
+        rig_v = [f.rigid for f in sig if f.rigid >= 0]
+        rigid = float(np.median(rig_v)) if rig_v else 0.0
         par_v = [f.parallax for f in sig if f.parallax >= 0]
         parallax = float(np.median(par_v)) if par_v else 0.0
         # zoom travelled: window scale changes (only where they are not parallax), each window counted once
         zoom_range = float(sum(abs(f.zoom) for f in sig if abs(f.zoom) > 0.03) / _Tracker.WINDOW)
         combed_c = sum(1 for f in sig if f.comb > COMB_RATIO)
-        c.update(sharpness=round(sharp, 2), relativeSharpness=round(sharp / max(all_sharp, 1e-3), 2),
+        c.update(rigidity=round(rigid, 1), sharpness=round(sharp, 2), relativeSharpness=round(sharp / max(all_sharp, 1e-3), 2),
                  cameraTravel=round(motion, 3), parallax=round(parallax, 3), zoomRange=round(zoom_range, 3),
                  zooms=bool(zoom_range > 0.25), combedFrames=combed_c)
         if c["duration"] < float(o["minClipSeconds"]) or len(sig) < 20:
@@ -524,9 +529,13 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
             c.update(verdict="rotationOnly", reason="the camera only turns: no depth to recover")
         elif sharp < 0.45 * all_sharp:
             c.update(verdict="blurry", reason="mostly blurred")
+        elif rigid < 55.0:
+            c.update(verdict="moving", reason="mostly things moving (people close up, water, a car): little fixed scene")
         else:
             c.update(verdict="good", reason="the camera moves through the scene")
-        c["score"] = round(min(parallax, 40.0) * min(c["duration"], 60.0) * min(sharp / max(all_sharp, 1e-3), 1.5), 2)
+        # ranking for the default choice: depth × length × sharpness × how much of the picture is a fixed scene
+        c["score"] = round(min(parallax, 40.0) * min(c["duration"], 60.0) * min(sharp / max(all_sharp, 1e-3), 1.5)
+                           * (rigid / 100.0) ** 2, 2)
         # burnt-in overlays
         if o["maskOverlays"] and seg.n >= 20 and motion >= 0.5:
             mean = seg.thumb_sum / seg.n
@@ -553,6 +562,8 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
             c["thumbnail"] = f"{thumbs_dir.name}/{p.name}"
         clips.append(c)
 
+    good = [c for c in clips if c.get("verdict") == "good"]
+    recommended = max(good, key=lambda c: c.get("score", 0.0))["id"] if good else None
     out_h = min(H - crop["top"] - crop["bottom"], int(o["maxHeight"]))
     info = {
         "video": video.name, "fingerprint": _fingerprint(video), "width": W, "height": H, "pixelAspect": round(par, 5),
@@ -560,7 +571,7 @@ def analyse(video: Path, opts: Dict[str, Any], progress: ProgressFn = lambda f, 
         "repeatFactor": round(repeat, 2), "duration": round(duration, 3), "framesDecoded": len(frames),
         "combedFrames": combed, "noSignalFrames": sum(1 for f in uniq if f.nosignal),
         "dropoutFrames": sum(1 for f in uniq if f.dropout > DROPOUT_LEVEL), "crop": crop,
-        "outputHeight": out_h, "clips": clips,
+        "outputHeight": out_h, "recommended": recommended, "clips": clips,
     }
     progress(1.0, f"{len(clips)} clips, {sum(1 for c in clips if c.get('verdict') == 'good')} usable")
     return {"info": info, "frames": frames}
@@ -717,8 +728,8 @@ def temporal_denoise(center: np.ndarray, neighbours: Sequence[np.ndarray], sigma
 # prepare: analysis → selection → clean frames → FrameSet
 # ---------------------------------------------------------------------------
 
-ANALYSIS_VERSION = 3
-_FIELDS = ("index", "t", "unique", "nosignal", "comb", "dropout", "sharp", "motion", "zoom", "parallax", "lo", "hi", "clip")
+ANALYSIS_VERSION = 4
+_FIELDS = ("index", "t", "unique", "nosignal", "comb", "dropout", "sharp", "motion", "zoom", "parallax", "rigid", "lo", "hi", "clip")
 
 
 def save_analysis(an: Dict[str, Any], path: Path) -> None:
@@ -820,7 +831,9 @@ def prepare(video: Path, out_dir: Path, vo: Dict[str, Any], vhs_opts: Dict[str, 
 
     wanted = o["clips"]
     if wanted is None:
-        use = [c["id"] for c in clips if c["verdict"] == "good"]
+        # one clip unless the user picks more: clips of different places solved together get glued onto each other
+        # (docs/dev/VHS.md §3), and one good clip solves in minutes
+        use = [info["recommended"]] if info.get("recommended") is not None else []
         if not use:
             ok = [c for c in clips if c["verdict"] in ("rotationOnly", "blurry") and c["duration"] >= o["minClipSeconds"]]
             use = [max(ok, key=lambda c: c.get("score", 0))["id"]] if ok else []
@@ -998,3 +1011,49 @@ def _write(path: Path, rgb: np.ndarray, ext: str) -> None:
         cv2.imwrite(str(path), bgr)
     else:
         cv2.imwrite(str(path), bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+
+
+# ---------------------------------------------------------------------------
+# After the camera solve: clips that were joined but don't belong
+# ---------------------------------------------------------------------------
+
+def check_clips(centers: Dict[str, np.ndarray], fx_over_width: Dict[str, float], groups: Dict[str, int],
+                travel: Dict[int, float], times: Optional[Dict[str, float]] = None) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Clips that a joint solve placed wrongly, from the solved camera centres of each image.
+
+    A clip whose camera moved through the scene (``travel``: the image-space camera travel the analysis measured)
+    but whose solved cameras sit almost on one spot was glued onto another clip's geometry — this happens when a
+    pan of a different place matches a few look-alike features (sand, water). Its path length per unit of travel is
+    compared with the other clips' median; far below (< 12 %) means left out. A focal length over 25× the image
+    width (a field of view under ~2°) is not a camcorder lens either. Returns (image names to drop, per-clip report).
+    """
+    by_clip: Dict[int, List[str]] = {}
+    for name, g in groups.items():
+        if name in centers:
+            by_clip.setdefault(int(g) // 1000, []).append(name)
+    ratio: Dict[int, float] = {}
+    path: Dict[int, float] = {}
+    for c, names in by_clip.items():
+        names = sorted(names, key=lambda n: (times or {}).get(n, 0.0) if times else n)
+        p = np.array([centers[n] for n in names])
+        path[c] = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
+        if travel.get(c, 0.0) > 0.2 and len(names) >= 6:
+            ratio[c] = path[c] / travel[c]
+    ref = float(np.median(list(ratio.values()))) if len(ratio) >= 2 else None
+    drop: List[str] = []
+    report: List[Dict[str, Any]] = []
+    for c in sorted(by_clip):
+        names = by_clip[c]
+        reason = None
+        bad_focal = [n for n in names if fx_over_width.get(n, 0.0) > 25.0]
+        if ref and c in ratio and ratio[c] < 0.12 * ref:
+            reason = "its cameras landed on one spot: probably matched to another clip by mistake"
+        elif len(bad_focal) > len(names) // 2:
+            reason = "the solve gave it an impossible zoom"
+        if reason:
+            drop += names
+        elif bad_focal:
+            drop += bad_focal
+        report.append({"clip": c, "registered": len(names), "path": round(path[c], 3),
+                       "kept": reason is None, **({"reason": reason} if reason else {})})
+    return drop, report

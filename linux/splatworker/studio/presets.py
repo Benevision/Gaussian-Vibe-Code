@@ -135,7 +135,7 @@ class ProjectOptions:
     train_on: str = "local"                  # net.placement: "local" (this PC) | "all" (block-parallel) | device id
     split_above: int = 400                   # net.blockThreshold: "all" splits scenes with this many photos or more
     home_frames: int = 400                   # source.homeVideoFrames: frames over all clips (home video)
-    home_clips: str = ""                     # home video: clip numbers to use ("2, 5"; empty = every usable clip)
+    home_clips: str = ""                     # home video: clip numbers to use ("2, 5"; empty = the best clip)
     home_restore: bool = True                # source.homeVideoRestore: denoise, colour, tracking-line repair
 
     def to_dict(self) -> Dict[str, Any]:
@@ -173,7 +173,7 @@ class ProjectOptions:
         return req
 
     def home_clip_ids(self) -> Optional[List[int]]:
-        """Clip numbers as the user sees them (1-based) → splatprep clip ids; None = every usable clip."""
+        """Clip numbers as the user sees them (1-based) → splatprep clip ids; None = the recommended clip."""
         ids = [int(t) - 1 for t in self.home_clips.replace(";", ",").replace(" ", ",").split(",") if t.strip().isdigit()]
         return sorted({i for i in ids if i >= 0}) or None
 

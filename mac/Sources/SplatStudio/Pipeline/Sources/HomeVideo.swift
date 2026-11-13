@@ -6,7 +6,7 @@ import Foundation
 /// (`tools/splatprep/vhs.py`, `docs/dev/VHS.md`). Every frame records its clip and camera group, so the camera
 /// solve gives each clip (or each zoom setting within it) its own lens.
 struct HomeVideoOptions: Codable, Hashable, Sendable {
-    /// Clips to use (ids from the analysis); nil = every clip judged usable.
+    /// Clips to use (ids from the analysis); nil = the recommended clip (the best usable one).
     var clips: [Int]? = nil
     /// Frames to pick over all chosen clips.
     var frameCount: Int = 400
@@ -35,11 +35,12 @@ struct HomeVideoClip: Codable, Hashable, Identifiable, Sendable {
     var start: Double
     var end: Double
     var duration: Double
-    /// good | rotationOnly | static | blurry | short | noSignal
+    /// good | rotationOnly | static | blurry | moving | short | noSignal
     var verdict: String
     var reason: String
     var thumbnail: String? = nil
     var parallax: Double? = nil
+    var rigidity: Double? = nil
     var cameraTravel: Double? = nil
     var relativeSharpness: Double? = nil
     var zooms: Bool? = nil
@@ -57,6 +58,7 @@ struct HomeVideoClip: Codable, Hashable, Identifiable, Sendable {
         case "rotationOnly": return "Only turns: little depth"
         case "static": return "Camera hardly moves"
         case "blurry": return "Mostly blurred"
+        case "moving": return "Mostly moving things"
         case "short": return "Too short"
         case "noSignal": return "No picture"
         default: return verdict
@@ -78,6 +80,8 @@ struct HomeVideoAnalysis: Codable, Hashable, Sendable {
     var outputHeight: Int
     var clips: [HomeVideoClip]
     var used: [Int]? = nil
+    /// The clip used unless others are ticked (the best "good" one).
+    var recommended: Int? = nil
 
     static let fileName = "vhs.json"
     static func load(_ dir: URL) -> HomeVideoAnalysis? {

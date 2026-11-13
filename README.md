@@ -29,7 +29,8 @@ Everything runs locally on your network. No cloud account, no uploads to anyone 
 
 - **Any source.** Photos (blurry and duplicate shots rejected), video (sharpest frames picked), 360° video and photos
   (cut into flat views), stereo footage (side-by-side, top/bottom, two files, Apple spatial video; metric scale from
-  the baseline), iPhone LiDAR captures, COLMAP and Nerfstudio datasets.
+  the baseline), old home video (VHS and camcorder tapes: split into clips and cleaned up), iPhone LiDAR captures,
+  COLMAP and Nerfstudio datasets.
 - **Camera solving that fits the footage.** Apple Object Capture built in, or COLMAP / GLOMAP with SIFT,
   SuperPoint, DISK or ALIKED + LightGlue, LoFTR and more. iPhone poses are refined rather than re-solved, drone photos
   are checked against their GPS, and cameras placed far off the camera path are dropped.

@@ -269,3 +269,23 @@ def test_prepare_end_to_end_on_a_synthetic_tape(tmp_path):
     # analysis is reused on a second run
     info2 = vhs.prepare(video, tmp_path / "out", {}, {"analyseOnly": True}, lambda f, m: None)
     assert info2["numFrames"] == 0 and info2["vhs"]["clips"]
+
+
+def test_check_clips_drops_a_clip_glued_onto_another():
+    rng = np.random.default_rng(0)
+    centers, groups, fxw = {}, {}, {}
+    for c, (start, step) in {1: (0.0, 0.5), 2: (20.0, 0.4), 3: (5.0, 0.0005)}.items():   # clip 3: collapsed
+        for k in range(20):
+            n = f"{c:02d}_{k:03d}.jpg"
+            centers[n] = np.array([start + k * step, 0.0, 0.0]) + rng.normal(0, 1e-4, 3)
+            groups[n] = c * 1000
+            fxw[n] = 2.0
+    fxw["01_005.jpg"] = 40.0              # one absurd focal in a good clip: just that frame goes
+    drop, report = vhs.check_clips(centers, fxw, groups, {1: 5.0, 2: 4.0, 3: 5.0})
+    kept = {r["clip"]: r["kept"] for r in report}
+    assert kept == {1: True, 2: True, 3: False}
+    assert set(n for n in drop if n.startswith("03_")) == {f"03_{k:03d}.jpg" for k in range(20)}
+    assert "01_005.jpg" in drop and not any(n.startswith("02_") for n in drop)
+    # a clip the analysis saw hardly moving is not judged by its path
+    drop, report = vhs.check_clips(centers, fxw, groups, {1: 5.0, 2: 4.0, 3: 0.1})
+    assert all(r["kept"] for r in report)

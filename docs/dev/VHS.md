@@ -1,7 +1,8 @@
 # VHS / old home video → splats
 
-Status: **study done, plan below, not built yet** (2026-11-13). Roadmap item from 2026-11-06: "a restoration pipeline
-for low-quality footage such as VHS home videos".
+Status: **built** (2026-11-13): the *Home video* source on the Mac and in SplatWork for Linux, `tools/splatprep/vhs.py`.
+Roadmap item from 2026-11-06: "a restoration pipeline for low-quality footage such as VHS home videos". §1 is the
+study of the sample footage, §2 the plan as built (with what changed on the way), §3 the measurements.
 
 The goal is to make splats from home-video tapes that someone has already digitised to a video file. Real-world input
 looks like the two sample files below: a capture card or a HandBrake re-encode, sometimes upscaled, sometimes
@@ -60,6 +61,15 @@ Per-clip summary (sharpness = median Laplacian variance; higher is sharper):
 | Blue screen | From **56.25 s to the end (71 s)** it's a solid VCR blue screen | Detect and drop "no signal" frames (solid blue or black, near-zero variance). |
 | Content | Garden with trees and a brick barbecue, a person walking toward the camera, then a slow pan across a beach | Mostly rotation. Rotation-only clips give poses but no depth. The solve should detect "no parallax" (a homography explains the motion) and say so, rather than produce a flat splat. |
 | Other | Head-switching band at the bottom, a QuickTime timecode track | Same crop as above. |
+
+### Third clip: "field with car" (.mp4, 431 MB)
+
+The same transfer chain as the main clip: HEVC 1890×1068 at SAR 712:945, 20 fps, 6 min 3 s. A short shot of a bird,
+then a station wagon doing laps of a dry field while the camera mostly pans and zooms from the edge of the field.
+There's a blue no-signal screen at 177.8–188.8 s and a burst of damaged frames around 9.4–10.9 s; one of them,
+looked at closely, is all tearing and smeared blocks (comb score 0.79 against 0.5–0.6 for clean frames). The car
+kicks up dust and fills much of many frames. The camera pans and zooms from a fixed spot, so there is depth only
+where it walks.
 
 The sample frames that went with this study were shared outside the repo, and none are committed.
 

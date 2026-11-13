@@ -54,6 +54,8 @@ struct ProcessingRequest: Codable, Hashable, Sendable {
     var vhs: VHS? = nil
     /// task = sfm: {image basename: group}; the images of a group share one camera (home-video clips / zoom settings).
     var cameraGroups: [String: Int]? = nil
+    /// task = sfm with cameraGroups: {clip id: camera travel} from vhs.json — lets splatprep leave out wrongly joined clips.
+    var clipTravel: [String: Double]? = nil
 
     struct VHS: Codable, Hashable, Sendable {
         var analyseOnly: Bool? = nil
@@ -254,6 +256,9 @@ struct SplatPrepPoseSolver: PoseSolver {
             r.singleCamera = false
             r.cameraGroups = Dictionary(frames.frames.compactMap { f in f.cameraGroup.map { ((f.image as NSString).lastPathComponent, $0) } },
                                         uniquingKeysWith: { a, _ in a })
+            if let a = HomeVideoAnalysis.load(frames.root) {
+                r.clipTravel = Dictionary(a.clips.compactMap { c in c.cameraTravel.map { (String(c.id), $0) } }, uniquingKeysWith: { a, _ in a })
+            }
         }
         if useMasks, frames.frames.contains(where: { $0.mask != nil }) { r.masksDir = "masks" }
         if frames.frames.contains(where: { $0.sky != nil }) { r.skyMasksDir = "splatprep-sky/masks" }

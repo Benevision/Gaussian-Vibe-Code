@@ -15,6 +15,8 @@ Extra (optional) request keys understood here, beyond §6:
 * ``vhs``             — task = frames: old home video (VHS …) restoration and clips instead of plain frame
   extraction (see vhs.py); ``{"analyseOnly": true}`` only finds the clips.
 * ``cameraGroups``    — sfm: {image name: group}; images of one group share a camera (VHS clips).
+* ``clipTravel``      — sfm with cameraGroups: {clip id: camera travel from vhs.json}; clips the solve glued onto
+  another clip (cameras on one spot) or gave an impossible zoom are left out (``vhs.check_clips``).
 * ``datasets`` / ``models`` — task = benchmark (see benchmark.py).
 * mask keys (task = masks / maskpreview) — ``maskPrompts``, ``maskClasses``, ``maskThreshold``,
   ``dilatePixels``, ``replaceMasks``, ... (see masks/prompts.py and README).
@@ -181,6 +183,27 @@ def run_sfm(req: dict, workdir: Path, progress: ProgressFn) -> dict:
         sp.update("alignment", 0.1, "aligning to prior poses (Sim3)")
         stats["priorAlignment"] = align_to_priors(rec, priors)
         stats["numPriors"] = len(priors)
+    if req.get("cameraGroups") and req.get("clipTravel"):
+        # home video: a clip glued onto another clip's geometry is left out (vhs.check_clips)
+        from .vhs import check_clips
+
+        centers = {im.name: im.center() for im in rec.images.values()}
+        fxw = {im.name: rec.cameras[im.camera_id].pinhole()[0] / max(1, rec.cameras[im.camera_id].width)
+               for im in rec.images.values()}
+        groups = {str(k).split("/")[-1]: int(v) for k, v in req["cameraGroups"].items()}
+        drop, report = check_clips(centers, fxw, {im.name: groups[im.name.split("/")[-1]]
+                                                  for im in rec.images.values() if im.name.split("/")[-1] in groups},
+                                   {int(k): float(v) for k, v in req["clipTravel"].items()})
+        stats["clipCheck"] = report
+        if drop:
+            gone = set(drop)
+            for iid in [i for i, im in rec.images.items() if im.name in gone]:
+                del rec.images[iid]
+            stats["numRegistered"] = len(rec.images)
+            stats["registeredPct"] = round(100.0 * len(rec.images) / len(names), 2)
+        for r in report:
+            if not r["kept"]:
+                sp.message("alignment", f"clip {r['clip'] + 1} left out: {r['reason']}")
     known_up = None
     if not priors and req.get("gpsCheck", True):
         from .gps import check_against_gps

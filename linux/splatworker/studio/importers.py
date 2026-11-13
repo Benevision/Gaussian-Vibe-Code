@@ -384,6 +384,16 @@ def camera_groups_from_frames(dataset_dir: Path) -> Optional[Dict[str, int]]:
     return g or None
 
 
+def clip_travel(dataset_dir: Path) -> Optional[Dict[str, float]]:
+    """splatprep ``clipTravel`` from ``vhs.json`` (lets the solve leave out clips it joined by mistake)."""
+    f = Path(dataset_dir) / "vhs.json"
+    if not f.is_file():
+        return None
+    v = json.loads(f.read_text(encoding="utf-8"))
+    t = {str(c["id"]): float(c["cameraTravel"]) for c in v.get("clips", []) if c.get("cameraTravel") is not None}
+    return t or None
+
+
 def home_video_report(dataset_dir: Path) -> List[str]:
     """Plain-words lines about the clips splatprep found (``vhs.json``), for the project log."""
     f = Path(dataset_dir) / "vhs.json"
@@ -396,7 +406,7 @@ def home_video_report(dataset_dir: Path) -> List[str]:
     for c in v.get("clips", []):
         if c.get("verdict") in ("short", "noSignal"):
             continue
-        mark = "used" if c["id"] in used else "left out"
+        mark = "used" if c["id"] in used else ("recommended, not used" if c["id"] == v.get("recommended") else "not used")
         out.append(f"  clip {c['id'] + 1}: {c['start']:.0f}–{c['end']:.0f} s, {c['reason']} — {mark}"
                    + (f", {c['selected']} frames" if c.get("selected") else ""))
     return out

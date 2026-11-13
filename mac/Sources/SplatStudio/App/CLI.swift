@@ -221,7 +221,7 @@ enum CLI {
                     let (a, dir) = try await HomeVideoIngest.analyse(video: URL(fileURLWithPath: src)) { p in
                         if !p.message.isEmpty { print("  \(p.message)"); fflush(stdout) }
                     }
-                    print("\(a.width)×\(a.height), \(a.summary) (analysis in \(dir.path))")
+                    print("\(a.width)×\(a.height), \(a.summary), recommended clip \(a.recommended.map(String.init) ?? "none") (analysis in \(dir.path))")
                     for c in a.clips where c.offerable {
                         print(String(format: "  clip %2d  %7.1f–%7.1f s  %-28@ parallax %5.1f %%  travel %5.2f%@", c.id, c.start, c.end,
                                      c.verdictTitle as NSString, c.parallax ?? 0, c.cameraTravel ?? 0, c.zooms == true ? "  zooms" : ""))

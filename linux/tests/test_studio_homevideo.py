@@ -41,7 +41,7 @@ def test_camera_groups_and_report_from_frames_json(tmp_path):
     lines = importers.home_video_report(tmp_path)
     assert "720×576" in lines[0]
     assert any("clip 2:" in l and "used" in l and "40 frames" in l for l in lines)
-    assert any("clip 3:" in l and "left out" in l for l in lines)
+    assert any("clip 3:" in l and "not used" in l for l in lines)
     assert not any("clip 1:" in l for l in lines)
     (tmp_path / "frames.json").write_text(json.dumps({"frames": [{"image": "images/a.jpg"}]}))
     assert importers.camera_groups_from_frames(tmp_path) is None

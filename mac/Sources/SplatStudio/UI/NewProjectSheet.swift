@@ -196,7 +196,7 @@ struct NewProjectSheet: View {
     @ViewBuilder private var homeVideoPanel: some View {
         PanelSection(title: "Clips", systemImage: "film.stack") {
             if let a = homeAnalysis {
-                Text("Found \(a.summary). Each clip is solved with its own camera; clips that show the same place are joined into one scene, the others are left out of it.")
+                Text("Found \(a.summary). The clip with the most depth is ticked. Tick other clips of the same place to join them; a clip that turns out to show somewhere else is left out. For another place, make a separate project with its clip.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ForEach(a.clips.filter(\.offerable)) { c in homeClipRow(c) }
                 let hidden = a.clips.filter { !$0.offerable }.count
@@ -228,7 +228,7 @@ struct NewProjectSheet: View {
     }
 
     private func chosenClips(_ a: HomeVideoAnalysis) -> Set<Int> {
-        Set(options.homeVideo.clips ?? a.clips.filter(\.usable).map(\.id))
+        Set(options.homeVideo.clips ?? a.recommended.map { [$0] } ?? [])
     }
 
     @ViewBuilder private func homeClipRow(_ c: HomeVideoClip) -> some View {
@@ -249,7 +249,7 @@ struct NewProjectSheet: View {
             .frame(width: 80, height: 60).clipShape(RoundedRectangle(cornerRadius: 4))
             VStack(alignment: .leading, spacing: 2) {
                 Text("Clip \(c.id + 1) · \(Self.clock(c.start))–\(Self.clock(c.end)) (\(Int(c.duration.rounded())) s)").font(.callout.monospacedDigit())
-                Text(c.verdictTitle + (c.zooms == true ? " · zooms" : "") + (c.overlay == true ? " · date stamp masked" : ""))
+                Text(c.verdictTitle + (c.id == a.recommended ? " · best" : "") + (c.zooms == true ? " · zooms" : "") + (c.overlay == true ? " · date stamp masked" : ""))
                     .font(.caption).foregroundStyle(c.usable ? Color.secondary : Color.orange)
             }
             Spacer()
