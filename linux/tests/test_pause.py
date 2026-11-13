@@ -328,3 +328,53 @@ def _upload(client, tmp_path):
                 zf.write(p, str(p.relative_to(src)))
     return client.post("/v1/datasets", content=buf.getvalue(),
                        headers={**REMOTE, "Content-Type": "application/zip"}).json()["datasetId"]
+
+
+def test_worker_shutdown_pauses_a_running_training_job_and_keeps_its_state(tmp_path):
+    """Quitting the app / restarting the service must not throw away a training job's saved state: running training
+    jobs are paused (state saved), and come back paused (this PC's job) after the restart."""
+    import json
+    import threading
+    import time as _t
+    from splatworker.backends import Backend, JobPaused
+    from splatworker.config import ServerSettings
+    from splatworker.server import JobManager
+
+    s = ServerSettings(data_dir=tmp_path)
+    for x in (s.datasets_dir, s.jobs_dir, s.tmp_dir):
+        x.mkdir(parents=True, exist_ok=True)
+    ds = s.datasets_dir / "dabc"
+    (ds / "files").mkdir(parents=True)
+    (ds / "meta.json").write_text(json.dumps({"root": "files"}))
+
+    class Trainer(Backend):
+        pausable = True
+
+        def capabilities(self):
+            return ["train"]
+
+        def run(self, ctx):
+            step = 0
+            while True:
+                if ctx.pause_event.is_set():
+                    (ctx.job_dir / "resume.pt").write_bytes(b"state")
+                    raise JobPaused(step)
+                if ctx.cancel_event.is_set():
+                    raise AssertionError("shutdown should pause, not cancel, a pausable training job")
+                step += 1
+                _t.sleep(0.01)
+
+    m = JobManager(s, Trainer(), [None])
+    m.load()
+    job = m.submit("train", "dabc", "n", "config", {}, 100, origin="local")
+    m.start()
+    for _ in range(200):
+        if job.state == "training" or job.state == "loading":
+            break
+        _t.sleep(0.01)
+    _t.sleep(0.1)
+    m.shutdown()
+    assert job.state == "paused" and (job.dir / "resume.pt").is_file()
+    m2 = JobManager(s, Trainer(), [None])
+    m2.load()
+    assert m2.jobs[job.id].state == "paused" and m2.jobs[job.id].status.get("pausedAt")

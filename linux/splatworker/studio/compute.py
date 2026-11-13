@@ -42,6 +42,9 @@ SPLIT_ABOVE = 400            # the Mac's "Split into blocks above" default
 UPLOADS_FILE = ".remote-uploads.json"
 LOCAL_BONUS = 1.15           # no upload: prefer this PC when scores tie
 MAX_OFFLINE = 12 * 3600.0
+#: A block on a device that stays unreachable this long is given up there and trained again on this PC, instead of
+#: holding up the whole block-parallel run for MAX_OFFLINE.
+BLOCK_MAX_OFFLINE = 30 * 60.0
 
 
 # --------------------------------------------------------------------------------------------- packaging
@@ -325,7 +328,8 @@ class ComputeRun:
 
     # ------------------------------------------------------------ one job
     def train_job(self, d: Device, dataset_id: str, cfg: Dict[str, Any], name: str, dest: Path,
-                  on_status: Callable[[Dict[str, Any]], None], with_preview: bool = False) -> Tuple[Path, bool]:
+                  on_status: Callable[[Dict[str, Any]], None], with_preview: bool = False,
+                  max_offline: float = MAX_OFFLINE) -> Tuple[Path, bool]:
         """Run one training job on ``d`` and download its result to ``dest`` (+ sky sidecars). Returns
         (dest, has_sky)."""
         client = self.client_for(d)
@@ -336,14 +340,14 @@ class ComputeRun:
         if not local and hasattr(self.p, "track_remote"):
             self.p.track_remote(key, client, job)       # cancelled synchronously on quit
         try:
-            return self._finish_job(client, d, job, name, dest, on_status, with_preview, local)
+            return self._finish_job(client, d, job, name, dest, on_status, with_preview, local, max_offline)
         finally:
             if not local and hasattr(self.p, "track_remote"):
                 self.p.track_remote(key, None, None)
 
     def _finish_job(self, client: Client, d: Device, job: str, name: str, dest: Path,
                     on_status: Callable[[Dict[str, Any]], None], with_preview: bool,
-                    local: bool) -> Tuple[Path, bool]:
+                    local: bool, max_offline: float = MAX_OFFLINE) -> Tuple[Path, bool]:
         preview = self.p.project.outputs_dir / ".preview.splat"
         last = {"step": None, "t": 0.0}
 
@@ -359,7 +363,7 @@ class ComputeRun:
                 if got:
                     last["step"], last["t"] = step, time.monotonic()
                     self.p.emit("preview", got)
-        self.wait(client, d, job, status)
+        client = self.wait(client, d, job, status, max_offline)     # the device may have moved to another address
         self.fetch(client, d, f"/v1/jobs/{job}/result.ply", dest)
         sky = False
         if d.has_sky:
@@ -375,9 +379,12 @@ class ComputeRun:
                 pass
         return dest, sky
 
-    def wait(self, client: Client, d: Device, job: str, on_status: Callable[[Dict[str, Any]], None]) -> Dict:
-        """Poll until the job ends. Network trouble (Wi-Fi drop, the Mac asleep, a restart) is ridden out with
-        growing gaps up to 30 s for ``MAX_OFFLINE``; cancelling cancels the job there."""
+    def wait(self, client: Client, d: Device, job: str, on_status: Callable[[Dict[str, Any]], None],
+             max_offline: float = MAX_OFFLINE) -> Client:
+        """Poll until the job ends; returns the client that reached it. Network trouble (Wi-Fi drop, the Mac
+        asleep, a restart) is ridden out with growing gaps up to 30 s for ``max_offline``; when the device registry
+        has moved the device to another address (Wi-Fi → ethernet), polling follows it. Cancelling cancels the
+        job there."""
         offline_since: Optional[float] = None
         backoff = self.poll_seconds
         while True:
@@ -395,7 +402,12 @@ class ComputeRun:
                     raise PipelineError(f"{d.name}: {e.message}")
                 offline_since = offline_since or time.monotonic()
                 gone = time.monotonic() - offline_since
-                if gone > MAX_OFFLINE:
+                cur = self.reg.get(d.id) if (self.reg is not None and d.id != LOCAL_ID) else None
+                if cur is not None and cur.base_url != d.base_url:
+                    self.log(f"{d.name} moved to {cur.base_url}; following it")
+                    d, client = cur, self.client_for(cur)
+                    continue
+                if gone > max_offline:
                     raise PipelineError(f"{d.name} unreachable for {gone / 60:.0f} min: {e.message}")
                 if backoff == self.poll_seconds:
                     self.log(f"{d.name} is not answering ({e.message}); waiting — the job keeps running there")
@@ -408,7 +420,7 @@ class ComputeRun:
             on_status(s)
             state = s.get("state")
             if state == "completed":
-                return s
+                return client
             if state == "cancelled":
                 if self.cancel.is_set():
                     raise Cancelled()
@@ -568,7 +580,8 @@ class ComputeRun:
         name = f"{self.p.project.name} block {b.index + 1}/{len(plan)}"
         dest = work / f"block-{b.index:02d}.ply"
         tracker.start(b, d)
-        _, sky = self.train_job(d, did, cfg, name, dest, lambda s: tracker.update(b, d, s))
+        _, sky = self.train_job(d, did, cfg, name, dest, lambda s: tracker.update(b, d, s),
+                                max_offline=BLOCK_MAX_OFFLINE)
         tracker.finish(b)
         with self._lock:
             results[b.index] = (b, dest, sky)

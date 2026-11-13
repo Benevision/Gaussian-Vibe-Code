@@ -143,9 +143,11 @@ struct ProjectPage: View {
         }
     }
 
+    /// The project's own settings, including the device it was processed on; the last device chosen anywhere
+    /// only fills in for projects that don't have one recorded.
     private func loadOptions() {
-        options = ProjectRecord.load(url)?.options ?? PrepOptions()
-        ProcessingDevicePicker.applyRemembered(to: &options)
+        if let o = ProjectRecord.load(url)?.options { options = o }
+        else { options = PrepOptions(); ProcessingDevicePicker.applyRemembered(to: &options) }
     }
 
     // MARK: sections
@@ -194,7 +196,7 @@ struct ProjectPage: View {
         switch st.kind {
         case .processing:
             Button("Show Progress") { model.showNewProject = true }.buttonStyle(.borderedProminent)
-            Button("Stop", role: .destructive) { model.prep.cancel() }
+            Button(model.prep.stopping ? "Stopping…" : "Stop", role: .destructive) { model.prep.cancel() }.disabled(model.prep.stopping)
         case .processingStopped, .processingFailed, .empty:
             if p.canResumeProcessing {
                 Button(st.kind == .empty && p.checkpoints.isEmpty ? "Start Processing" : "Resume Processing") { resumeProcessing(redo: nil) }
@@ -330,6 +332,7 @@ struct ProjectPage: View {
     }
 
     private func changeSettings() {
+        model.prep.reset()        // a failed run's page would otherwise open instead of the settings
         model.newProjectSource = ProjectRecord.load(url)?.source
         model.newProjectPrefill = url
         model.showNewProject = true
@@ -356,7 +359,7 @@ struct ProjectPage: View {
 /// Which `PrepStage` the live preparation is in.
 enum PrepSessionStage {
     @MainActor static func current(_ prep: PrepSession) -> PrepStage {
-        switch prep.phase { case .images: return .frames; case .masks: return .masks; case .poses: return .poses; case .finalising: return .done }
+        prep.currentStage
     }
 }
 

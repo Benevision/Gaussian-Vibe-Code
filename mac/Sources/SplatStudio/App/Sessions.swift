@@ -74,6 +74,12 @@ final class TrainingSession {
     private var lastRecorded = Date.distantPast
     /// Block count of the run being resumed (a resumed block run splits the scene the same way).
     private var resumeBlockCount: Int? = nil
+    /// This Mac's checkpoint of the run being resumed, used if the run trains whole on this Mac.
+    private var localResume: (URL, Int)? = nil
+    /// Bumped by every new run: late work from an earlier run (previews, merges) checks it and drops out.
+    private var runGeneration = 0
+    /// Device choices made for a run internally (resume, automatic blocks) aren't remembered as your choice.
+    private var suppressDeviceSave = false
 
     private func recordTraining(_ change: @escaping (inout ProjectRecord.Training) -> Void) {
         guard let p = projectDir else { return }
@@ -109,6 +115,7 @@ final class TrainingSession {
         return v
     }
     private func saveDevices() {
+        guard !suppressDeviceSave else { return }
         let v = SavedDevices(placement: placement, workerId: workerId, deviceIds: deviceIds.map { Array($0).sorted() })
         if let d = try? JSONEncoder().encode(v) { UserDefaults.standard.set(d, forKey: Self.devicesKey) }
     }
@@ -142,6 +149,12 @@ final class TrainingSession {
     /// Devices a failed block can be retried on (this run's trainers), with display names.
     struct RetryDevice: Identifiable, Hashable { let id: String; let name: String }
     var retryDevices: [RetryDevice] = []
+    /// Per block, the devices it fits on (memory); a block that fits nowhere may go anywhere, as when it was placed.
+    var retryAllowed: [Int: Set<String>] = [:]
+    func retryDevices(for block: Int) -> [RetryDevice] {
+        guard let ok = retryAllowed[block], !ok.isEmpty else { return retryDevices }
+        return retryDevices.filter { ok.contains($0.id) }
+    }
     private var retryGate: BlockRetryGate?
     /// Pause / Resume for runs on workers or in blocks (a single run on this Mac uses `trainer` directly).
     private var pauseControl: PauseController?
@@ -167,10 +180,15 @@ final class TrainingSession {
     func start(dataset: PreparedDataset, resume: ProjectRecord.Training? = nil) {
         guard !isActive else { return }
         self.dataset = dataset; liveScene = nil; finishedUnseen = false
+        trainer = nil        // a stopped or failed run's trainer: its splats and GPU memory must not carry over
+        runGeneration += 1
         app?.followingTraining = true
         if let r = resume {
             config = r.config; customised = true
+            // the run's own devices, without making them the remembered choice for new runs
+            suppressDeviceSave = true
             placement = r.placement; deviceIds = r.deviceIds.map(Set.init); workerId = r.workerId
+            suppressDeviceSave = false
         }
         app?.remoteWatch.stop()   // training this project replaces whatever was being watched
         history.removeAll(); evalHistory.removeAll(); blockRows.removeAll(); retryDevices.removeAll(); retryGate = nil
@@ -198,24 +216,26 @@ final class TrainingSession {
                 t.checkpointStep = resume.checkpointStep; t.blockCount = resume.blockCount; t.blocksDone = resume.blocksDone }
             r.training = t
         }
-        var resumeFrom: (URL, Int)? = nil
+        localResume = nil
         if let r = resume, let ck = r.checkpoint, let st = r.checkpointStep, FileManager.default.fileExists(atPath: project.appendingPathComponent(ck).path) {
-            resumeFrom = (project.appendingPathComponent(ck), st)
+            localResume = (project.appendingPathComponent(ck), st)      // used whenever the run trains whole on this Mac
         }
         switch placement {
-        case .thisMac: startLocal(dataset: dataset, config: cfg, output: out, resumeFrom: resumeFrom)
+        case .thisMac: startLocal(dataset: dataset, config: cfg, output: out)
         case .remote: startRemote(dataset: dataset, config: cfg, output: out, name: name)
         case .both: startBoth(dataset: dataset, config: cfg, output: out, name: name, forceBlocks: resumeBlockCount != nil)
         }
     }
 
-    private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, resumeFrom: (URL, Int)? = nil) {
+    private func startLocal(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL) {
+        let resumeFrom = localResume
+        localResume = nil
         // Fail fast with what to change, instead of running out of GPU memory partway through loading.
         if MemoryForecast.macProblem(dataset: dataset, config: cfg) != nil {
             // Too big for this Mac in one piece: train it here as blocks that each fit, then merge.
             remoteMessage = "Too large for this Mac's memory in one piece — training it in blocks that fit, one after another."
-            deviceIds = ["local"]
-            startBoth(dataset: dataset, config: cfg, output: output, name: output.deletingPathExtension().lastPathComponent, forceBlocks: true)
+            startBoth(dataset: dataset, config: cfg, output: output, name: output.deletingPathExtension().lastPathComponent,
+                      forceBlocks: true, only: ["local"])
             return
         }
         state = .preparing("Loading images")
@@ -223,6 +243,15 @@ final class TrainingSession {
         trainer = t
         let preview = livePreview ? previewInterval : 0
         task = Task.detached(priority: .userInitiated) { [weak self] in
+            // Checkpoint every 10 minutes (and on Stop, below), so quitting or a crash costs at most that much.
+            // Stopped and awaited before the final write or the Stop save, so two saves never overlap.
+            let saver = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
+                    if Task.isCancelled { break }
+                    await Self.saveCheckpoint(t, output: output, session: self)
+                }
+            }
             do {
                 if let st = RemoteStore.load(dataset.root), !st.local {
                     await MainActor.run { self?.state = .preparing("Downloading the frames from the worker") }
@@ -234,29 +263,23 @@ final class TrainingSession {
                     await MainActor.run { self?.remoteMessage = "Continuing from the checkpoint at step \(step.formatted())." }
                 }
                 await MainActor.run { self?.state = .training; self?.present(t.makeScene()) }
-                // Checkpoint every 10 minutes (and on Stop, below), so quitting or a crash costs at most that much.
-                let saver = Task.detached(priority: .utility) {
-                    while !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
-                        if Task.isCancelled { break }
-                        await Self.saveCheckpoint(t, output: output, session: self)
-                    }
-                }
-                defer { saver.cancel() }
                 let result = try t.run(previewEvery: preview, onStatus: { s in
                     Task { @MainActor in self?.update(s) }
                 }, onPreview: { scene in
                     Task { @MainActor in self?.present(scene, light: true) }
                 })
+                saver.cancel(); _ = await saver.value
                 try PLYCodec.writeGaussians(result, to: output, up: dataset.upVectorSIMD)
                 let scene = SplatScene(cloud: result)
                 await MainActor.run { self?.finish(result: result, scene: scene, output: output) }
             } catch TrainerError.cancelled {
+                saver.cancel(); _ = await saver.value
                 // Stop keeps the progress: Resume on the project page continues from here.
                 if t.checkpoint().step > 0 { await Self.saveCheckpoint(t, output: output, session: self) }
-                await MainActor.run { self?.state = .cancelled }
+                await MainActor.run { if self?.trainer === t { self?.trainer = nil }; self?.state = .cancelled }
             } catch {
-                await MainActor.run { self?.state = .failed(error.localizedDescription) }
+                saver.cancel(); _ = await saver.value
+                await MainActor.run { if self?.trainer === t { self?.trainer = nil }; self?.state = .failed(error.localizedDescription) }
             }
         }
     }
@@ -266,7 +289,7 @@ final class TrainingSession {
         let (g, step) = t.checkpoint()
         guard step > 0 else { return }
         let url = checkpointURL(for: output)
-        let tmp = url.deletingLastPathComponent().appendingPathComponent(".tmp-" + url.lastPathComponent)
+        let tmp = url.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString)-" + url.lastPathComponent)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try PLYCodec.writeGaussians(g, to: tmp)
@@ -309,6 +332,7 @@ final class TrainingSession {
     /// Updates status / live preview from a worker job's status (shared by new and re-attached jobs).
     private func remoteProgress(client: WorkerClient, start: Date) -> @Sendable (JobStatus) -> Void {
         var lastPreviewStep: Int? = nil, lastPreviewFetch = Date.distantPast, fetching = false
+        let generation = runGeneration
         return { [weak self] js in
             Task { @MainActor in
                 guard let self else { return }
@@ -323,7 +347,7 @@ final class TrainingSession {
                         let g = try? await client.previewSplat(jobId)
                         await MainActor.run {
                             fetching = false
-                            if let g, self.livePreview, self.state == .training { self.present(SplatScene(cloud: g)) }
+                            if let g, self.livePreview, self.state == .training, self.runGeneration == generation { self.present(SplatScene(cloud: g)) }
                         }
                     }
                 }
@@ -355,8 +379,7 @@ final class TrainingSession {
         if let info = WorkerBrowser.shared.health[id]?.info,
            MemoryForecast.workerProblem(info: info, dataset: dataset, config: cfg) != nil {
             remoteMessage = "Too large for \(info.name)'s memory in one piece — training it there in blocks that fit, one after another."
-            deviceIds = [id]
-            startBoth(dataset: dataset, config: cfg, output: output, name: name, forceBlocks: true)
+            startBoth(dataset: dataset, config: cfg, output: output, name: name, forceBlocks: true, only: [id])
             return
         }
         state = .preparing("Uploading dataset")
@@ -383,6 +406,8 @@ final class TrainingSession {
                 try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))   // Stop also cancelled it there
                 self?.state = .cancelled
             } catch {
+                // The worker said the job failed (or it's gone): nothing to re-attach to later.
+                if error is WorkerError { try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output)) }
                 self?.state = .failed(error.localizedDescription)
             }
         }
@@ -394,14 +419,19 @@ final class TrainingSession {
         guard !isActive, let p = PendingRemoteJob.all(in: outputsDir).sorted(by: { $0.startedAt > $1.startedAt }).first else { return }
         let output = URL(fileURLWithPath: p.output)
         let host = URL(string: p.baseURL)?.host ?? "the worker"
-        workerId = p.workerId
+        suppressDeviceSave = true; workerId = p.workerId; suppressDeviceSave = false
         projectDir = dataset.root.deletingLastPathComponent()
         outputURL = output
         self.dataset = dataset; liveScene = nil; finishedUnseen = false
+        // a fresh run's state: nothing left over from the last one (Stop's "Stopping…", charts, block cards)
+        trainer = nil; runGeneration += 1; stopping = false
+        history.removeAll(); evalHistory.removeAll(); blockRows.removeAll(); retryDevices.removeAll(); retryGate = nil
+        status = TrainerStatus()
         app?.followingTraining = true
         state = .preparing("Re-attaching to “\(p.name)” on \(host)")
         remoteMessage = "Picked up a job that was running on \(host) when this project was last open."
         task = Task { [weak self] in
+            var reached: WorkerClient? = nil
             do {
                 // Right after launch the worker may not be discovered yet (its client carries the access token).
                 WorkerBrowser.shared.start()
@@ -411,6 +441,7 @@ final class TrainingSession {
                     known = WorkerBrowser.shared.client(for: p.workerId)
                 }
                 guard let client = known ?? URL(string: p.baseURL).map({ WorkerClient(baseURL: $0) }) else { return }
+                reached = client
                 guard let base = self?.remoteProgress(client: client, start: p.startedAt) else { return }
                 let pause = PauseController()
                 self?.pauseControl = pause
@@ -421,6 +452,11 @@ final class TrainingSession {
                 try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))
                 self?.finish(result: cloud, scene: SplatScene(cloud: cloud), output: output)
             } catch is CancellationError {
+                // Stop: the job is cancelled on the worker (also when Stop came before the wait reached it) and
+                // forgotten here, so reopening the project doesn't try to pick it up again.
+                let client = reached ?? WorkerBrowser.shared.client(for: p.workerId) ?? URL(string: p.baseURL).map { WorkerClient(baseURL: $0) }
+                if let client { Task.detached { _ = try? await client.cancelJob(p.jobId) } }
+                try? FileManager.default.removeItem(at: PendingRemoteJob.file(for: output))
                 self?.state = .cancelled
             } catch {
                 // Job gone (worker data cleared) or failed there: forget it so it isn't retried forever.
@@ -433,12 +469,15 @@ final class TrainingSession {
     }
 
     /// - Parameter forceBlocks: split even small scenes and even on one device (the job doesn't fit in one piece).
-    private func startBoth(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String, forceBlocks: Bool = false) {
+    /// - Parameter only: devices this run is limited to (a job too big for its one device), instead of the ticked ones.
+    private func startBoth(dataset: PreparedDataset, config cfg: TrainingConfig, output: URL, name: String, forceBlocks: Bool = false,
+                           only: Set<String>? = nil) {
         let browser = WorkerBrowser.shared
-        let useLocal = deviceIds?.contains("local") ?? true
+        let chosen = only ?? deviceIds
+        let useLocal = chosen?.contains("local") ?? true
         var devices = useLocal ? [ComputeScheduler.localDevice()] : []
         var clients: [String: WorkerClient] = [:]
-        for w in browser.workers where deviceIds?.contains(w.id) ?? true {
+        for w in browser.workers where chosen?.contains(w.id) ?? true {
             if let h = browser.health[w.id], case .online = h.status, let info = h.info, let c = browser.client(for: w.id) {
                 devices.append(ComputeScheduler.remoteDevice(w, info: info)); clients[w.id] = c
             }
@@ -495,7 +534,9 @@ final class TrainingSession {
                 }
                 self?.remoteMessage = "Training \(blocks.count) blocks on \(devices.count) devices."
                 let bc = blocks.count
-                self?.recordTraining { $0.placement = .both; $0.blockCount = bc }
+                let used = devices.map(\.id).sorted()
+                // resume trains on the same devices, split the same way
+                self?.recordTraining { $0.placement = .both; $0.blockCount = bc; $0.deviceIds = used }
                 let scheduler = ComputeScheduler(devices: devices, placement: .both)
                 let start = Date()
                 let total = cfg.iterations * blocks.count
@@ -509,9 +550,11 @@ final class TrainingSession {
                 // Live view: every block's latest preview (or result), merged, at most every 15 s.
                 var parts: [Int: GaussianCloud] = [:]
                 var merging = false, lastMerge = Date.distantPast, pending = false
+                let generation = self?.runGeneration ?? 0
                 @MainActor func mergePreviews() {
-                    guard let s = self, s.livePreview, !merging, !parts.isEmpty else { return }
-                    guard Date().timeIntervalSince(lastMerge) > 15 else {
+                    guard let s = self, s.runGeneration == generation, s.livePreview, !parts.isEmpty else { return }
+                    // one merge at a time, at most every 15 s; whatever arrives meanwhile is merged next
+                    guard !merging, Date().timeIntervalSince(lastMerge) > 15 else {
                         if !pending { pending = true; Task { @MainActor in try? await Task.sleep(nanoseconds: 15_000_000_000); pending = false; mergePreviews() } }
                         return
                     }
@@ -521,7 +564,7 @@ final class TrainingSession {
                         let merged = BlockMerger.merge(input)
                         await MainActor.run {
                             merging = false
-                            guard let s = self, s.isActive else { return }
+                            guard let s = self, s.isActive, s.runGeneration == generation else { return }   // a later run
                             s.present(SplatScene(cloud: merged))
                         }
                     }
@@ -532,6 +575,9 @@ final class TrainingSession {
                 self?.retryGate = gate
                 self?.retryDevices = devices.filter { $0.capabilities.contains("train") || $0.isLocal }
                     .map { RetryDevice(id: $0.id, name: $0.isLocal ? "This Mac" : $0.name) }
+                self?.retryAllowed = Dictionary(uniqueKeysWithValues: finalBlocks.map { b in
+                    (b.index, Set(devices.filter { fits($0.id, b, finalBlocks) }.map(\.id)))
+                })
                 let cloud = try await scheduler.trainBlockParallel(dataset: dataset, config: cfg, blocks: blocks, name: name,
                                                                    local: useLocal ? MetalTrainingRunner(pause: pause) : nil, clients: clients,
                                                                    fits: { fits($0, $1, finalBlocks) }, retryGate: gate, pause: pause,
@@ -758,7 +804,7 @@ final class PrepSession {
         if q.fraction < 0 { q.fraction = overall }
         progress = q
         // The project page shows which stage was running if the app quits now.
-        let st = Self.stage(of: ph)
+        let st = currentStage
         if st != recordedStage, let dir = projectDir, running {
             recordedStage = st
             ProjectLibrary.shared.update(dir) { $0.prep = .init(state: .running, stage: st) }
@@ -787,9 +833,22 @@ final class PrepSession {
     private(set) var lastRun: (source: SourceDescription, options: PrepOptions, thenTrain: Bool)? = nil
     private var recordedStage: PrepStage? = nil
 
-    private static func stage(of ph: Phase) -> PrepStage {
-        switch ph { case .images: return .frames; case .masks: return .masks; case .poses: return .poses; case .finalising: return .done }
+    /// The stage the overall progress is in. DatasetBuilder's progress ranges differ by source: photos and video
+    /// (frames ‹0.35, masks ‹0.45, cameras ‹0.97), iPhone captures (import ‹0.6, masks ‹0.7, refine), COLMAP and
+    /// Nerfstudio (import ‹0.85, masks ‹0.97).
+    var currentStage: PrepStage {
+        let f = overall
+        switch lastRun?.source {
+        case .captureBundle?: return f < 0.6 ? .frames : f < 0.7 ? .masks : f < 0.97 ? .poses : .done
+        case .colmap?, .nerfstudio?: return f < 0.85 ? .frames : f < 0.97 ? .masks : .done
+        default: return f < 0.35 ? .frames : f < 0.45 ? .masks : f < 0.97 ? .poses : .done
+        }
     }
+    /// Stop was pressed; the run is winding down (running stays true until it has, so nothing new starts on
+    /// the same folder meanwhile).
+    private(set) var stopping = false
+    /// Which run is current: work still finishing from a stopped run must not touch the next one.
+    private var runID = 0
 
     /// Runs the last run again: every stage that finished is reused from its checkpoint.
     func retry() {
@@ -809,7 +868,9 @@ final class PrepSession {
 
     func run(source: SourceDescription, options: PrepOptions, projectDir: URL, thenTrain: Bool) {
         guard !running else { return }
-        running = true; error = nil; log.removeAll(); cancelRequested = false
+        running = true; stopping = false; error = nil; log.removeAll(); cancelRequested = false
+        runID += 1
+        let myRun = runID
         self.projectDir = projectDir; lastRun = (source, options, thenTrain); recordedStage = nil
         try? FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
         ProjectLibrary.shared.update(projectDir) { r in
@@ -851,7 +912,7 @@ final class PrepSession {
                     self?.ingest(PipelineProgress(stage: "Finalising dataset", fraction: 0.98, message: "the dataset is already prepared — reusing it"))
                 } else {
                     let ds = try await DatasetBuilder.build(source: source, options: options, into: dsDir, worker: worker) { p in
-                        Task { @MainActor in self?.ingest(p) }
+                        Task { @MainActor in if self?.runID == myRun { self?.ingest(p) } }
                     }
                     self?.ingest(PipelineProgress(stage: "Finalising dataset", fraction: 0.98, message: "levelling and centring"))
                     leveled = ds
@@ -859,7 +920,7 @@ final class PrepSession {
                     catch { self?.appendLog("Could not level scene: \(error.localizedDescription)") }
                     try? cp.markDone(fingerprint: doneFP, summary: "\(leveled.manifest.cameras.count) cameras, levelled")
                 }
-                guard let self else { return }
+                guard let self, self.runID == myRun else { return }
                 for ph in Phase.allCases where self.stageEnds[ph] == nil && self.stageStarts[ph] != nil { self.stageEnds[ph] = Date() }
                 self.overall = 1
                 self.running = false
@@ -869,10 +930,10 @@ final class PrepSession {
                 self.app?.showNewProject = false
                 if thenTrain { self.app?.training.start(dataset: leveled) }
             } catch {
-                guard let self else { return }
-                self.running = false
+                guard let self, self.runID == myRun else { return }
+                self.running = false; self.stopping = false
                 // A cancel is not a failure: don't show "Preparation failed … CancellationError".
-                let stage = Self.stage(of: self.phase)
+                let stage = self.currentStage
                 if self.cancelRequested || error is CancellationError || (error as? URLError)?.code == .cancelled {
                     ProjectLibrary.shared.update(projectDir) { $0.prep = .init(state: .stopped, stage: stage, message: "Stopped") }
                     return
@@ -887,7 +948,12 @@ final class PrepSession {
 
     private var cancelRequested = false
 
-    func cancel() { cancelRequested = true; appendLog("Cancelled"); task?.cancel(); running = false; error = nil }
+    func cancel() {
+        guard running, !stopping else { return }
+        cancelRequested = true; stopping = true; error = nil
+        appendLog("Stopping…")
+        task?.cancel()
+    }
 
     /// Clears a finished / failed / cancelled run so a new project starts on its settings, not the old result.
     func reset() {

@@ -218,6 +218,7 @@ class JobManager:
                 job.status["state"] = "paused"
                 job.status["message"] = "interrupted by a worker restart; resume continues from the last pause"
                 job.status["etaSeconds"] = None
+                job.status["pausedAt"] = time.time()     # so the paused-job clean-up still applies
                 job.persist()
                 job.log("job was interrupted by a worker restart; it can be resumed from its last pause")
             elif job.state in ACTIVE_STATES:
@@ -250,7 +251,11 @@ class JobManager:
             self.cond.notify_all()
             running = [self.jobs[j] for j in self.running.values() if j in self.jobs]
         for job in running:
-            job.cancel_event.set()
+            # A training job that can pause saves its state and resumes after the restart; others are cancelled.
+            if self.pausable(job) and not job.cancel_event.is_set():
+                job.pause_event.set()
+            else:
+                job.cancel_event.set()
         deadline = time.time() + timeout
         for t in self.threads:
             t.join(max(0.1, deadline - time.time()))
@@ -537,6 +542,12 @@ class JobManager:
             job.log(f"paused at step {e.step}; the GPU is free (resume continues from here)")
             return
         except JobCancelled:
+            if self.stopping and not job.deleted and (job.dir / "resume.pt").is_file():
+                # stopped before it could save again: its last pause is still on disk, keep it resumable
+                job.update(persist=True, state="paused", pausedAt=time.time(), etaSeconds=None,
+                           message="interrupted by a worker stop; resume continues from the last pause")
+                job.log("worker stopped; the job can be resumed from its last pause")
+                return
             if self.stopping and not job.deleted:
                 self._finish(job, "failed", "worker shut down while the job was running")
             else:
@@ -606,6 +617,8 @@ def dataset_root(settings: ServerSettings, dataset_id: str, local: bool = True) 
         rel = m.get("root", "files")
     except Exception:
         return None
+    if m.get("localOnly") and not local:
+        return None                       # the desktop app's processing output (see _adopt_output_as_dataset)
     if m.get("external"):
         # a folder of the desktop app on this PC (POST /v1/datasets/local), used in place
         if not settings.local_enabled or not local:
@@ -645,6 +658,8 @@ def _adopt_output_as_dataset(settings: ServerSettings, out_dir: Path, job: "Job"
         os.replace(out_dir, partial / "files")
         info: Dict[str, Any] = {"datasetId": dataset_id, "createdAt": _now_iso(),
                                 "bytes": _dir_bytes(partial / "files"), "fromJob": job.id, "root": "files"}
+        if job.status.get("origin") == "local":
+            info["localOnly"] = True      # the desktop app's processing output: private to this PC, like its folders
         try:
             _describe_dataset(partial / "files", info)
         except DatasetError:
@@ -1092,6 +1107,8 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
             except Exception:
                 continue
             m.pop("root", None)
+            if m.get("localOnly") and not local:
+                continue               # the desktop app's processing outputs: not shown to other computers
             if m.get("external"):
                 if not local:
                     continue           # the desktop app's own folders: not shown to other computers
@@ -1173,7 +1190,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
         if not (root / "dataset.json").is_file():
             raise ApiError(400, "the census needs a dataset with dataset.json (the photos' cameras)")
         if body.get("jobId"):
-            src = manager.get(str(body["jobId"]))
+            src = _job(request, str(body["jobId"]))     # the desktop app's jobs don't exist for other computers
             ply = src.dir / "result.ply"
             if not ply.is_file():
                 raise ApiError(409, "that job has no result.ply")

@@ -16,6 +16,9 @@ struct NewProjectSheet: View {
     /// Aerial settings applied (drone footage, or started from the Drone / aerial tile).
     @State private var aerial = false
     @State private var beforeAerial: (SolverKind, String, String, String, Bool, TrainingConfig.Preset)? = nil
+    /// The hold-out interval of the project being changed (Change Settings), kept whatever the app's mode is now:
+    /// a different interval would redo the camera solve.
+    @State private var prefilledHoldout: Int? = nil
     @State private var options = PrepOptions()
     @State private var step = 0
     @State private var projectName = ""
@@ -103,7 +106,8 @@ struct NewProjectSheet: View {
 
     private var footer: some View {
         HStack {
-            Button("Cancel") { if prep.running { prep.cancel() } else { dismiss() } }.keyboardShortcut(.cancelAction)
+            Button(prep.stopping ? "Stopping…" : "Cancel") { if prep.running { prep.cancel() } else { dismiss() } }
+                .keyboardShortcut(.cancelAction).disabled(prep.stopping)
             if prep.running {
                 Button("Hide") { dismiss() }
                     .help("Keep preparing in the background and use the rest of the app; the progress button in the toolbar brings this back")
@@ -125,7 +129,7 @@ struct NewProjectSheet: View {
                     Button("Next") { step += 1 }.keyboardShortcut(.defaultAction).disabled(source == nil)
                 } else {
                     Button(trainAfter ? "Create & train" : "Create dataset") { start() }
-                        .keyboardShortcut(.defaultAction).disabled(source == nil || projectName.isEmpty)
+                        .keyboardShortcut(.defaultAction).disabled(source == nil || projectName.isEmpty || folderConflict != nil)
                 }
             }
         }
@@ -162,6 +166,9 @@ struct NewProjectSheet: View {
         HStack {
             Text("Project name")
             TextField("Name", text: $projectName).textFieldStyle(.roundedBorder)
+        }
+        if let c = folderConflict {
+            Label(c, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
         }
         HStack {
             Text("Save in").foregroundStyle(.secondary)
@@ -404,6 +411,9 @@ struct NewProjectSheet: View {
             .font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        if let c = folderConflict {
+            Label(c, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+        }
         let earlier = PrepCheckpoints(root: projectParent.appendingPathComponent(projectName).appendingPathComponent("dataset")).saved
         if !projectName.isEmpty, !earlier.isEmpty {
             Toggle(isOn: $reuseEarlier) {
@@ -528,11 +538,11 @@ struct NewProjectSheet: View {
     // MARK: actions
 
     private func start() {
-        guard let source else { return }
+        guard let source, folderConflict == nil else { return }
         var o = options
         // Easy: every 25th photo (4 %), enough for a trustworthy trend at almost no cost; Advanced: every 8th
         // (the research-paper convention, a more precise number).
-        o.holdoutInterval = holdout ? (mode == .advanced ? 8 : 25) : nil
+        o.holdoutInterval = holdout ? (prefilledHoldout ?? (mode == .advanced ? 8 : 25)) : nil
         // A preset that trains at a higher resolution than the photos are stored at (Maximum: 2400 px) gets
         // photos stored at that resolution, unless the stored size was changed by hand.
         if trainAfter, let stored = o.maxImageSize, stored == PrepOptions().maxImageSize, model.training.config.maxImageSize > stored {
@@ -562,6 +572,18 @@ struct NewProjectSheet: View {
         prep.run(source: source, options: o, projectDir: dir, thenTrain: trainAfter)
     }
 
+    /// Another project already lives in the chosen folder (made from a different source): starting would overwrite
+    /// its dataset. Nil when the folder is free, or holds this same project (rerun / Change Settings).
+    private var folderConflict: String? {
+        guard let s = source, !projectName.isEmpty else { return nil }
+        let dir = projectParent.appendingPathComponent(projectName, isDirectory: true)
+        guard ProjectLibrary.isProject(dir) else { return nil }
+        if let rec = ProjectRecord.load(dir), let old = rec.source {
+            return old == s ? nil : "“\(projectName)” already holds a project made from \(old.displayName). Choose another name."
+        }
+        return "“\(projectName)” already holds a SplatWork project. Choose another name."
+    }
+
     /// Fills the sheet from a project's saved settings (Change Settings on the project page).
     private func prefill(from dir: URL) {
         guard let rec = ProjectRecord.load(dir), let src = rec.source else { return }
@@ -571,6 +593,7 @@ struct NewProjectSheet: View {
         guard let o = rec.options else { return }
         options = o
         holdout = o.holdoutInterval != nil
+        prefilledHoldout = o.holdoutInterval
         switch o.poseSolver {
         case .automatic: solverKind = .automatic
         case .objectCapture: solverKind = .objectCapture
@@ -667,9 +690,9 @@ struct NewProjectSheet: View {
         let p = NSOpenPanel()
         p.canChooseDirectories = dir; p.canChooseFiles = !dir || files
         if p.runModal() == .OK, let u = p.url {
+            if aerial { setAerial(false) }        // first: it puts back the previous source's settings
             source = make(u)
             Self.applySourceDefaults(source!, to: &options)
-            if aerial { setAerial(false) }
             surveySource()
             if projectName.isEmpty { projectName = defaultName(source!) }
         }

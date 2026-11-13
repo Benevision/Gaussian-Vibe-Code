@@ -380,7 +380,9 @@ class MaskEditorWindow(Adw.Window):
                 out = run_job(client, ds, request, f"{self.project.name}: {title}", dest, status)
                 GLib.idle_add(lambda: (self._job_done(), done(out), False)[2])
             except Exception as e:  # noqa: BLE001 — shown in the status line
-                GLib.idle_add(lambda: (self._job_done(), self.status.set_text(f"{title} failed: {e}"), False)[2])
+                # Python unbinds `e` when the except block ends, before the idle callback runs: keep the text
+                err = str(e)
+                GLib.idle_add(lambda: (self._job_done(), self.status.set_text(f"{title} failed: {err}"), False)[2])
 
         def fail(msg):
             self._job_done()

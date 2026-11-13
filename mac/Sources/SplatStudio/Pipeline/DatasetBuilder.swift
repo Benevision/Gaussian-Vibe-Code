@@ -338,6 +338,7 @@ enum DatasetBuilder {
                     summary: "\(frames.frames.count) frames" + (frames.rejected.isEmpty ? "" : ", \(frames.rejected.count) left out"))
         }
 
+        var skyDone = true
         // 3. Masks. Circular fisheye footage always gets them: the black lens border is fixed in every frame, and
         // its edge would otherwise "match" perfectly between all frames and break camera solving.
         if o.maskStaticRegions || frames.looksCircularFisheye {
@@ -353,10 +354,10 @@ enum DatasetBuilder {
                                         worker: o.compute != .thisMac ? worker : nil, progress: maskP)
         }
         if o.masking.sky {   // stacked on top of the masks above: a separate layer for the skybox
-            try await skyOrSkip(maskP) { try await FrameMasker.applySky(to: &frames, runner: SplatPrepRunner(),
+            skyDone = try await skyOrSkip(maskP) { try await FrameMasker.applySky(to: &frames, runner: SplatPrepRunner(),
                                                                 worker: o.compute != .thisMac ? worker : nil, progress: maskP) }
         }
-        try cp.save(frames, as: .masks, fingerprint: fp[.masks]!, summary: maskSummary(o))
+        try cp.save(frames, as: .masks, fingerprint: fp[.masks]!, summary: maskSummary(o, skySkipped: !skyDone))
         }
 
         // 4. Poses (+ rig constraints / metric scale).
@@ -380,23 +381,25 @@ enum DatasetBuilder {
 
     /// Finding the sky needs the Models pack or a worker. Without either it is skipped with a note instead of
     /// failing the whole run: training then simply has no skybox. (Redo from Masks once the models are there.)
-    static func skyOrSkip(_ progress: PipelineProgressHandler? = nil, _ body: () async throws -> Void) async throws {
-        do { try await body() } catch let e as CancellationError { throw e } catch {
+    @discardableResult
+    static func skyOrSkip(_ progress: PipelineProgressHandler? = nil, _ body: () async throws -> Void) async throws -> Bool {
+        do { try await body(); return true } catch let e as CancellationError { throw e } catch {
             if Task.isCancelled { throw CancellationError() }
             progress?(PipelineProgress(stage: "Finding the sky", fraction: -1,
                 message: "skipped: the sky model couldn't run (\(error.localizedDescription)). Install the Models pack or use a worker, then Redo from Masks for a learned sky."))
+            return false
         }
     }
 
     /// "no masks" / "people, sky" for the project page.
-    static func maskSummary(_ o: PrepOptions) -> String {
+    static func maskSummary(_ o: PrepOptions, skySkipped: Bool = false) -> String {
         var parts: [String] = []
         if o.maskStaticRegions { parts.append("fixed parts of the frame") }
         switch o.masking.model {
         case .none: break
         default: parts.append("objects")
         }
-        if o.masking.sky { parts.append("sky") }
+        if o.masking.sky { parts.append(skySkipped ? "sky (skipped: no sky model)" : "sky") }
         return parts.isEmpty ? "no masks" : "masks: " + parts.joined(separator: ", ")
     }
 

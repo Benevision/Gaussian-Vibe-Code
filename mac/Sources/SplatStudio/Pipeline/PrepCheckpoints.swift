@@ -46,6 +46,35 @@ struct PrepCheckpoints: Sendable {
     private func framesURL(_ s: PrepStage) -> URL { dir.appendingPathComponent("\(s.rawValue).frames.json") }
     private func manifestURL(_ s: PrepStage) -> URL { dir.appendingPathComponent("\(s.rawValue).dataset.json") }
     private func pointsURL(_ s: PrepStage) -> URL { dir.appendingPathComponent("\(s.rawValue).points.ply") }
+    /// Copies of the mask files a checkpoint refers to. Later stages write combined masks to the same names
+    /// (splatprep finds masks by image name), so a checkpoint keeps its own copies and puts them back on restore.
+    private func filesURL(_ s: PrepStage) -> URL { dir.appendingPathComponent("\(s.rawValue).files", isDirectory: true) }
+
+    private func snapshot(_ rels: [String], as s: PrepStage) {
+        let fm = FileManager.default
+        let base = filesURL(s)
+        try? fm.removeItem(at: base)
+        for rel in Set(rels) {
+            let src = root.appendingPathComponent(rel), dst = base.appendingPathComponent(rel)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.copyItem(at: src, to: dst)
+        }
+    }
+
+    /// Puts the checkpoint's mask files back (checkpoints saved before copies were kept have none: nothing to do).
+    private func restoreFiles(_ rels: [String], of s: PrepStage) {
+        let fm = FileManager.default
+        let base = filesURL(s)
+        guard fm.fileExists(atPath: base.path) else { return }
+        for rel in Set(rels) {
+            let src = base.appendingPathComponent(rel), dst = root.appendingPathComponent(rel)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: dst)
+            try? fm.copyItem(at: src, to: dst)
+        }
+    }
 
     func entry(_ s: PrepStage) -> Entry? {
         guard let d = try? Data(contentsOf: entryURL(s)) else { return nil }
@@ -65,6 +94,7 @@ struct PrepCheckpoints: Sendable {
     func save(_ frames: FrameSet, as s: PrepStage, fingerprint fp: String, summary: String) throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try JSONEncoder().encode(frames).write(to: framesURL(s), options: .atomic)
+        snapshot(frames.frames.flatMap { [$0.mask, $0.sky].compactMap { $0 } }, as: s)
         try writeEntry(s, fp, summary)
     }
 
@@ -82,6 +112,7 @@ struct PrepCheckpoints: Sendable {
             let top = rel.split(separator: "/").first.map(String.init) ?? rel
             return store?.dirs.contains(top) == true && store?.local == false
         }
+        restoreFiles(fs.frames.flatMap { [$0.mask, $0.sky].compactMap { $0 } }, of: s)
         guard fs.frames.allSatisfy({ present($0.image) && present($0.mask) && present($0.sky) }) else { return nil }
         return fs
     }
@@ -95,6 +126,7 @@ struct PrepCheckpoints: Sendable {
         try? fm.removeItem(at: manifestURL(s)); try? fm.removeItem(at: pointsURL(s))
         try fm.copyItem(at: root.appendingPathComponent(PreparedDataset.fileName), to: manifestURL(s))
         if let p = ds.pointCloudURL, fm.fileExists(atPath: p.path) { try fm.copyItem(at: p, to: pointsURL(s)) }
+        snapshot(ds.manifest.cameras.flatMap { [$0.mask, $0.sky].compactMap { $0 } }, as: s)
         try writeEntry(s, fp, summary)
     }
 
@@ -109,14 +141,16 @@ struct PrepCheckpoints: Sendable {
         do {
             try saved.write(to: live, options: .atomic)
             var ds = try PreparedDataset.load(root)
-            if let p = ds.pointCloudURL, fm.fileExists(atPath: pointsURL(s).path) {
-                try? fm.removeItem(at: p)
-                try fm.copyItem(at: pointsURL(s), to: p)
-            }
             let store = RemoteStore.load(root)
             let imagesElsewhere = store?.dirs.contains("images") == true && store?.local == false
             guard imagesElsewhere || ds.manifest.cameras.allSatisfy({ fm.fileExists(atPath: root.appendingPathComponent($0.image).path) })
             else { throw PipelineError.noInput("images missing") }
+            // only once the restore will be used: the point cloud and mask files it refers to
+            if let p = ds.pointCloudURL, fm.fileExists(atPath: pointsURL(s).path) {
+                try? fm.removeItem(at: p)
+                try fm.copyItem(at: pointsURL(s), to: p)
+            }
+            restoreFiles(ds.manifest.cameras.flatMap { [$0.mask, $0.sky].compactMap { $0 } }, of: s)
             ds.root = root
             return ds
         } catch {
@@ -137,7 +171,7 @@ struct PrepCheckpoints: Sendable {
     func invalidate(from stage: PrepStage) {
         let fm = FileManager.default
         for s in PrepStage.allCases where s >= stage {
-            for u in [entryURL(s), framesURL(s), manifestURL(s), pointsURL(s)] { try? fm.removeItem(at: u) }
+            for u in [entryURL(s), framesURL(s), manifestURL(s), pointsURL(s), filesURL(s)] { try? fm.removeItem(at: u) }
         }
         var steps: [String] = []
         if stage <= .frames { steps.append("frames"); FrameSourceStamp.forget(root) }
@@ -162,9 +196,18 @@ struct PrepCheckpoints: Sendable {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: u.path, isDirectory: &isDir) else { return u.standardizedFileURL.path + "|missing" }
             if !isDir.boolValue { return u.standardizedFileURL.path + "|" + one(u) }
-            let kids = ((try? fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)) ?? [])
-                .filter { !$0.lastPathComponent.hasPrefix(".") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-            return u.standardizedFileURL.path + "/[" + kids.map(one).joined(separator: ",") + "]"
+            // every file below the folder (sub-folders too: a recursive photo import, COLMAP's sparse/0), by its
+            // path inside the folder, size and modification time
+            var files: [String] = []
+            let base = u.standardizedFileURL.path
+            if let e = fm.enumerator(at: u, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+                for case let f as URL in e where (try? f.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                    let rel = String(f.standardizedFileURL.path.dropFirst(base.count))
+                    files.append(rel + "|" + one(f))
+                    if files.count > 200_000 { break }
+                }
+            }
+            return base + "/[" + files.sorted().joined(separator: ",") + "]"
         }
         switch source {
         case .photos(let u), .video(let u), .video360(let u), .photos360(let u), .captureBundle(let u), .nerfstudio(let u):

@@ -340,7 +340,8 @@ struct RemoteWatchDashboard: View {
 struct BlockRowsView: View {
     let rows: [TrainingSession.BlockRow]
     /// Devices a failed block can be retried on; empty hides the Retry menu.
-    var retryDevices: [TrainingSession.RetryDevice] = []
+    /// Devices a failed block can be retried on (those it fits on); empty hides the Retry menu.
+    var retryDevices: (Int) -> [TrainingSession.RetryDevice] = { _ in [] }
     var onRetry: (Int, String) -> Void = { _, _ in }
     var onLeaveOut: (Int) -> Void = { _ in }
     var body: some View {
@@ -365,7 +366,7 @@ struct BlockRowsView: View {
                         if let e = r.eta, r.stage != .done { Text(e > 0 ? "\(formatDuration(e)) left" : "") }
                     }
                     .font(.caption).foregroundStyle(.secondary)
-                    if case .failed = r.stage, !retryDevices.isEmpty { retryControls(r) }
+                    if case .failed = r.stage, !retryDevices(r.id).isEmpty { retryControls(r) }
                 }
                 .padding(8)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
@@ -377,10 +378,11 @@ struct BlockRowsView: View {
 
     /// Retry on the same device by default; the menu moves the block to another device, or leaves it out.
     @ViewBuilder private func retryControls(_ r: TrainingSession.BlockRow) -> some View {
-        let same = retryDevices.first { $0.id == r.deviceId }
+        let options = retryDevices(r.id)
+        let same = options.first { $0.id == r.deviceId }
         HStack(spacing: 8) {
             Menu {
-                ForEach(retryDevices) { d in
+                ForEach(options) { d in
                     Button("Retry on \(d.name)") { onRetry(r.id, d.id) }
                 }
                 Divider()
@@ -388,7 +390,7 @@ struct BlockRowsView: View {
             } label: {
                 Label(same.map { "Retry on \($0.name)" } ?? "Retry", systemImage: "arrow.clockwise")
             } primaryAction: {
-                onRetry(r.id, same?.id ?? retryDevices[0].id)
+                onRetry(r.id, same?.id ?? options[0].id)
             }
             .menuStyle(.button).fixedSize()
             .help("Train this block again. Pick another device from the menu, or leave the block out (the scene will have a gap there).")
@@ -454,7 +456,7 @@ struct TrainingDashboard: View {
             }
             .font(.callout).monospacedDigit()
             if !session.blockRows.isEmpty {
-                BlockRowsView(rows: session.blockRows, retryDevices: session.isActive ? session.retryDevices : [],
+                BlockRowsView(rows: session.blockRows, retryDevices: { session.isActive ? session.retryDevices(for: $0) : [] },
                               onRetry: { session.retryBlock($0, on: $1) }, onLeaveOut: { session.leaveOutBlock($0) })
             }
             TrainingCharts(history: session.history, evalHistory: session.evalHistory)

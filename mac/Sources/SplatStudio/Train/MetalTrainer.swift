@@ -1648,6 +1648,7 @@ final class MetalTrainer: @unchecked Sendable {
              onStatus: @escaping (TrainerStatus) -> Void,
              onPreview: ((SplatScene) -> Void)? = nil) throws -> GaussianCloud {
         let start = CACurrentMediaTime()
+        let firstStep = step          // > 0 when resuming from a checkpoint
         var lastReport = start
         var status = TrainerStatus(totalSteps: config.iterations)
         var emaLoss: Float = 0, emaPSNR: Float = 0
@@ -1670,7 +1671,7 @@ final class MetalTrainer: @unchecked Sendable {
                 status.psnr = emaPSNR
                 status.numGaussians = n
                 status.elapsed = now - start
-                status.itersPerSecond = Double(step) / max(status.elapsed, 1e-6)
+                status.itersPerSecond = Double(step - firstStep) / max(status.elapsed, 1e-6)
                 status.eta = Double(config.iterations - step) / max(status.itersPerSecond, 1e-6)
                 status.shDegree = activeSHDegree
                 status.transientFraction = transientFraction

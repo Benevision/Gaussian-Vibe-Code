@@ -294,10 +294,12 @@ struct ComputeScheduler: Sendable {
                     datasetIds.set(dev, datasetId)
                 }
                 stageOnly(.queued)
+                let usedDataset = datasetId
                 let jobId = LockedValue<String?>(nil)
                 defer { if let j = jobId.get() { pause?.remove(job: j) } }
                 // live view: the worker's compact preview of this block, at most every 30 s
                 let lastPreview = LockedValue<(step: Int?, at: Date)>((nil, .distantPast))
+                do {
                 return try await client.train(dataset: dataset, config: cfg, name: "\(name) block \(b.index + 1)/\(blocks.count)",
                                               datasetId: datasetId, progress: { js in
                     pause?.jobUpdated(js.jobId, state: js.state)
@@ -312,68 +314,89 @@ struct ComputeScheduler: Sendable {
                 }, onJobCreated: { jid, _ in
                     jobId.set(jid); pause?.add(job: jid, on: client)
                 }, onOffline: { stageOnly(.offline($0)) })
+                } catch let e as WorkerError where e.status == 404 || e.status == 400 {
+                    // the worker no longer has this run's upload (restarted, cleared): a retry uploads it again
+                    if datasetIds.get(dev) == usedDataset { datasetIds.set(dev, nil) }
+                    throw e
+                }
             }
             throw PipelineError.unsupported("device \(dev) unavailable")
+        }
+
+        /// A trained block: kept in the block store (until the run is merged), reported done, shown in the live view.
+        @Sendable func complete(_ b: SceneBlock, _ cloud: GaussianCloud, on device: String, last: LastSnapshot) -> (SceneBlock, GaussianCloud) {
+            if let store = blockStore {
+                try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+                let file = Self.blockFile(store, block: b, config: Self.blockConfig(config, block: b, blocks: blocks))
+                Self.writeAtomically(cloud, to: file)
+            }
+            _ = tracker.update(b.index, 1)
+            var done = last.get(); done.step = max(done.step, done.totalSteps)
+            progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: done, overall: tracker.update(b.index, 1), stage: .done))
+            preview?(b.index, cloud)
+            return (b, cloud)
+        }
+
+        @Sendable func reportFailed(_ b: SceneBlock, on device: String, last: LastSnapshot, _ error: Error) {
+            progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: last.get(),
+                                    overall: tracker.update(b.index, 0), stage: .failed(error.localizedDescription)))
+        }
+
+        /// A failed block waits here for Retry (any device) or Leave Out; nil = left out.
+        @Sendable func awaitDecision(_ b: SceneBlock, failedOn: String, gate: BlockRetryGate) async throws -> (SceneBlock, GaussianCloud)? {
+            var device = failedOn
+            while true {
+                switch await gate.wait(block: b.index) {
+                case .retry(let d)?:
+                    device = d
+                    tracker.reset(b.index)
+                    progress?(BlockProgress(blockIndex: b.index, deviceId: d, snapshot: TrainingProgressSnapshot(step: 0, totalSteps: config.iterations),
+                                            overall: tracker.update(b.index, 0), stage: .waiting))
+                    let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
+                    do { return complete(b, try await run(b, on: device, last: last), on: device, last: last) } catch {
+                        if error is CancellationError || Task.isCancelled { throw error }
+                        reportFailed(b, on: device, last: last, error)
+                    }
+                case .leaveOut?:
+                    progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: TrainingProgressSnapshot(step: 0, totalSteps: config.iterations),
+                                            overall: tracker.update(b.index, 1), stage: .leftOut))
+                    return nil
+                case nil:
+                    throw CancellationError()
+                }
+            }
         }
 
         return try await withThrowingTaskGroup(of: [(SceneBlock, GaussianCloud)].self) { group in
             for (dev, bs) in assignment {
                 group.addTask {
-                    var results: [(SceneBlock, GaussianCloud)] = []
-                    for b in bs {
-                        try Task.checkCancellation()
-                        // Finished in an earlier, interrupted run of the same settings: reuse it.
-                        if let file = blockStore.map({ Self.blockFile($0, block: b, config: Self.blockConfig(config, block: b, blocks: blocks)) }),
-                           FileManager.default.fileExists(atPath: file.path), let cloud = try? SplatFileFormat.load(url: file) {
-                            let snap = TrainingProgressSnapshot(step: config.iterations, totalSteps: config.iterations, numGaussians: cloud.count)
-                            progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: snap, overall: tracker.update(b.index, 1), stage: .done))
-                            preview?(b.index, cloud)
-                            results.append((b, cloud))
-                            continue
-                        }
-                        var device = dev
-                        attempts: while true {
-                            let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
-                            do {
-                                let cloud = try await run(b, on: device, last: last)
-                                if let store = blockStore {
-                                    // Kept until the whole run is merged, so an interruption never loses a finished block.
-                                    try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
-                                    let file = Self.blockFile(store, block: b, config: Self.blockConfig(config, block: b, blocks: blocks))
-                                    let tmp = file.deletingLastPathComponent().appendingPathComponent(".tmp-" + file.lastPathComponent)
-                                    if (try? PLYCodec.writeGaussians(cloud, to: tmp)) != nil {
-                                        try? FileManager.default.removeItem(at: file)
-                                        try? FileManager.default.moveItem(at: tmp, to: file)
-                                    }
-                                }
-                                _ = tracker.update(b.index, 1)
-                                var done = last.get(); done.step = max(done.step, done.totalSteps)
-                                progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: done, overall: tracker.update(b.index, 1), stage: .done))
+                    // A failed block waits for a decision in its own task, so the device goes on with its other blocks.
+                    try await withThrowingTaskGroup(of: (SceneBlock, GaussianCloud)?.self) { waiting in
+                        var results: [(SceneBlock, GaussianCloud)] = []
+                        for b in bs {
+                            try Task.checkCancellation()
+                            // Finished in an earlier, interrupted run of the same settings: reuse it.
+                            if let file = blockStore.map({ Self.blockFile($0, block: b, config: Self.blockConfig(config, block: b, blocks: blocks)) }),
+                               FileManager.default.fileExists(atPath: file.path), let cloud = try? SplatFileFormat.load(url: file) {
+                                let snap = TrainingProgressSnapshot(step: config.iterations, totalSteps: config.iterations, numGaussians: cloud.count)
+                                progress?(BlockProgress(blockIndex: b.index, deviceId: dev, snapshot: snap, overall: tracker.update(b.index, 1), stage: .done))
                                 preview?(b.index, cloud)
                                 results.append((b, cloud))
-                                break attempts
+                                continue
+                            }
+                            let last = LastSnapshot(TrainingProgressSnapshot(step: 0, totalSteps: config.iterations))
+                            do {
+                                results.append(complete(b, try await run(b, on: dev, last: last), on: dev, last: last))
                             } catch {
                                 if error is CancellationError || Task.isCancelled { throw error }
-                                progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: last.get(),
-                                                        overall: tracker.update(b.index, 0), stage: .failed(error.localizedDescription)))
+                                reportFailed(b, on: dev, last: last, error)
                                 guard let retryGate else { throw error }
-                                switch await retryGate.wait(block: b.index) {
-                                case .retry(let d)?:
-                                    device = d
-                                    tracker.reset(b.index)
-                                    progress?(BlockProgress(blockIndex: b.index, deviceId: d, snapshot: TrainingProgressSnapshot(step: 0, totalSteps: config.iterations),
-                                                            overall: tracker.update(b.index, 0), stage: .waiting))
-                                case .leaveOut?:
-                                    progress?(BlockProgress(blockIndex: b.index, deviceId: device, snapshot: last.get(),
-                                                            overall: tracker.update(b.index, 1), stage: .leftOut))
-                                    break attempts
-                                case nil:
-                                    throw CancellationError()
-                                }
+                                waiting.addTask { try await awaitDecision(b, failedOn: dev, gate: retryGate) }
                             }
                         }
+                        for try await r in waiting { if let r { results.append(r) } }
+                        return results
                     }
-                    return results
                 }
             }
             var all: [(block: SceneBlock, cloud: GaussianCloud)] = []
@@ -388,6 +411,20 @@ struct ComputeScheduler: Sendable {
 extension ComputeScheduler {
     /// A finished block's splats in `store`, named by its index and everything that defines it (its cameras,
     /// region and settings), so a block is only reused for exactly the same job.
+    /// Writes splats (and their skybox sidecars) to a temporary name first, then moves them into place.
+    static func writeAtomically(_ cloud: GaussianCloud, to file: URL) {
+        let fm = FileManager.default
+        let tmp = file.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString)-" + file.lastPathComponent)
+        guard (try? PLYCodec.writeGaussians(cloud, to: tmp)) != nil else { return }
+        try? fm.removeItem(at: file)
+        try? fm.moveItem(at: tmp, to: file)
+        for ext in ["sky.png", "sky.json"] {
+            let a = tmp.deletingPathExtension().appendingPathExtension(ext), b = file.deletingPathExtension().appendingPathExtension(ext)
+            try? fm.removeItem(at: b)
+            if fm.fileExists(atPath: a.path) { try? fm.moveItem(at: a, to: b) }
+        }
+    }
+
     static func blockFile(_ store: URL, block b: SceneBlock, config cfg: TrainingConfig) -> URL {
         let key = sha256Hex(Data((canonicalJSON(cfg) + "|" + b.cameraIds.map(String.init).joined(separator: ",")).utf8)).prefix(16)
         return store.appendingPathComponent("block-\(b.index)-\(key).ply")
