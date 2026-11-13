@@ -11,7 +11,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIN="$HERE/gsplat-rocm-pin.env"
 val() { grep -E "^$1=" "$PIN" | head -1 | cut -d= -f2-; }
-REPO=$(val GSPLAT_ROCM_REPO); REF=$(val GSPLAT_ROCM_REF); VERSION=$(val GSPLAT_VERSION)
+REPO=$(val GSPLAT_ROCM_REPO); REF=$(val GSPLAT_ROCM_REF); FLAVOR=$(val GSPLAT_ROCM_FLAVOR); VERSION=$(val GSPLAT_VERSION)
 TORCH=$(val TORCH_VERSION); ROCM_TAG=$(val ROCM_TAG); IMAGE=$(val ROCM_IMAGE); ARCH=$(val PYTORCH_ROCM_ARCH)
 OUT="$HERE/wheels-rocm"
 while [[ $# -gt 0 ]]; do
@@ -29,7 +29,7 @@ TAG="pt$(echo "$TORCH" | cut -d. -f1,2 | tr -d .)$(echo "$ROCM_TAG" | tr -d .)" 
 mkdir -p "$OUT"
 echo "gsplat $VERSION+$TAG from $REPO@$REF for $ARCH in $IMAGE"
 "$ENGINE" run --rm -v "$OUT:/out" -e ARCH="$ARCH" -e REPO="$REPO" -e REF="$REF" -e VERSION="$VERSION" \
-  -e TAG="$TAG" -e TORCH="$TORCH" -e ROCM_TAG="$ROCM_TAG" -e MAX_JOBS="${MAX_JOBS:-4}" "$IMAGE" bash -euxc '
+  -e TAG="$TAG" -e FLAVOR="${FLAVOR:-amd}" -e TORCH="$TORCH" -e ROCM_TAG="$ROCM_TAG" -e MAX_JOBS="${MAX_JOBS:-4}" "$IMAGE" bash -euxc '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -q
   apt-get install -yq --no-install-recommends python3 python3-pip python3-dev git cmake ninja-build g++ \
@@ -39,6 +39,14 @@ echo "gsplat $VERSION+$TAG from $REPO@$REF for $ARCH in $IMAGE"
   python3 -c "import torch; print(\"torch\", torch.__version__, \"hip\", torch.version.hip)"
   git clone --recurse-submodules --branch "$REF" "$REPO" /src
   cd /src && git log -1 --format="gsplat source commit %H"
+  if [ "$FLAVOR" = upstream ]; then
+    # nerfstudio gsplat: PyTorch converts the CUDA sources to HIP (hipify) and compiles for PYTORCH_ROCM_ARCH
+    sed -i "s/^__version__ = .*/__version__ = \"$VERSION+$TAG\"/" gsplat/version.py
+    tail -1 gsplat/version.py
+    BUILD_NO_CUDA=0 PYTORCH_ROCM_ARCH="$ARCH" python3 -m pip wheel --no-deps --no-build-isolation -w /out .
+    ls -la /out
+    exit 0
+  fi
   ( cd gsplat/cuda/csrc/third_party/glm && cmake -DGLM_BUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF -B build . \
       -DCMAKE_INSTALL_PREFIX:PATH=$HOME/.local && cmake --build build -- all && cmake --build build -- install )
   sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" gsplat/version.py
