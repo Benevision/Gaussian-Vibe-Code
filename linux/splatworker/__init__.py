@@ -6,5 +6,9 @@ Pillow, FastAPI and zeroconf. PyTorch and gsplat are imported lazily by
 without CUDA.
 """
 
+import sys as _sys
+
 __version__ = "1.6.0"
+# The product name shown to people (logs, generated files, messages); the protocol and identifiers don't change.
+PRODUCT_NAME = "SplatWork for Windows" if _sys.platform == "win32" else "SplatWork for Linux"
 PROTOCOL_VERSION = 1

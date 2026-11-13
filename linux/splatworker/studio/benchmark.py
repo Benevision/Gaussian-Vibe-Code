@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
+from .. import PRODUCT_NAME
 
 FILE = "benchmarks.json"
 SCENE_DIR = "benchmark-scene-v1"
@@ -353,7 +354,7 @@ def run(client, scene_root: Path, spec: BenchmarkSpec = BenchmarkSpec(), local: 
         return {"deviceId": device_id, "name": name or info.get("name") or "This PC",
                 "date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
                 "gpu": (gpus[0].get("name") if gpus and isinstance(gpus[0], dict) else None),
-                "software": software or f"SplatWork for Linux {info.get('workerVersion') or ''} · "
+                "software": software or f"{PRODUCT_NAME} {info.get('workerVersion') or ''} · "
                                         f"{info.get('backend') or ''}".strip(" ·"),
                 "trainStepsPerSecond": round(rate, 3), "splats": spec.splats,
                 "megapixels": round(spec.megapixels, 2), "uploadMBps": up_mbps, "downloadMBps": down_mbps,

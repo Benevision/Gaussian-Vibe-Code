@@ -19,6 +19,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
+from .. import PRODUCT_NAME
 
 CudaVersion = Tuple[int, int]
 
@@ -68,7 +69,7 @@ class DriverInfo:
         if other is not None:
             how = {"amd": "PyTorch for ROCm", "intel": "PyTorch for Intel GPUs (XPU)"}[other.vendor]
             return (f"{other.name} found",
-                    "Training in SplatWork for Linux needs an NVIDIA graphics card (CUDA) for now; support for "
+                    f"Training in {PRODUCT_NAME} needs an NVIDIA graphics card (CUDA) for now; support for "
                     f"{other.vendor_name} GPUs is being worked on. This computer can still prepare datasets: the "
                     "processing runtime runs feature matching, camera solving and masks, on this GPU through "
                     f"{how} where it can and on the CPU otherwise. The viewer and editing work on any GPU.")

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .formats import OPENABLE_SUFFIXES
+from .. import PRODUCT_NAME
 
 PROJECT_FILE = "project.json"
 
@@ -133,7 +134,7 @@ class Project:
         (root / "outputs").mkdir(exist_ok=True)
         p = cls(root)
         p.update(format="splatstudio-project", version=1, name=name, createdAt=datetime.now().isoformat(),
-                 options=options, app="SplatWork for Linux")
+                 options=options, app=PRODUCT_NAME)
         return p
 
     @classmethod

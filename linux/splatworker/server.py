@@ -39,7 +39,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import PROTOCOL_VERSION, __version__
+from . import PRODUCT_NAME, PROTOCOL_VERSION, __version__
 from .backends import Backend, JobCancelled, JobContext, JobPaused, SubprocessBackend
 from .config import ConfigError, ServerSettings, TrainingConfig
 from .dataset import DatasetError, find_upload_root, parse_dataset
@@ -923,7 +923,7 @@ def create_app(settings: ServerSettings, backend: Optional[Backend] = None,
                 value.strip().encode(), settings.token.encode()):
             raise ApiError(401, "missing or invalid bearer token")
 
-    app = FastAPI(title="SplatWork for Linux", version=__version__, lifespan=lifespan,
+    app = FastAPI(title=PRODUCT_NAME, version=__version__, lifespan=lifespan,
                   dependencies=[Depends(require_auth)], docs_url=None, redoc_url=None,
                   openapi_url=None)
     app.state.manager = manager

@@ -1,6 +1,8 @@
 # Suite release: push a tag like v1.4.0 and this builds
 #   * SplatWork for Mac (Apple silicon) as a .dmg — version = the tag
 #   * SplatWork for Linux for Linux as a single-file .flatpak (its own version, linux/splatworker/__init__.py)
+#   * SplatWork for Windows as an .msi installer and a portable .zip — version = the tag (windows.yml builds,
+#     installs and tests them)
 # and publishes them on one GitHub Release with SHA-256 checksums and install notes.
 #
 #   git tag -a v1.4.0 -m "SplatWork 1.4.0" && git push origin v1.4.0
@@ -107,8 +109,13 @@ jobs:
           name: worker
           path: linux/flatpak/dist/*.flatpak
 
+  windows:
+    uses: ./.github/workflows/windows.yml
+    with:
+      version: ${{ inputs.version || github.ref_name }}
+
   release:
-    needs: [mac, worker]
+    needs: [mac, worker, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -116,15 +123,23 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
+          name: mac
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: splatwork-windows
+          path: dist
       - name: Checksums and notes
         id: notes
         env:
           NOTARIZED: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
         run: |
           cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt && cd ..
-          DMG=$(cd dist && ls *.dmg); FP=$(cd dist && ls *.flatpak)
+          DMG=$(cd dist && ls *.dmg); FP=$(cd dist && ls *.flatpak); MSI=$(cd dist && ls *.msi); WZIP=$(cd dist && ls *-Windows-x64.zip)
           WV=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' linux/splatworker/__init__.py)
           PREV=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"; REPO="${GITHUB_REPOSITORY#*/}"
@@ -144,6 +159,8 @@ jobs:
             echo "flatpak install --user $FP"
             echo '```'
             echo "On first start its setup assistant downloads PyTorch, CUDA and gsplat for your driver (about 3 GB). To get updates automatically instead, add the repository: \`flatpak install --user https://$OWNER.github.io/$REPO/flatpak/splatworker.flatpakref\`."
+            echo
+            echo "**Windows 10 / 11 (x64)** — \`$MSI\`: run it and follow the installer (it asks once for administrator rights to add firewall rules for Private networks, so Macs can find this PC). Not code-signed yet: if SmartScreen warns, choose **More info** → **Run anyway**. A portable \`$WZIP\` is included too. On first start its setup assistant downloads PyTorch, CUDA and gsplat for NVIDIA GPUs (about 3 GB); AMD and Intel GPUs can process and view, and will train once the Vulkan trainer ships."
             echo
             echo "**iPhone (SplatWork Capture)** — not included: iOS apps can't be installed from a download; build it from \`ios/\` in Xcode."
             echo

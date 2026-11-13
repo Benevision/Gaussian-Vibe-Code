@@ -15,7 +15,7 @@ from typing import List, Optional
 from .config import LOCAL_SECRET_ENV
 from .platform_compat import default_data_dir
 
-from . import __version__
+from . import PRODUCT_NAME, __version__
 
 
 def _parse_gpus(value: Optional[str]) -> Optional[List[int]]:
@@ -87,7 +87,7 @@ def cmd_serve(args) -> int:
     if token is None:
         log.warning("no token configured: anyone on the network can use this worker "
                     "(use --token-file or SPLATWORKER_TOKEN)")
-    log.info("SplatWork for Linux %s '%s' on %s:%d, data dir %s", __version__, settings.name,
+    log.info("%s %s '%s' on %s:%d, data dir %s", PRODUCT_NAME, __version__, settings.name,
              settings.host, settings.port, settings.data_dir)
     app = create_app(settings)
     if os.environ.pop(STOP_ON_STDIN_EOF_ENV, None):
@@ -267,7 +267,7 @@ def cmd_benchmark(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="splatworker", description="SplatWork for Linux - CUDA training server")
+    p = argparse.ArgumentParser(prog="splatworker", description=f"{PRODUCT_NAME} - training and processing server")
     p.add_argument("--version", action="version", version=f"splatworker {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 

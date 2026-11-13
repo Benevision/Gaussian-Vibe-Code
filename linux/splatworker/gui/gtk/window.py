@@ -406,8 +406,11 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
     def _check_updates(self) -> bool:
         from .. import updates
 
+        from .. import windows_update
+
         def work():
-            info = updates.check()
+            # SplatWork for Windows: the GitHub release's MSI; elsewhere the Flatpak repository's version.json
+            info = windows_update.check() if windows_update.bundle_root() else updates.check()
             GLib.idle_add(self._set_update_info, info)
         threading.Thread(target=work, daemon=True).start()
         return True  # keep the periodic timer
@@ -428,7 +431,8 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
             title, button = U.banner_text(u.state, u.version or (self._update_info or {}).get("version", ""),
                                           auto, self._update_busy, u.fraction, u.error)
         elif self._update_info:      # not a Flatpak install: tell, don't act
-            title, button = f"SplatWork {self._update_info.get('version')} is available.", "How to Update"
+            title = f"SplatWork {self._update_info.get('version')} is available."
+            button = "Update…" if self._update_info.get("msi_url") else "How to Update"
         else:
             title, button = "", None
         self.update_banner.set_title(title)
@@ -504,6 +508,9 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
 
     def _show_update_help(self) -> None:
         from .. import updates
+        if self._update_info and self._update_info.get("msi_url"):
+            self._windows_update()
+            return
         v = (self._update_info or {}).get("version", "")
         err = self.updater.error if self.updater.supported else ""
         alert(self, f"Update to {v}" if v else "Update",
@@ -513,6 +520,39 @@ class MainWindow(StudioShell, Adw.ApplicationWindow):
               responses=(("close", "Close", "default"), ("copy", "Copy Command", "suggested")),
               callback=lambda r: copy_text(self, updates.UPDATE_COMMAND) if r == "copy" else None,
               default="copy", close="close")
+
+    def _windows_update(self) -> None:
+        """SplatWork for Windows: download the release's MSI, verify it, run it and quit so it can replace us."""
+        from .. import windows_update as W
+        info = self._update_info
+        v = info.get("version", "")
+
+        def run():
+            toast(self.toasts, f"Downloading SplatWork {v}…")
+
+            def work():
+                try:
+                    msi = W.download(info, self.state.paths.downloads_dir)
+                except Exception as e:  # noqa: BLE001
+                    GLib.idle_add(lambda: alert(self, "Update failed", f"{e}\n\nYou can also download it from "
+                                                f"{info.get('page') or 'the GitHub release page'}.") and False)
+                    return
+
+                def go():
+                    W.install(msi)
+                    self.app._really_quit()
+                    return False
+                GLib.idle_add(go)
+            threading.Thread(target=work, daemon=True).start()
+
+        def answer(r):
+            if r == "update":
+                self._confirm_if_busy("Update now?", "install the update", run)
+        alert(self, f"Update to SplatWork {v}",
+              "SplatWork downloads the installer, checks it, closes and installs the new version. Windows asks "
+              "once for permission. Your settings, GPU runtime and projects are kept.",
+              responses=(("later", "Later", "default"), ("update", "Download and Install", "suggested")),
+              callback=answer, default="update", close="later")
 
     def refresh_static(self) -> None:
         """Parts that depend on settings / runtime rather than on the live poll."""
