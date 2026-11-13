@@ -17,12 +17,14 @@ import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "linux"))
-sys.path.insert(0, str(ROOT / "tools"))
-
 ap = argparse.ArgumentParser()
 ap.add_argument("--out", default=str(ROOT / "windows" / "smoke-out"))
+ap.add_argument("--installed", action="store_true",
+                help="test the installed app's code (run with the installed splatwork-cli.exe), not the repository's")
 args = ap.parse_args()
+if not args.installed:
+    sys.path.insert(0, str(ROOT / "linux"))
+    sys.path.insert(0, str(ROOT / "tools"))
 OUT = Path(args.out)
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -128,6 +130,9 @@ class T(SplatWorkerApp):
         return False
 
 
+import splatworker  # noqa: E402
+
+print("splatworker from", Path(splatworker.__file__).parent, flush=True)
 rc = T().run([sys.argv[0]])
 if failures:
     print(f"FAIL: {len(failures)} step(s) failed", flush=True)

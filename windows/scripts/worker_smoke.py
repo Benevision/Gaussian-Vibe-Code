@@ -28,12 +28,15 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=7878)
     ap.add_argument("--name", default="SplatWork Windows smoke test")
     ap.add_argument("--no-mdns-check", action="store_true")
+    ap.add_argument("--exe", help="run the worker with this program (e.g. the installed splatwork-cli.exe) "
+                                  "instead of this Python and the repository's code")
     args = ap.parse_args()
 
     data = Path(tempfile.mkdtemp(prefix="splatwork-smoke-"))
-    env = dict(os.environ, PYTHONPATH=str(ROOT / "linux") + os.pathsep + str(ROOT / "tools"),
-               SPLATWORKER_STOP_ON_STDIN_EOF="1", SPLATWORKER_TOKEN="smoke-token")
-    argv = [sys.executable, "-m", "splatworker", "serve", "--port", str(args.port), "--data-dir", str(data),
+    env = dict(os.environ, SPLATWORKER_STOP_ON_STDIN_EOF="1", SPLATWORKER_TOKEN="smoke-token")
+    if not args.exe:
+        env["PYTHONPATH"] = str(ROOT / "linux") + os.pathsep + str(ROOT / "tools")
+    argv = [args.exe or sys.executable, "-m", "splatworker", "serve", "--port", str(args.port), "--data-dir", str(data),
             "--name", args.name]
     print("$", " ".join(argv), flush=True)
     kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}

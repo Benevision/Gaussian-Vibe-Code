@@ -295,7 +295,7 @@ def test_build_plan_gpu(paths, tmp_path):
     assert by["venv"].argv[:3] == [str(paths.python_exe), "-m", "venv"]
     torch = by["torch"].argv
     # built in the staging dir and swapped in after verification
-    assert torch[0] == str(paths.venv_staging_dir / "bin" / "python") and "torch==2.4.1" in torch
+    assert torch[0] == str(paths.venv_staging_dir / paths.venv_python.relative_to(paths.venv_dir)) and "torch==2.4.1" in torch
     assert plan.venv_dir == paths.venv_staging_dir and by["venv"].argv[-1] == str(paths.venv_staging_dir)
     assert torch[torch.index("--index-url") + 1] == "https://download.pytorch.org/whl/cu124"
     assert "--progress-bar" in torch and torch[torch.index("--progress-bar") + 1] == "raw"

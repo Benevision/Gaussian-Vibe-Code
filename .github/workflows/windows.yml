@@ -1,5 +1,7 @@
 # SplatWork for Windows: tests and smoke tests on the windows-latest runner (no GPU). See docs/dev/WINDOWS.md.
-# Stage A: the shared worker / studio core tests, splatprep tests, and a worker start → /v1/info → mDNS → stop test.
+# tests: the shared worker / studio core tests, splatprep tests, and a worker start → /v1/info → mDNS → stop test.
+# studio: the GTK 4 studio from MSYS2, every page screenshotted. package: the app folder, zip and MSI, installed and
+# tested on the runner, then uninstalled.
 name: SplatWork for Windows
 
 on:
@@ -9,6 +11,13 @@ on:
   pull_request:
     paths: ["linux/**", "tools/**", "windows/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
+  # release.yml builds the release's Windows installer with this workflow
+  workflow_call:
+    inputs:
+      version:
+        description: "Version for the installer (X.Y.Z; default: windows/VERSION)"
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -80,3 +89,101 @@ jobs:
         with:
           name: studio-screenshots
           path: windows/smoke-out
+
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-python-numpy
+            mingw-w64-ucrt-x86_64-python-pillow
+            mingw-w64-ucrt-x86_64-python-pydantic
+            mingw-w64-ucrt-x86_64-python-scipy
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-librsvg
+      - name: Version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          v="${INPUT_VERSION:-$(cat windows/VERSION)}"
+          v="${v#v}"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "SplatWork for Windows $v"
+      - name: Python packages
+        env:
+          SKIP_CYTHON: "1"
+        run: python -m pip install --break-system-packages fastapi uvicorn zeroconf httpx qrcode
+      - name: Launchers
+        run: windows/launcher/build.sh "$VERSION" windows/build/out
+      - name: App folder
+        run: python windows/build/make_bundle.py --out dist/SplatWork --version "$VERSION" --launchers windows/build/out
+      - name: The bundle runs on its own (no MSYS2 on PATH)
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          & dist\SplatWork\bin\splatwork-cli.exe -c "import sys, gi, splatworker, splatprep, fastapi, zeroconf; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); from gi.repository import Gtk, Adw; print(sys.executable, sys.prefix, splatworker.__file__)"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist\SplatWork -DestinationPath "dist\SplatWork-$env:VERSION-Windows-x64.zip"
+      - name: WiX source
+        run: python windows/build/make_wxs.py --bundle dist/SplatWork --version "$VERSION" --out dist/SplatWork.wxs
+      - name: MSI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Firewall.wixext/5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix build -arch x64 -ext WixToolset.Firewall.wixext -ext WixToolset.UI.wixext dist\SplatWork.wxs -o "dist\SplatWork-$env:VERSION-Windows-x64.msi"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Install the MSI
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList "/i", "dist\SplatWork-$env:VERSION-Windows-x64.msi", "/qn", "/l*v", "dist\install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content dist\install.log -Tail 60; exit 1 }
+          Get-ChildItem "C:\Program Files\SplatWork\bin\*.exe"
+          Get-NetFirewallRule -DisplayName "SplatWork*" | Format-Table DisplayName, Enabled, Profile, Direction
+          if (-not (Get-NetFirewallRule -DisplayName "SplatWork worker*")) { exit 1 }
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\SplatWork.lnk")) { exit 1 }
+      - name: Installed worker (start, /v1/info, mDNS, stop)
+        run: python windows/scripts/worker_smoke.py --exe "/c/Program Files/SplatWork/bin/splatwork-cli.exe"
+      - name: Installed studio
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          & "C:\Program Files\SplatWork\bin\splatwork-cli.exe" windows\scripts\studio_smoke.py --installed --out windows\smoke-installed
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Uninstall
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList "/x", "dist\SplatWork-$env:VERSION-Windows-x64.msi", "/qn" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit 1 }
+          if (Test-Path "C:\Program Files\SplatWork\bin\SplatWork.exe") { exit 1 }
+          if (Get-NetFirewallRule -DisplayName "SplatWork*" -ErrorAction SilentlyContinue) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: splatwork-windows
+          path: |
+            dist/*.msi
+            dist/*.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-studio-screenshots
+          path: windows/smoke-installed

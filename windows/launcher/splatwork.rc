@@ -1,0 +1,25 @@
+// Icon and version resource for SplatWork.exe / splatwork-cli.exe (SPLATWORK_VERSION_* come from build.sh)
+#include <winver.h>
+1 ICON "../branding/SplatWork.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION SPLATWORK_VERSION_MAJOR, SPLATWORK_VERSION_MINOR, SPLATWORK_VERSION_PATCH, 0
+PRODUCTVERSION SPLATWORK_VERSION_MAJOR, SPLATWORK_VERSION_MINOR, SPLATWORK_VERSION_PATCH, 0
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "SplatWork"
+      VALUE "FileDescription", "SplatWork for Windows"
+      VALUE "ProductName", "SplatWork"
+      VALUE "LegalCopyright", "Apache License 2.0"
+      VALUE "OriginalFilename", "SplatWork.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
