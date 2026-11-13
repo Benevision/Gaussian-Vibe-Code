@@ -27,6 +27,12 @@ FLATPAK_LIB_DIR = Path("/app/share/splatworker/lib")
 FLATPAK_SPLATPREP_DIR = Path("/app/share/splatworker/splatprep")
 
 
+def _is_windows(override: Optional[bool] = None) -> bool:
+    import sys
+
+    return (sys.platform == "win32") if override is None else override
+
+
 def in_flatpak(env: Optional[Mapping[str, str]] = None, root: Path = Path("/")) -> bool:
     env = os.environ if env is None else env
     return bool(env.get("FLATPAK_ID")) or (root / ".flatpak-info").is_file()
@@ -70,8 +76,15 @@ class AppPaths:
     cache_dir: Path
 
     @classmethod
-    def from_env(cls, env: Optional[Mapping[str, str]] = None) -> "AppPaths":
+    def from_env(cls, env: Optional[Mapping[str, str]] = None, windows: Optional[bool] = None) -> "AppPaths":
         env = os.environ if env is None else env
+        if _is_windows(windows):
+            # %APPDATA%\SplatWork (settings, token; roams), %LOCALAPPDATA%\SplatWork (runtime, data, cache)
+            home = Path(env.get("USERPROFILE") or os.path.expanduser("~"))
+            roaming = Path(env.get("APPDATA") or home / "AppData" / "Roaming")
+            local = Path(env.get("LOCALAPPDATA") or home / "AppData" / "Local")
+            return cls(config_dir=roaming / "SplatWork", data_root=local / "SplatWork",
+                       cache_dir=local / "SplatWork" / "cache")
         return cls(
             config_dir=_xdg(env, "XDG_CONFIG_HOME", ".config") / "splatworker",
             data_root=_xdg(env, "XDG_DATA_HOME", ".local/share") / "splatworker",
@@ -94,6 +107,8 @@ class AppPaths:
 
     @property
     def python_exe(self) -> Path:
+        if _is_windows():
+            return self.python_dir / "python.exe"     # python-build-standalone's Windows layout
         return self.python_dir / "bin" / "python3"
 
     @property
@@ -102,6 +117,8 @@ class AppPaths:
 
     @property
     def venv_python(self) -> Path:
+        if _is_windows():
+            return self.venv_dir / "Scripts" / "python.exe"
         return self.venv_dir / "bin" / "python"
 
     @property

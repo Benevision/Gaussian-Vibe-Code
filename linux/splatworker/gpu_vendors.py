@@ -18,6 +18,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -151,6 +152,10 @@ def adapter_name(vendor: str, vendor_id: int, device_id: int, product: Optional[
 # ------------------------------------------------------------------------------------------- scanning
 def scan(sys_root: Path = Path("/sys"), names: Optional[Dict] = None) -> List[Adapter]:
     """All display adapters the kernel knows, one per PCI device, in card order."""
+    if sys.platform == "win32" and Path(sys_root) == Path("/sys"):   # no sysfs: DXGI (platform_win.py)
+        from .platform_win import dxgi_adapters
+
+        return dxgi_adapters()
     out: List[Adapter] = []
     seen = set()
     cards = sorted(glob.glob(str(Path(sys_root) / "class" / "drm" / "card[0-9]*")),

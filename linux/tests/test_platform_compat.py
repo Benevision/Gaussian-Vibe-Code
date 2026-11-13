@@ -90,3 +90,24 @@ def test_documents_dir_only_on_windows():
         assert d is not None and d.name
     else:
         assert d is None
+
+
+def test_app_paths_windows_layout():
+    from pathlib import Path
+
+    from splatworker.gui.paths import AppPaths
+
+    p = AppPaths.from_env({"APPDATA": r"C:\U\AppData\Roaming", "LOCALAPPDATA": r"C:\U\AppData\Local",
+                           "USERPROFILE": r"C:\U"}, windows=True)
+    assert p.config_dir == Path(r"C:\U\AppData\Roaming") / "SplatWork"
+    assert p.data_root == Path(r"C:\U\AppData\Local") / "SplatWork"
+    assert p.token_file.parent == p.config_dir
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DXGI is Windows-only")
+def test_dxgi_adapters_runs():
+    from splatworker.gpu_vendors import scan
+
+    adapters = scan()   # the CI runner has only Microsoft's software adapter, which is skipped
+    for a in adapters:
+        assert a.vendor in ("nvidia", "amd", "intel", "other") and a.name
