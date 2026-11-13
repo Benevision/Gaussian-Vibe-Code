@@ -18,6 +18,7 @@ APP="$OUT_DIR/SplatWork.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/SplatStudio"
+cp "Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"   # hex mesh icon (branding/app-icon-macos.svg)
 # Bundle the Python processing toolkit (optional Models pack installs from here).
 if [ -d ../tools/splatprep ]; then
   rsync -a --exclude '__pycache__' --exclude '.pytest_cache' --exclude 'tests' ../tools/ "$APP/Contents/Resources/tools/"
@@ -27,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>SplatWork</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleDisplayName</key><string>SplatWork</string>
   <key>CFBundleIdentifier</key><string>com.example.splatstudio</string>
   <key>CFBundleExecutable</key><string>SplatStudio</string>

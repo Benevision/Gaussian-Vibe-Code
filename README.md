@@ -1,3 +1,5 @@
+<p align="center"><img src="branding/logo-mark.svg" width="112" alt="SplatWork logo: six linked nodes around a splat"></p>
+
 # SplatWork
 
 **Make, train, view and edit 3D Gaussian splats on your own machines.** Capture on an iPhone, prepare and view on a

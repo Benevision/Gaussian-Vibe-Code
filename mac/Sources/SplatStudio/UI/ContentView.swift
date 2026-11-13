@@ -249,7 +249,7 @@ struct WelcomeView: View {
         ScrollView {
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
-                    Image(systemName: "circle.hexagongrid.fill").font(.system(size: 52)).foregroundStyle(.tint)
+                    HexMeshLogo().frame(width: 84, height: 84)
                     Text("SplatWork").font(.largeTitle.bold())
                     Text("View, create and edit 3D Gaussian splats — accelerated by Metal on Apple silicon.").foregroundStyle(.secondary)
                 }
