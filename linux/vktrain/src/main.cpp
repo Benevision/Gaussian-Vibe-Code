@@ -1,8 +1,20 @@
-// splatwork-vk-train: the SplatWork Vulkan trainer program. Stage 1 (kernels) only offers:
+// splatwork-vk-train: the SplatWork Vulkan trainer program.
 //   splatwork-vk-train --info                       device summary as one JSON line
 //   splatwork-vk-train --dump SCENE.bin OUT.bin     render one scene and back-propagate a given image gradient
-//                      [--atomics auto|native|cas] [--device N]
-// The training loop (dataset, TrainingConfig, progress, checkpoints) is stage 2.
+//   splatwork-vk-train train --dataset DIR --out result.ply [--config cfg.json] [--set key=value ...]
+//                      [--iterations N] [--job-dir DIR] [--resume FILE] [--preview-every N] [--opacity-reset]
+//   common options:    [--atomics auto|native|cas] [--device N]
+//
+// train: trains one prepared dataset (docs/PROTOCOL.md §2) with one TrainingConfig (§3) like the CUDA worker's
+// trainer.py. Output on stdout, one JSON object per line ("type": status | log | preview | checkpoint | done |
+// paused | cancelled | error — the messages trainer.subprocess_entry puts on its queue). With --job-dir the
+// trainer writes DIR/preview.splat every previewInterval steps (--preview-every overrides it),
+// DIR/checkpoint.ply on request and on pause, and DIR/resume.vkstate on pause.
+// Control: one command per line on stdin — "checkpoint" (write checkpoint.ply at the next step), "pause"
+// (write checkpoint.ply and the resume file, then exit 3), "cancel" (exit 4); SIGTERM / SIGINT cancel too.
+// End of input on stdin is not a command (a closed stdin keeps training). --resume FILE continues from a saved
+// state (and a later pause saves there again). Exit codes: 0 finished, 1 error, 2 invalid arguments or
+// config, 3 paused, 4 cancelled.
 //
 // SCENE.bin (little-endian), written by compare_gsplat.py:
 //   char[4] "SWVS", u32 version = 1
@@ -19,13 +31,20 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
 
+#include <csignal>
+#include <iostream>
+#include <thread>
+
+#include "config.h"
 #include "cpu_ref.h"
 #include "gpu_splat.h"
+#include "trainer.h"
 
 using namespace vkt;
 
@@ -122,11 +141,102 @@ int dump(const std::string& scenePath, const std::string& outPath, const Context
     return 0;
 }
 
+Control* g_control = nullptr;
+extern "C" void onSignal(int) {
+    if (g_control) g_control->cancel = true;
+}
+
+int train(int argc, char** argv, int first, ContextOptions co) {
+    TrainOptions opt;
+    std::string configPath;
+    std::vector<std::string> sets;
+    int64_t iterations = -1;
+    for (int i = first; i < argc; i++) {
+        std::string a = argv[i];
+        auto next = [&]() -> std::string {
+            if (i + 1 >= argc) throw ConfigError("missing value for " + a);
+            return argv[++i];
+        };
+        if (a == "--dataset") opt.datasetDir = next();
+        else if (a == "--config") configPath = next();
+        else if (a == "--out") opt.outPath = next();
+        else if (a == "--job-dir") opt.jobDir = next();
+        else if (a == "--resume") opt.resumeFrom = next();
+        else if (a == "--preview-every") opt.previewEvery = std::stoll(next());
+        else if (a == "--set") sets.push_back(next());
+        else if (a == "--iterations") iterations = std::stoll(next());
+        else if (a == "--opacity-reset") opt.opacityReset = true;
+        else if (a == "--pause-at") opt.pauseAt = std::stoll(next());        // test aid
+        else if (a == "--trace-every") opt.traceEvery = std::stoll(next());  // test aid
+        else if (a == "--device") co.deviceIndex = std::stoi(next());
+        else if (a == "--atomics") {
+            std::string v = next();
+            co.atomics = v == "native" ? ContextOptions::Atomics::Native : v == "cas" ? ContextOptions::Atomics::Cas : ContextOptions::Atomics::Auto;
+        } else throw ConfigError("unknown argument " + a);
+    }
+    if (opt.datasetDir.empty() || opt.outPath.empty()) throw ConfigError("train needs --dataset DIR and --out FILE");
+    nlohmann::json cj = nlohmann::json::object();
+    if (!configPath.empty()) {
+        std::ifstream f(configPath);
+        if (!f) throw ConfigError("cannot read " + configPath);
+        try { cj = nlohmann::json::parse(f); } catch (const std::exception& e) { throw ConfigError(std::string("config: ") + e.what()); }
+    }
+    for (const std::string& kv : sets) {   // like cli.py --set: the value as JSON, else as a string
+        size_t eq = kv.find('=');
+        if (eq == std::string::npos) throw ConfigError("--set expects key=value, got " + kv);
+        std::string key = kv.substr(0, eq), value = kv.substr(eq + 1);
+        try { cj[key] = nlohmann::json::parse(value); } catch (...) { cj[key] = value; }
+    }
+    if (iterations >= 0) cj["iterations"] = iterations;
+    TrainConfig cfg = TrainConfig::fromJson(cj);
+    opt.ctx = co;
+    namespace fs = std::filesystem;
+    if (!opt.jobDir.empty()) fs::create_directories(opt.jobDir);
+    if (fs::path(opt.outPath).has_parent_path()) fs::create_directories(fs::path(opt.outPath).parent_path());
+
+    static Control control;
+    g_control = &control;
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
+    // stdin commands; the thread is left blocked in getline when training ends (the process exits).
+    std::thread([]() {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            if (line == "cancel" || line == "stop") g_control->cancel = true;
+            else if (line == "pause") g_control->pause = true;
+            else if (line == "checkpoint") g_control->checkpoint = true;
+        }
+    }).detach();
+    Emitter em;
+    return runTraining(opt, cfg, control, em);
+}
+
+void printError(const std::string& msg) {
+    std::printf("%s\n", nlohmann::json({{"type", "error"}, {"message", msg}}).dump().c_str());
+    std::fflush(stdout);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     ContextOptions co;
     std::string mode, scene, out;
+    if (argc >= 2 && std::string(argv[1]) == "train") {
+        int rc = EXIT_ERROR;
+        try {
+            rc = train(argc, argv, 2, co);
+        } catch (const ConfigError& e) {
+            printError(std::string("invalid config: ") + e.what());
+            std::fprintf(stderr, "splatwork-vk-train: %s\n", e.what());
+            rc = EXIT_USAGE;
+        } catch (const std::exception& e) {
+            printError(e.what());
+            rc = EXIT_ERROR;
+        }
+        std::fflush(stdout);
+        std::_Exit(rc);   // don't wait for the stdin thread
+    }
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", a.c_str()); std::exit(2); } return argv[++i]; };
@@ -143,10 +253,10 @@ int main(int argc, char** argv) {
         if (mode == "info") {
             Context ctx(co);
             std::printf("{\"device\": \"%s\", \"driver\": \"%s\", \"vendorID\": %u, \"deviceID\": %u, \"vulkan\": \"%u.%u\", "
-                        "\"subgroupSize\": %u, \"floatAtomicAdd\": %s}\n",
+                        "\"subgroupSize\": %u, \"floatAtomicAdd\": %s, \"nativeAtomics\": %s}\n",
                         ctx.info.name.c_str(), ctx.info.driver.c_str(), ctx.info.vendorID, ctx.info.deviceID,
                         VK_API_VERSION_MAJOR(ctx.info.apiVersion), VK_API_VERSION_MINOR(ctx.info.apiVersion), ctx.info.subgroupSize,
-                        ctx.info.floatAtomicAdd ? "true" : "false");
+                        ctx.info.floatAtomicAdd ? "true" : "false", ctx.nativeAtomics ? "true" : "false");
             return 0;
         }
         if (mode == "dump") return dump(scene, out, co);
@@ -154,7 +264,10 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "splatwork-vk-train: %s\n", e.what());
         return 1;
     }
-    std::printf("usage: splatwork-vk-train --info | --dump SCENE.bin OUT.bin [--atomics auto|native|cas] [--device N]\n"
-                "(stage 1: kernels only; training comes in stage 2)\n");
+    std::printf("usage: splatwork-vk-train --info\n"
+                "       splatwork-vk-train --dump SCENE.bin OUT.bin\n"
+                "       splatwork-vk-train train --dataset DIR --out result.ply [--config cfg.json] [--set key=value ...]\n"
+                "                          [--iterations N] [--job-dir DIR] [--resume FILE] [--preview-every N] [--opacity-reset]\n"
+                "       options: [--atomics auto|native|cas] [--device N]\n");
     return mode.empty() ? 0 : 2;
 }

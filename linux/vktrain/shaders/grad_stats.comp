@@ -1,0 +1,19 @@
+#version 460
+// Densification statistics of the adaptive (gsplat DefaultStrategy) strategy, per step: for every splat drawn in
+// this view (tilesTouched > 0, gsplat's radii > 0) grad2d += |(∂L/∂mean2D.x · W/2, ∂L/∂mean2D.y · H/2)| and
+// count += 1 — gsplat's _update_state with n_cameras = 1. With absGrad the per-pixel absolute sums
+// (acc 10, 11) replace the gradient (AbsGS; gsplat's means2d.absgrad).
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer AccBuf { float acc[]; };
+layout(std430, binding = 1) readonly buffer TouchBuf { uint tilesTouched[]; };
+layout(std430, binding = 2) buffer Grad2dBuf { float grad2d[]; };
+layout(std430, binding = 3) buffer CountBuf { float count[]; };
+layout(push_constant) uniform PC { float halfW; float halfH; uint absGrad; uint n; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.n || tilesTouched[i] == 0u) return;
+    uint o = pc.absGrad != 0u ? 10u : 0u;
+    vec2 g = vec2(acc[i * 12u + o] * pc.halfW, acc[i * 12u + o + 1u] * pc.halfH);
+    grad2d[i] += length(g);
+    count[i] += 1.0;
+}

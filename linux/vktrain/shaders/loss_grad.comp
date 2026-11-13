@@ -14,12 +14,13 @@ void main() {
     if (p.x >= F.width || p.y >= F.height) return;
     uint hw = F.width * F.height, pid = p.y * F.width + p.x;
     float norm = F.invNumPixels / 3.0;
+    float snorm = F.invSsimPixels / 3.0;
     float lam = F.ssimWeight;
     for (uint c = 0u; c < 3u; c++) {
         float x = planes[(c * 5u) * hw + pid], y = planes[(c * 5u + 1u) * hw + pid];
         float dS = bd[(c * 3u + 0u) * hw + pid] + 2.0 * x * bd[(c * 3u + 1u) * hw + pid] + y * bd[(c * 3u + 2u) * hw + pid];
         float l1g = x > y ? 1.0 : (x < y ? -1.0 : 0.0);
-        gradImg[c * hw + pid] = norm * ((1.0 - lam) * l1g - lam * dS);
+        gradImg[c * hw + pid] = norm * (1.0 - lam) * l1g - snorm * lam * dS;
     }
     gradImg[3u * hw + pid] = 0.0;
 }

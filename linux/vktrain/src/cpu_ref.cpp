@@ -258,7 +258,8 @@ void blur(const std::vector<double>& src, std::vector<double>& dst, int w, int h
 }
 }  // namespace
 
-double loss(const std::vector<double>& img, const std::vector<double>& target, int w, int h, double lam, double* l1out, double* ssimOut) {
+double loss(const std::vector<double>& img, const std::vector<double>& target, int w, int h, double lam, double* l1out, double* ssimOut,
+            bool valid) {
     size_t hw = size_t(w) * h;
     const double Cc1 = 0.0001, Cc2 = 0.0009;
     double sumL1 = 0, sumS = 0;
@@ -271,14 +272,17 @@ double loss(const std::vector<double>& img, const std::vector<double>& target, i
         }
         blur(X, mx, w, h); blur(Y, my, w, h); blur(XX, mxx, w, h); blur(YY, myy, w, h); blur(XY, mxy, w, h);
         for (size_t p = 0; p < hw; p++) {
+            int px = int(p % size_t(w)), py = int(p / size_t(w));
+            if (valid && (px < 5 || py < 5 || px + 5 >= w || py + 5 >= h)) continue;
             double sx = mxx[p] - mx[p] * mx[p], sy = myy[p] - my[p] * my[p], sxy = mxy[p] - mx[p] * my[p];
             sumS += (2 * mx[p] * my[p] + Cc1) * (2 * sxy + Cc2) / ((mx[p] * mx[p] + my[p] * my[p] + Cc1) * (sx + sy + Cc2));
         }
     }
     double numel = 3.0 * hw;
+    double snumel = valid ? 3.0 * std::max(w - 10, 1) * std::max(h - 10, 1) : numel;
     if (l1out) *l1out = sumL1 / numel;
-    if (ssimOut) *ssimOut = sumS / numel;
-    return (1 - lam) * sumL1 / numel + lam * (1 - sumS / numel);
+    if (ssimOut) *ssimOut = sumS / snumel;
+    return (1 - lam) * sumL1 / numel + lam * (1 - sumS / snumel);
 }
 
 }  // namespace vkt::ref

@@ -1,0 +1,35 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// 3DGS-MCMC position noise (gsplat inject_noise_to_position), every step after Adam:
+//   pos += Σ · (ε · σ_k(1 − opacity) · scaler),  ε ~ N(0, I),  Σ = R diag(s²) Rᵀ,
+//   σ_k(x) = 1 / (1 + exp(−100 (x − 0.995))),  scaler = current position LR × noiseLR.
+// ε comes from the counter-based hash (seed, step, splat), the same numbers as the host's CPU version.
+#include "common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer PosBuf { float pos[]; };
+layout(std430, binding = 1) readonly buffer ScaleBuf { float logScale[]; };
+layout(std430, binding = 2) readonly buffer QuatBuf { float quat[]; };
+layout(std430, binding = 3) readonly buffer OpBuf { float opLogit[]; };
+layout(push_constant) uniform PC { float scaler; uint seed; uint step; uint n; } pc;
+void main() {
+    uint i = ((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x);
+    if (i >= pc.n) return;
+    float o = 1.0 / (1.0 + exp(-opLogit[i]));
+    float gate = 1.0 / (1.0 + exp(-100.0 * ((1.0 - o) - 0.995)));
+    if (gate * pc.scaler == 0.0) return;
+    vec3 e = vec3(hash_normal(pc.seed, pc.step, i, 0u), hash_normal(pc.seed, pc.step, i, 1u), hash_normal(pc.seed, pc.step, i, 2u));
+    e *= gate * pc.scaler;
+    vec4 q = vec4(quat[i * 4], quat[i * 4 + 1], quat[i * 4 + 2], quat[i * 4 + 3]);
+    float ql = length(q);
+    q = ql > 1e-12 ? q / ql : vec4(1.0, 0.0, 0.0, 0.0);
+    float R[3][3];
+    quat_rot(q, R);
+    vec3 s2 = exp(2.0 * vec3(logScale[i * 3], logScale[i * 3 + 1], logScale[i * 3 + 2]));
+    // Σ e = R (s² ⊙ (Rᵀ e))
+    vec3 u = vec3(R[0][0] * e.x + R[1][0] * e.y + R[2][0] * e.z,
+                  R[0][1] * e.x + R[1][1] * e.y + R[2][1] * e.z,
+                  R[0][2] * e.x + R[1][2] * e.y + R[2][2] * e.z) * s2;
+    pos[i * 3]     += R[0][0] * u.x + R[0][1] * u.y + R[0][2] * u.z;
+    pos[i * 3 + 1] += R[1][0] * u.x + R[1][1] * u.y + R[1][2] * u.z;
+    pos[i * 3 + 2] += R[2][0] * u.x + R[2][1] * u.y + R[2][2] * u.z;
+}

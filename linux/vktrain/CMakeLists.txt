@@ -1,7 +1,10 @@
-# SplatWork Vulkan trainer (stage 1: kernels + numerical checks). See docs/dev/GPU_SUPPORT.md,
-# "Decision (2026-11-13): a portable Vulkan trainer".
+# SplatWork Vulkan trainer: kernels + numerical checks (stage 1), the training program (stage 2). See
+# docs/dev/GPU_SUPPORT.md, "Decision (2026-11-13): a portable Vulkan trainer".
 #
 #   cmake -S . -B build -G Ninja && cmake --build build && ./build/vktrain-selftest
+#   ./build/splatwork-vk-train train --dataset DIR --out result.ply [--config cfg.json] [--job-dir DIR]
+#
+# Vendored (third_party/): stb_image 2.32 (public domain / MIT), nlohmann/json 3.11.2 (MIT).
 #
 # GLSL compute shaders (shaders/*.comp) are compiled to SPIR-V with glslangValidator at build time and embedded
 # as C arrays; kernels that add floats atomically are built twice (compare-and-swap loop, and native
@@ -19,7 +22,8 @@ find_package(Vulkan REQUIRED)
 find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
 
 set(KERNELS preprocess preprocess_bwd radix_hist radix_scatter scan_block scan_add gather_counts duplicate_keys
-            tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam atomic_probe)
+            tile_ranges raster_fwd raster_bwd ssim_prep blur ssim_terms loss_grad adam atomic_probe
+            reg_grad grad_stats mcmc_noise)
 set(ATOMIC_KERNELS raster_bwd ssim_terms atomic_probe)
 
 set(SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
@@ -76,8 +80,12 @@ bool hasNativeVariant(const char* name) {
 ]=])
 
 add_library(vktrain_core STATIC
-  src/vk.cpp src/gpu_splat.cpp src/cpu_ref.cpp ${SPV_DIR}/shaders_registry.cpp ${SPV_HEADERS})
+  src/vk.cpp src/gpu_splat.cpp src/cpu_ref.cpp src/config.cpp src/dataset.cpp src/plyio.cpp src/strategy.cpp
+  src/trainer.cpp ${SPV_DIR}/shaders_registry.cpp ${SPV_HEADERS})
 target_include_directories(vktrain_core PUBLIC src PRIVATE ${SPV_DIR})
+target_include_directories(vktrain_core SYSTEM PUBLIC third_party)
+find_package(Threads REQUIRED)
+target_link_libraries(vktrain_core PUBLIC Threads::Threads)
 target_link_libraries(vktrain_core PUBLIC Vulkan::Vulkan)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vktrain_core PRIVATE -Wall -Wextra)

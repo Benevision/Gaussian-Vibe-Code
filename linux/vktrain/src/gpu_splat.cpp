@@ -181,7 +181,7 @@ int GpuSplat::atomicProbe(uint32_t count) { return ctx_.probeFloatAtomics(count)
 
 // ------------------------------------------------------------------ forward
 
-uint32_t GpuSplat::forward() {
+uint32_t GpuSplat::recordForwardPhase1() {
     uint32_t un = uint32_t(n);
     reserveSort(un);
     reserveScan(un + 1);
@@ -196,15 +196,18 @@ uint32_t GpuSplat::forward() {
     uint32_t m = 0;
     ctx_.download(offsets, &m, 4, size_t(un) * 4);
     tileCount = m;
-
-    // Phase 2: tile instances, stable sort by tile, per-tile ranges, rasterisation.
     ctx_.ensure(tileKeys, size_t(std::max<uint32_t>(m, 1)) * 4);
     ctx_.ensure(tileVals, size_t(std::max<uint32_t>(m, 1)) * 4);
     reserveSort(m);
+    return m;
+}
+
+void GpuSplat::recordForwardPhase2(uint32_t m) {
+    // Phase 2: tile instances, stable sort by tile, per-tile ranges, rasterisation.
+    uint32_t un = uint32_t(n);
     uint32_t numTiles = uint32_t(tilesX * tilesY);
     int bits = 1;
     while ((1u << bits) < numTiles && bits < 32) bits++;
-    ctx_.begin();
     if (m > 0) {
         dispatch1D("duplicate_keys", {&frame, &sortVals, &offsets, &rects, &tileKeys, &tileVals}, &un, 4, ceilDiv(un, 256));
         recordSort(tileKeys, tileVals, m, bits);
@@ -213,8 +216,23 @@ uint32_t GpuSplat::forward() {
     if (m > 0) dispatch1D("tile_ranges", {&tileKeys, &ranges}, &m, 4, ceilDiv(m, 256));
     ctx_.dispatch("raster_fwd", {&frame, &ranges, &tileVals, &p2d, &conicO, &rgbd, &img, &finalT, &nContrib}, nullptr, 0,
                   uint32_t(tilesX), uint32_t(tilesY));
+}
+
+uint32_t GpuSplat::forward() {
+    uint32_t m = recordForwardPhase1();
+    ctx_.begin();
+    recordForwardPhase2(m);
     ctx_.submitWait();
     return m;
+}
+
+double GpuSplat::forwardLoss(double* l1, double* ssim, double* sqErr) {
+    uint32_t m = recordForwardPhase1();
+    ctx_.begin();
+    recordForwardPhase2(m);
+    recordLoss();
+    ctx_.submitWait();
+    return lossFromStats(l1, ssim, sqErr);
 }
 
 // ------------------------------------------------------------------ loss
@@ -229,23 +247,33 @@ void GpuSplat::recordBlur(Buffer& src, Buffer& dst, uint32_t planesCount) {
     ctx_.dispatch("blur", {&frame, &tmp, &dst}, &pc, sizeof(pc), gx, gy, planesCount);
 }
 
-double GpuSplat::loss(double* l1, double* ssim) {
+void GpuSplat::recordLoss() {
     uint32_t gx = ceilDiv(uint32_t(width), 16), gy = ceilDiv(uint32_t(height), 16);
-    ctx_.begin();
     ctx_.dispatch("ssim_prep", {&frame, &img, &target, &planes}, nullptr, 0, gx, gy);
     recordBlur(planes, mu, 15);
     ctx_.fill(stats, 0);
     ctx_.dispatch("ssim_terms", {&frame, &mu, &dmaps, &stats, &planes}, nullptr, 0, gx, gy);
     recordBlur(dmaps, mu, 9);   // blur adjoint of the SSIM derivative maps (mu reused)
     ctx_.dispatch("loss_grad", {&frame, &planes, &mu, &gradImg}, nullptr, 0, gx, gy);
-    ctx_.submitWait();
+}
+
+double GpuSplat::lossFromStats(double* l1, double* ssim, double* sqErr) {
     float s[4];
     ctx_.download(stats, s, sizeof(s));
     double numel = double(width) * height * 3;
+    double snumel = 3.0 / double(frameData.invSsimPixels);
     double lam = frameData.ssimWeight;
     if (l1) *l1 = s[0] / numel;
-    if (ssim) *ssim = s[1] / numel;
-    return (1 - lam) * s[0] / numel + lam * (1 - s[1] / numel);
+    if (ssim) *ssim = s[1] / snumel;
+    if (sqErr) *sqErr = s[2] / numel;
+    return (1 - lam) * s[0] / numel + lam * (1 - s[1] / snumel);
+}
+
+double GpuSplat::loss(double* l1, double* ssim) {
+    ctx_.begin();
+    recordLoss();
+    ctx_.submitWait();
+    return lossFromStats(l1, ssim, nullptr);
 }
 
 // ------------------------------------------------------------------ backward and optimiser
@@ -277,6 +305,60 @@ void GpuSplat::adamStep(const std::array<AdamGroup, 5>& groups, float beta1, flo
     }
     ctx_.submitWait();
 }
+
+void GpuSplat::backwardStep(const std::array<AdamGroup, 5>& groups, const StepExtras& ex) {
+    uint32_t un = uint32_t(n);
+    adamSteps++;
+    const float beta1 = 0.9f, beta2 = 0.999f, eps = 1e-15f;
+    float bc1 = 1.0f - std::pow(beta1, float(adamSteps)), bc2 = 1.0f - std::pow(beta2, float(adamSteps));
+    ctx_.begin();
+    ctx_.fill(acc, 0);
+    ctx_.dispatch("raster_bwd", {&frame, &ranges, &tileVals, &p2d, &conicO, &rgbd, &finalT, &nContrib, &gradImg, &acc},
+                  nullptr, 0, uint32_t(tilesX), uint32_t(tilesY));
+    dispatch1D("preprocess_bwd", {&frame, &params[0], &params[1], &params[2], &params[3], &params[4], &acc, &tilesTouched,
+                                  &grads[0], &grads[1], &grads[2], &grads[3], &grads[4]}, nullptr, 0, ceilDiv(un, 256));
+    if (ex.wOp != 0 || ex.wScale != 0 || ex.wFlat != 0 || ex.wAniso != 0) {
+        struct { float wOp, wScale, wFlat, wAniso, maxRatio; uint32_t n; } pc{ex.wOp, ex.wScale, ex.wFlat, ex.wAniso, ex.maxRatio, un};
+        dispatch1D("reg_grad", {&params[1], &params[3], &grads[1], &grads[3]}, &pc, sizeof(pc), ceilDiv(un, 256));
+    }
+    if (ex.grad2d && ex.count) {
+        struct { float hw, hh; uint32_t absGrad, n; } pc{0.5f * float(width), 0.5f * float(height), ex.absGrad ? 1u : 0u, un};
+        dispatch1D("grad_stats", {&acc, &tilesTouched, ex.grad2d, ex.count}, &pc, sizeof(pc), ceilDiv(un, 256));
+    }
+    for (int k = 0; k < 5; k++) {
+        struct { float lr, lr2; uint32_t period, split; float beta1, beta2, eps, bc1, bc2; uint32_t n; } pc{
+            groups[k].lr, groups[k].lr2, groups[k].period, groups[k].split, beta1, beta2, eps, bc1, bc2,
+            uint32_t(n * Params::width(k))};
+        dispatch1D("adam", {&params[k], &grads[k], &m1[k], &m2[k]}, &pc, sizeof(pc), ceilDiv(pc.n, 256));
+    }
+    if (ex.noiseScaler != 0) {
+        struct { float scaler; uint32_t seed, step, n; } pc{ex.noiseScaler, ex.noiseSeed, ex.noiseStep, un};
+        dispatch1D("mcmc_noise", {&params[0], &params[1], &params[2], &params[3]}, &pc, sizeof(pc), ceilDiv(un, 256));
+    }
+    ctx_.submitWait();
+}
+
+void GpuSplat::setState(const Params& p, const Params* mm1, const Params* mm2, int steps) {
+    setParams(p);
+    if (mm1 && mm2) {
+        for (int k = 0; k < 5; k++) {
+            ctx_.upload(m1[k], mm1->group(k).data(), mm1->group(k).size() * sizeof(float));
+            ctx_.upload(m2[k], mm2->group(k).data(), mm2->group(k).size() * sizeof(float));
+        }
+    }
+    adamSteps = steps;
+}
+
+void GpuSplat::getMoments(Params& a, Params& b) const {
+    a.resize(n);
+    b.resize(n);
+    for (int k = 0; k < 5; k++) {
+        ctx_.download(m1[k], a.group(k).data(), a.group(k).size() * sizeof(float));
+        ctx_.download(m2[k], b.group(k).data(), b.group(k).size() * sizeof(float));
+    }
+}
+
+std::vector<float> GpuSplat::image() const { return read<float>(img, size_t(width) * height * 3); }
 
 double GpuSplat::trainStep(const std::array<AdamGroup, 5>& groups) {
     forward();

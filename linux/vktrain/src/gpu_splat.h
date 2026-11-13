@@ -33,6 +33,25 @@ public:
     // One full step on the current camera/target: forward, loss, backward, Adam. Returns the loss.
     double trainStep(const std::array<AdamGroup, 5>& groups);
 
+    // ---- training-loop pieces (trainer.cpp)
+    // Projection, sort, rasterisation and the loss in two submissions; returns the loss (stats read back).
+    // statsOut (optional, 3 values): Σ|x−y|, Σ SSIM, Σ(clamp(x)−y)².
+    double forwardLoss(double* l1 = nullptr, double* ssim = nullptr, double* sqErr = nullptr);
+    struct StepExtras {
+        float wOp = 0, wScale = 0, wFlat = 0, wAniso = 0, maxRatio = 10;   // reg_grad.comp weights
+        Buffer* grad2d = nullptr;  // grad_stats.comp target (adaptive strategy), or null
+        Buffer* count = nullptr;
+        bool absGrad = false;
+        float noiseScaler = 0;     // mcmc_noise.comp (0: off)
+        uint32_t noiseSeed = 0, noiseStep = 0;
+    };
+    // Backward passes, regularisers, densification statistics, Adam and MCMC noise in one submission.
+    void backwardStep(const std::array<AdamGroup, 5>& groups, const StepExtras& ex);
+    // Parameters with Adam moments (m1, m2 null: zero moments) and the Adam step count.
+    void setState(const Params& p, const Params* m1, const Params* m2, int steps);
+    void getMoments(Params& m1, Params& m2) const;
+    std::vector<float> image() const;          // the rendered rgb planes [3][h][w] of the last forward
+
     // Standalone primitives (own submission), used by the tests.
     void sortPairs(Buffer& keys, Buffer& vals, uint32_t count, int bits);
     void exclusiveScan(Buffer& data, uint32_t count);
@@ -64,6 +83,10 @@ private:
     void recordSort(Buffer& keys, Buffer& vals, uint32_t count, int bits);
     void recordScan(Buffer& data, uint32_t count, size_t level = 0);
     void recordBlur(Buffer& src, Buffer& dst, uint32_t planesCount);
+    uint32_t recordForwardPhase1();      // records phase 1, submits, returns the tile instance count
+    void recordForwardPhase2(uint32_t m);
+    void recordLoss();
+    double lossFromStats(double* l1, double* ssim, double* sqErr);
     void dispatch1D(const char* kernel, const std::vector<const Buffer*>& bufs, const void* pc, uint32_t pcSize, uint32_t groups);
     Buffer sortKeysB_, sortValsB_, hist_;
     std::vector<Buffer> scanLevels_;

@@ -1,5 +1,6 @@
 // Splat parameters, cameras and per-view constants shared by the GPU trainer, the CPU reference and the tools.
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -45,6 +46,7 @@ struct RenderOpts {
     float ssimWeight = 0.2f;
     bool absGrad = true;
     bool hasDepth = true;       // accumulate the depth-plane gradient in the backward pass
+    bool ssimValid = false;     // SSIM mean over window positions wholly inside the image (fused-ssim "valid")
 };
 
 // Mirrors `Frame` in shaders/common.glsl (std430).
@@ -57,7 +59,7 @@ struct Frame {
     uint32_t width, height, tilesX, tilesY;
     uint32_t count, shDegree, flags, absGrad;
     uint32_t hasDepth, pad0, pad1, pad2;
-    float ssimWeight, invNumPixels, depthWeight, pad3;
+    float ssimWeight, invNumPixels, depthWeight, invSsimPixels;
 };
 static_assert(sizeof(Frame) == 192, "Frame layout");
 
@@ -79,11 +81,12 @@ inline Frame makeFrame(const Camera& c, const RenderOpts& o, int n) {
     f.tilesX = uint32_t((c.width + TILE - 1) / TILE); f.tilesY = uint32_t((c.height + TILE - 1) / TILE);
     f.count = uint32_t(n);
     f.shDegree = uint32_t(o.shDegree);
-    f.flags = o.antialiased ? 1u : 0u;
+    f.flags = (o.antialiased ? 1u : 0u) | (o.ssimValid ? 2u : 0u);
     f.absGrad = o.absGrad ? 1u : 0u;
     f.hasDepth = o.hasDepth ? 1u : 0u;
     f.ssimWeight = o.ssimWeight;
     f.invNumPixels = 1.0f / float(c.width * c.height);
+    f.invSsimPixels = o.ssimValid ? 1.0f / float(std::max(c.width - 10, 1) * std::max(c.height - 10, 1)) : f.invNumPixels;
     return f;
 }
 
