@@ -52,6 +52,14 @@ enum RemoteFrameExtraction {
                 try fm.moveItem(at: src, to: dst)
             }
         }
+        // home video: the clips (vhs.json) and their pictures — training settings and the camera solve's clip check
+        // read vhs.json from the dataset folder
+        for name in [HomeVideoAnalysis.fileName, "vhs-thumbs"] {
+            let src = inner.appendingPathComponent(name), dst = dir.appendingPathComponent(name)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            try? fm.removeItem(at: dst)
+            try fm.moveItem(at: src, to: dst)
+        }
         var set = try JSONDecoder().decode(FrameSet.self, from: Data(contentsOf: inner.appendingPathComponent(FrameSet.fileName)))
         set.root = dir
         if let kept {

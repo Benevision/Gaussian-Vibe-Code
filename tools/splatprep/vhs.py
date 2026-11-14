@@ -1024,7 +1024,8 @@ def check_clips(centers: Dict[str, np.ndarray], fx_over_width: Dict[str, float],
     A clip whose camera moved through the scene (``travel``: the image-space camera travel the analysis measured)
     but whose solved cameras sit almost on one spot was glued onto another clip's geometry — this happens when a
     pan of a different place matches a few look-alike features (sand, water). Its path length per unit of travel is
-    compared with the other clips' median; far below (< 12 %) means left out. A focal length over 25× the image
+    compared with the best-placed clip's (the median isn't safe: when most of the joined clips collapsed onto one,
+    the median is a collapsed clip too); below 15 % of it means left out. A focal length over 25× the image
     width (a field of view under ~2°) is not a camcorder lens either. Returns (image names to drop, per-clip report).
     """
     by_clip: Dict[int, List[str]] = {}
@@ -1039,14 +1040,14 @@ def check_clips(centers: Dict[str, np.ndarray], fx_over_width: Dict[str, float],
         path[c] = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) if len(p) > 1 else 0.0
         if travel.get(c, 0.0) > 0.2 and len(names) >= 6:
             ratio[c] = path[c] / travel[c]
-    ref = float(np.median(list(ratio.values()))) if len(ratio) >= 2 else None
+    ref = max(ratio.values()) if len(ratio) >= 2 else None
     drop: List[str] = []
     report: List[Dict[str, Any]] = []
     for c in sorted(by_clip):
         names = by_clip[c]
         reason = None
         bad_focal = [n for n in names if fx_over_width.get(n, 0.0) > 25.0]
-        if ref and c in ratio and ratio[c] < 0.12 * ref:
+        if ref and c in ratio and ratio[c] < 0.15 * ref:
             reason = "its cameras landed on one spot: probably matched to another clip by mistake"
         elif len(bad_focal) > len(names) // 2:
             reason = "the solve gave it an impossible zoom"

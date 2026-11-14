@@ -203,6 +203,10 @@ struct NewProjectSheet: View {
                 if hidden > 0 {
                     Text("\(hidden) more \(hidden == 1 ? "stretch is" : "stretches are") too short or blank and not shown.").font(.caption).foregroundStyle(.secondary)
                 }
+                if chosenClips(a).count > 1 {
+                    Label("Tick several clips only when they show the same place. Clips of different places can't be joined: the solve leaves them out, and it takes much longer.",
+                          systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if chosenClips(a).isEmpty {
                     Label("Tick at least one clip.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
                 }

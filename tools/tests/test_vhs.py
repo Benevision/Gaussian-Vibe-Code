@@ -274,7 +274,7 @@ def test_prepare_end_to_end_on_a_synthetic_tape(tmp_path):
 def test_check_clips_drops_a_clip_glued_onto_another():
     rng = np.random.default_rng(0)
     centers, groups, fxw = {}, {}, {}
-    for c, (start, step) in {1: (0.0, 0.5), 2: (20.0, 0.4), 3: (5.0, 0.0005)}.items():   # clip 3: collapsed
+    for c, (start, step) in {1: (0.0, 0.5), 2: (20.0, 0.4), 3: (5.0, 0.0005)}.items():   # clip 3: collapsed (ratio 1.9, 1.9, 0.002)
         for k in range(20):
             n = f"{c:02d}_{k:03d}.jpg"
             centers[n] = np.array([start + k * step, 0.0, 0.0]) + rng.normal(0, 1e-4, 3)
@@ -289,3 +289,16 @@ def test_check_clips_drops_a_clip_glued_onto_another():
     # a clip the analysis saw hardly moving is not judged by its path
     drop, report = vhs.check_clips(centers, fxw, groups, {1: 5.0, 2: 4.0, 3: 0.1})
     assert all(r["kept"] for r in report)
+
+
+def test_check_clips_when_most_joined_clips_collapsed():
+    # one clip placed properly, four glued onto it: the median clip is a collapsed one, so the reference is the best
+    centers, groups = {}, {}
+    paths = {6: 0.4, 0: 0.006, 1: 0.015, 4: 0.025, 5: 0.02}
+    for c, step in paths.items():
+        for k in range(30):
+            n = f"{c:02d}_{k:03d}.jpg"
+            centers[n] = np.array([k * step, 0.0, 0.0])
+            groups[n] = c * 1000
+    drop, report = vhs.check_clips(centers, {n: 2.0 for n in centers}, groups, {6: 10.9, 0: 3.8, 1: 5.5, 4: 15.1, 5: 5.3})
+    assert {r["clip"] for r in report if r["kept"]} == {6}

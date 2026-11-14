@@ -146,6 +146,14 @@ So now:
 - **Wrong joins are left out:** with several clips, splatprep's `check_clips` (sfm `clipTravel`) leaves out a clip
   whose solved cameras sit on one spot although the analysis saw the camera travel, or that got an impossible zoom.
   On the joint solve it leaves out exactly the three stacked clips and the 2° group.
+- **Compared with the best clip, not the median (2026-11-14):** the first real project picked 9 clips. It was restored
+  and solved on the Linux worker, and the solve placed only clip 6 properly (path 28.6), squashing five other clips
+  onto it (paths 0.06–2.4). The splat was unusable (16.9 dB). Two things let it through:
+  - `vhs.json` didn't come back from the worker, so neither the check nor the tape training settings ran. It now
+    comes back, and a dataset whose frames carry a clip counts as home video too.
+  - The check compared each clip with the median clip, which was itself a collapsed clip. It now compares with the
+    best-placed clip. On that project's poses it keeps clip 6 alone, which is the clip that trains to 20.57 dB
+    in §3.
 - **Solver choice:** a single clip with one lens setting goes to **Object Capture** on the Mac, which did best (§3).
   Several clips or zoom groups go to splatprep (SuperPoint + LightGlue), which takes a camera per group.
 

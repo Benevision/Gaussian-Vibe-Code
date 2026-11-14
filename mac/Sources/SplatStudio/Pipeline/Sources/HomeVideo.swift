@@ -175,8 +175,12 @@ enum HomeVideoIngest {
         return c
     }
 
+    /// vhs.json in the dataset folder, or frames that carry their clip (datasets restored on a worker before the
+    /// worker's vhs.json came back with the frames).
     static func isHomeVideoDataset(_ root: URL) -> Bool {
-        FileManager.default.fileExists(atPath: root.appendingPathComponent(HomeVideoAnalysis.fileName).path)
+        if FileManager.default.fileExists(atPath: root.appendingPathComponent(HomeVideoAnalysis.fileName).path) { return true }
+        guard let fs = try? FrameSet.load(root) else { return false }
+        return fs.frames.contains { $0.clip != nil }
     }
 
     /// Names that say "old home video" (for the CLI and drag-and-drop): vhs, hi8, video8, betamax, camcorder.
